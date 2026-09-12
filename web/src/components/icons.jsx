@@ -175,3 +175,29 @@ export function PasteIcon({ size }) {
     </Icon>
   );
 }
+
+export function KeyboardIcon({ size }) {
+  return (
+    <Icon size={size ?? 20}>
+      <rect x="2" y="5" width="20" height="14" rx="2" />
+      <path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M7 13h.01M17 13h.01M9 16.5h6" />
+    </Icon>
+  );
+}
+
+export function MousePointerIcon({ size }) {
+  return (
+    <Icon size={size ?? 20}>
+      <path d="M4 3.5l7.5 17.5 2.3-7.2L21 11.5z" />
+    </Icon>
+  );
+}
+
+export function ClipboardIcon({ size }) {
+  return (
+    <Icon size={size ?? 20}>
+      <rect x="8" y="2" width="8" height="4" rx="1" />
+      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+    </Icon>
+  );
+}

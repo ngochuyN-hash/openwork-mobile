@@ -988,35 +988,52 @@ label.field {
   font-family: inherit;
   cursor: pointer;
 }
-/* Nút nổi trên khung hình: toàn màn hình + chụp ảnh. */
-.stage-actions {
+/* Thanh icon nổi ĐÁY KHUNG HÌNH — bố cục học y chang 9remote (1 bar, icon
+   translucent trên hình), nhưng phông OpenWork: nền tối mờ, bo góc token. */
+.stage-toolbar {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 14px;
+  background: rgba(10, 12, 14, 0.62);
+  backdrop-filter: blur(8px);
   z-index: 2;
 }
 .stage-btn {
   width: 44px;
   height: 44px;
   border: none;
-  border-radius: 12px;
-  background: rgba(10, 12, 14, 0.55);
+  border-radius: 10px;
+  background: transparent;
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  backdrop-filter: blur(6px);
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
 .stage-btn:active {
-  background: rgba(10, 12, 14, 0.78);
+  background: rgba(255, 255, 255, 0.16);
 }
 .stage-btn:disabled {
   opacity: 0.4;
+}
+.stage-btn.on {
+  background: var(--bg-raised);
+  color: var(--text);
+}
+.stage-sep {
+  width: 1px;
+  height: 22px;
+  margin: 0 3px;
+  background: rgba(255, 255, 255, 0.28);
+  flex: none;
 }
 /* Toàn màn hình kiểu faux (Fullscreen API trên iOS chỉ dành cho <video>): khung
    hình cố định đè lên cả nav, ảnh co vừa trong vùng an toàn của màn. */
@@ -1095,7 +1112,8 @@ label.field {
   color: var(--text);
   box-shadow: var(--shadow-accent);
 }
-.screen-tools {
+/* Panel điều khiển bật từ thanh icon (Bàn phím / Chuột / Clipboard) — mỗi lần 1 panel. */
+.screen-panel {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-raised);

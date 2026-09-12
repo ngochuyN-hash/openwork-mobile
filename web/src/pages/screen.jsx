@@ -1,32 +1,42 @@
 // Trang "Màn hình": xem + điều khiển máy tính từ điện thoại (v1.7, học cơ chế
 // 9remote — chụp liên tục đẩy frame, điều khiển bằng tap/kéo). Frame JPEG chảy
 // qua stream binary của bridge; lệnh điều khiển là POST riêng, tọa độ 0..1.
-// v1.8: nút toàn màn hình + chụp ảnh lưu điện thoại + dán clipboard điện thoại
-// vào máy, chọn chất lượng dạng segmented, bàn phím mở rộng (mũi tên, combo).
+// v1.8: nút toàn màn hình + chụp ảnh lưu điện thoại + dán clipboard điện thoại.
+// v1.9: bố cục nút học Y CHANG 9remote — 1 thanh icon nổi trên khung hình, bật
+// từng panel Bàn phím / Chuột / Clipboard (key label tiếng Anh chuẩn keycap),
+// phông OpenWork (tokens v4, không glassmorphism).
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { apiScreenInfo, owScreenInput, owScreenStream } from "../api.js";
 import { Banner } from "../components/ui.jsx";
-import { CameraIcon, ExpandIcon, MouseIcon, PasteIcon } from "../components/icons.jsx";
+import {
+  CameraIcon,
+  ClipboardIcon,
+  ExpandIcon,
+  KeyboardIcon,
+  MouseIcon,
+  MousePointerIcon,
+} from "../components/icons.jsx";
 
 const QUALITY_PRESETS = {
   fast: { label: "Nhanh", w: 720, q: 45 },
   balanced: { label: "Cân bằng", w: 880, q: 55 },
   sharp: { label: "Nét", w: 1100, q: 68 },
 };
+// Sticky modifiers — bật sáng rồi bấm phím = tổ hợp, xong tự nhả (như 9remote).
 const MODS = [
   { id: "ctrl", label: "Ctrl" },
   { id: "alt", label: "Alt" },
   { id: "shift", label: "Shift" },
   { id: "win", label: "Win" },
 ];
-// Combo hay dùng bấm 1 phát — mods gửi kèm, không cần bật sticky.
+// Combo hay dùng bấm 1 phát — nhãn theo đúng keycap tiếng Anh.
 const COMBOS = [
   { label: "Ctrl+C", mods: ["ctrl"], key: "c", hint: "Copy" },
-  { label: "Ctrl+V", mods: ["ctrl"], key: "v", hint: "Dán" },
-  { label: "Ctrl+Z", mods: ["ctrl"], key: "z", hint: "Hoàn tác" },
-  { label: "Alt+Tab", mods: ["alt"], key: "tab", hint: "Đổi cửa sổ" },
-  { label: "Win+D", mods: ["win"], key: "d", hint: "Về desktop" },
-  { label: "Win+E", mods: ["win"], key: "e", hint: "Mở Explorer" },
+  { label: "Ctrl+V", mods: ["ctrl"], key: "v", hint: "Paste" },
+  { label: "Ctrl+Z", mods: ["ctrl"], key: "z", hint: "Undo" },
+  { label: "Alt+Tab", mods: ["alt"], key: "tab", hint: "Switch window" },
+  { label: "Win+D", mods: ["win"], key: "d", hint: "Show desktop" },
+  { label: "Win+E", mods: ["win"], key: "e", hint: "File Explorer" },
   { label: "Ctrl+Shift+Esc", mods: ["ctrl", "shift"], key: "esc", hint: "Task Manager" },
 ];
 const NAV_KEYS = [
@@ -55,6 +65,7 @@ export function ScreenPage() {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [full, setFull] = useState(false); // toàn màn hình kiểu faux (áp dụng mọi trình duyệt)
+  const [panel, setPanel] = useState(null); // null | "keys" | "mouse" | "text" — kiểu 9remote
 
   const imgRef = useRef(null);
   const lastPoint = useRef({ x: 0.5, y: 0.5 }); // điểm chạm cuối cho chuột phải/double
@@ -62,6 +73,7 @@ export function ScreenPage() {
   const frameBlobRef = useRef(null); // frame JPEG gần nhất — cho nút Chụp ảnh
   const dragRef = useRef(null); // {lastSent: ms} khi đang kéo
   const runIdRef = useRef(0); // hủy vòng nối lại khi preset/pause/unmount đổi
+  const textInputRef = useRef(null);
 
   // ---- kiểm tra máy có hỗ trợ không
   useEffect(() => {
@@ -237,15 +249,23 @@ export function ScreenPage() {
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   };
 
-  // Nạp clipboard điện thoại vào ô chữ để soát rồi mới Gửi sang máy.
-  const pasteFromPhone = async () => {
+  // Nút Clipboard kiểu 9remote: mở panel gõ chữ + nạp clipboard điện thoại vào ô.
+  const openClipboard = async () => {
+    setControl(true); // ý định gõ chữ = muốn điều khiển
+    setPanel("text");
     try {
       const clip = await navigator.clipboard.readText();
       if (clip) setText(clip.slice(0, 500));
-      else setErrorMsg("Clipboard điện thoại đang trống.");
     } catch {
-      setErrorMsg("Không đọc được clipboard — trình duyệt chặn hoặc bạn chưa cho phép.");
+      // Không đọc được (chưa cấp quyền/clipboard trống) — người dùng tự gõ vẫn chạy.
     }
+    setTimeout(() => textInputRef.current?.focus(), 50);
+  };
+
+  // Bật panel điều khiển nào đó = ý định điều khiển luôn (như vào tab Input của 9remote).
+  const togglePanel = (name) => {
+    setControl(true);
+    setPanel((p) => (p === name ? null : name));
   };
 
   const at = lastPoint.current;
@@ -293,12 +313,46 @@ export function ScreenPage() {
             <p>{unavailable ? "Không khả dụng" : paused ? "Đã tạm dừng" : "Đang nối stream màn hình…"}</p>
           </div>
         )}
-        <div class="stage-actions">
-          <button class="stage-btn" onClick={toggleFull} aria-label={full ? "Thoát toàn màn hình" : "Toàn màn hình"} aria-pressed={full}>
-            <ExpandIcon size={18} />
+        {/* Thanh icon nổi phía dưới khung hình — bố cục học y chang 9remote */}
+        <div class="stage-toolbar">
+          <button
+            class={`stage-btn ${panel === "keys" ? "on" : ""}`}
+            disabled={unavailable}
+            aria-label="Bàn phím"
+            aria-pressed={panel === "keys"}
+            onClick={() => togglePanel("keys")}
+          >
+            <KeyboardIcon size={20} />
           </button>
+          <button
+            class={`stage-btn ${panel === "mouse" ? "on" : ""}`}
+            disabled={unavailable}
+            aria-label="Chuột"
+            aria-pressed={panel === "mouse"}
+            onClick={() => togglePanel("mouse")}
+          >
+            <MousePointerIcon size={20} />
+          </button>
+          <button
+            class={`stage-btn ${panel === "text" ? "on" : ""}`}
+            disabled={unavailable}
+            aria-label="Gõ hoặc dán chữ"
+            aria-pressed={panel === "text"}
+            onClick={openClipboard}
+          >
+            <ClipboardIcon size={20} />
+          </button>
+          <span class="stage-sep" aria-hidden="true" />
           <button class="stage-btn" onClick={saveSnapshot} disabled={!url} aria-label="Lưu ảnh màn hình về điện thoại">
-            <CameraIcon size={18} />
+            <CameraIcon size={20} />
+          </button>
+          <button
+            class={`stage-btn ${full ? "on" : ""}`}
+            onClick={toggleFull}
+            aria-label={full ? "Thoát toàn màn hình" : "Toàn màn hình"}
+            aria-pressed={full}
+          >
+            <ExpandIcon size={20} />
           </button>
         </div>
         {paused && url && (
@@ -309,41 +363,9 @@ export function ScreenPage() {
         <button class="btn danger small stage-exit" onClick={toggleFull}>Thoát toàn màn hình</button>
       )}
 
-      <div class="screen-bar">
-        <span class={`badge ${status === "live" ? "ok" : status === "error" ? "err" : "busy"}`}>
-          {status === "live" ? `Đang xem${fps ? ` · ${fps} hình/2s` : ""}` : status === "connecting" ? "Đang nối…" : status === "paused" ? "Tạm dừng" : "Mất nối"}
-        </span>
-        <button class="btn ghost small" onClick={() => setPaused((p) => !p)}>
-          {paused ? "Xem tiếp" : "Tạm dừng"}
-        </button>
-        <button
-          class={`btn small ${control ? "danger-solid" : "ghost"}`}
-          disabled={unavailable}
-          onClick={() => setControl((c) => !c)}
-          aria-pressed={control}
-        >
-          {control ? "Đang điều khiển" : "Chỉ xem"}
-        </button>
-      </div>
-
-      <div class="screen-qual" role="radiogroup" aria-label="Chất lượng hình">
-        <span class="screen-qual-label">Chất lượng</span>
-        <div class="seg">
-          {Object.entries(QUALITY_PRESETS).map(([id, p]) => (
-            <button
-              key={id}
-              class={`seg-btn ${preset === id ? "on" : ""}`}
-              onClick={() => setPreset(id)}
-              aria-pressed={preset === id}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {control && (
-        <div class="screen-tools">
+      {/* Panel trượt ra dưới khung hình — mỗi lần 1 panel, kiểu tab Input 9remote */}
+      {panel === "keys" && control && (
+        <div class="screen-panel">
           <div class="screen-row">
             {MODS.map((m) => (
               <button
@@ -374,15 +396,26 @@ export function ScreenPage() {
           <div class="screen-row">
             <button class="screen-key wide" disabled={sending} onClick={() => tapKey("enter")}>Enter</button>
             <button class="screen-key wide" disabled={sending} onClick={() => tapKey("esc")}>Esc</button>
-            <button class="screen-key wide" disabled={sending} onClick={() => tapKey("backspace")}>⌫</button>
+            <button class="screen-key wide" disabled={sending} onClick={() => tapKey("backspace")}>Bksp</button>
             <button class="screen-key wide" disabled={sending} onClick={() => tapKey("tab")}>Tab</button>
           </div>
+        </div>
+      )}
+
+      {panel === "mouse" && control && (
+        <div class="screen-panel">
           <div class="screen-row">
-            <button class="screen-key" disabled={sending} onClick={() => sendInput({ type: "rclick", ...at })}>Chuột phải</button>
-            <button class="screen-key" disabled={sending} onClick={() => sendInput({ type: "dbl", ...at })}>2 nhát</button>
-            <button class="screen-key" disabled={sending} onClick={() => sendInput({ type: "wheel", dy: 3 })}>Cuộn ↑</button>
-            <button class="screen-key" disabled={sending} onClick={() => sendInput({ type: "wheel", dy: -3 })}>Cuộn ↓</button>
+            <button class="screen-key" disabled={sending} onClick={() => sendInput({ type: "rclick", ...at })}>Right-click</button>
+            <button class="screen-key" disabled={sending} onClick={() => sendInput({ type: "dbl", ...at })}>Double-click</button>
+            <button class="screen-key" disabled={sending} onClick={() => sendInput({ type: "wheel", dy: 3 })}>Wheel ↑</button>
+            <button class="screen-key" disabled={sending} onClick={() => sendInput({ type: "wheel", dy: -3 })}>Wheel ↓</button>
           </div>
+          <p class="screen-note">Chạm vào hình = left-click · giữ rồi kéo = drag. Right-click/Double-click bấm tại điểm chạm cuối.</p>
+        </div>
+      )}
+
+      {panel === "text" && control && (
+        <div class="screen-panel">
           <form
             class="screen-textrow"
             onSubmit={async (e) => {
@@ -393,21 +426,55 @@ export function ScreenPage() {
             }}
           >
             <input
+              ref={textInputRef}
               type="text"
               value={text}
-              placeholder="Gõ chữ (kể cả tiếng Việt) rồi Gửi — chữ dán vào máy"
+              placeholder="Type text (Vietnamese works) then Send"
               onInput={(e) => setText(e.currentTarget.value)}
             />
-            <button class="btn small ghost" type="button" disabled={sending} onClick={pasteFromPhone} aria-label="Dán từ clipboard điện thoại">
-              <PasteIcon size={16} />
-            </button>
             <button class="btn small" type="submit" disabled={sending || !text.trim()}>
-              <MouseIcon size={16} /> Gửi
+              <MouseIcon size={16} /> Send
             </button>
           </form>
-          <p class="screen-note">Chạm vào hình = click · giữ rồi kéo = kéo thả. Nút Chuột phải/2 nhát bấm tại điểm chạm cuối. Nút máy ảnh lưu frame đang xem về điện thoại.</p>
+          <p class="screen-note">Chữ đi qua clipboard của máy (như 9remote) — dấu tiếng Việt nguyên vẹn, tối đa 500 ký tự.</p>
         </div>
       )}
+
+      <div class="screen-bar">
+        <span class={`badge ${status === "live" ? "ok" : status === "error" ? "err" : "busy"}`}>
+          {status === "live" ? `Đang xem${fps ? ` · ${fps} hình/2s` : ""}` : status === "connecting" ? "Đang nối…" : status === "paused" ? "Tạm dừng" : "Mất nối"}
+        </span>
+        <button class="btn ghost small" onClick={() => setPaused((p) => !p)}>
+          {paused ? "Xem tiếp" : "Tạm dừng"}
+        </button>
+        <button
+          class={`btn small ${control ? "danger-solid" : "ghost"}`}
+          disabled={unavailable}
+          onClick={() => {
+            setControl((c) => !c);
+            setPanel(null);
+          }}
+          aria-pressed={control}
+        >
+          {control ? "Đang điều khiển" : "Chỉ xem"}
+        </button>
+      </div>
+
+      <div class="screen-qual" role="radiogroup" aria-label="Chất lượng hình">
+        <span class="screen-qual-label">Chất lượng</span>
+        <div class="seg">
+          {Object.entries(QUALITY_PRESETS).map(([id, p]) => (
+            <button
+              key={id}
+              class={`seg-btn ${preset === id ? "on" : ""}`}
+              onClick={() => setPreset(id)}
+              aria-pressed={preset === id}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
