@@ -3,11 +3,13 @@ import { setToken, apiState, apiPair, pairingCodeFromHash } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 import { OpenWorkMark } from "../components/logo.jsx";
 
-// Ghép thiết bị kiểu 9Remote:
-//  - Mở link/QR từ terminal bridge (#p=MÃ) → tự ghép, nhận khóa vĩnh viễn owd_
-//  - Hoặc tự gõ mã 8 ký tự (XXXX-XXXX) in trên terminal
-//  - Hoặc dán token dự phòng owm_/owd_ (đường cứu hộ)
+// 2 cách kết nối song song (lựa chọn của chủ dự án):
+//  TAB "Ghép thiết bị" — nhập mã one-time 8 ký tự (XXXX-XXXX) in trên terminal
+//  bridge (sống 30 phút, dùng 1 lần). Ghép xong thiết bị nhận khóa vĩnh viễn owd_.
+//  TAB "Nhập token" — dành cho token dài hạn đã có (master owm_ từ QR master,
+//  hoặc owd_ của thiết bị): nhập vào là vào thẳng, không cần qua mã.
 export function PairingScreen({ onPaired }) {
+  const [tab, setTab] = useState("pair");
   const [code, setCode] = useState("");
   const [label, setLabel] = useState("");
   const [error, setError] = useState("");
@@ -50,11 +52,10 @@ export function PairingScreen({ onPaired }) {
     }
   }
 
-  async function submit() {
-    const value = code.trim().toUpperCase();
+  function submitPair() {
+    const value = code.trim().toUpperCase().replace(/[\s-]/g, "");
     if (!value) return;
-    if (value.startsWith("OWM_") || value.startsWith("OWD_")) return connectWithToken();
-    return pairWithCode(value, label);
+    pairWithCode(value, label);
   }
 
   // Tự ghép khi mở từ QR/link .../#p=MÃ
@@ -72,41 +73,91 @@ export function PairingScreen({ onPaired }) {
       </div>
 
       <div class="card">
-        <label class="field" for="pair-code">
-          Mã ghép (in trên terminal bridge, sống 30 phút — hoặc quét QR trên đó)
-        </label>
-        <input
-          id="pair-code"
-          type="text"
-          placeholder="XXXX-XXXX"
-          autocomplete="one-time-code"
-          spellcheck={false}
-          value={code}
-          onInput={(e) => setCode(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-        />
-        <label class="field" for="pair-label">Tên thiết bị này (tùy chọn)</label>
-        <input
-          id="pair-label"
-          type="text"
-          placeholder="vd: iPhone của bạn"
-          value={label}
-          onInput={(e) => setLabel(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-        />
-        <div class="sheet-actions">
-          <button class="btn" disabled={busy || !code.trim()} onClick={submit}>
-            {busy ? status || "Đang ghép…" : "Ghép thiết bị"}
+        <div style="display:flex;gap:8px;margin-bottom:14px">
+          <button
+            class={`btn small ${tab === "pair" ? "" : "ghost"}`}
+            onClick={() => {
+              setTab("pair");
+              setCode("");
+              setError("");
+            }}
+          >
+            Ghép thiết bị
+          </button>
+          <button
+            class={`btn small ${tab === "token" ? "" : "ghost"}`}
+            onClick={() => {
+              setTab("token");
+              setCode("");
+              setError("");
+            }}
+          >
+            Nhập token
           </button>
         </div>
-        {status && !error && <p class="pair-hint">{status}</p>}
-        {error && <Banner kind="err">{error}</Banner>}
+
+        {tab === "pair" ? (
+          <>
+            <label class="field" for="pair-code">
+              Mã ghép (in trên terminal bridge, sống 30 phút — hoặc quét QR trên đó)
+            </label>
+            <input
+              id="pair-code"
+              type="text"
+              placeholder="XXXX-XXXX"
+              autocomplete="one-time-code"
+              spellcheck={false}
+              value={code}
+              onInput={(e) => setCode(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitPair()}
+            />
+            <label class="field" for="pair-label">Tên thiết bị này (tùy chọn)</label>
+            <input
+              id="pair-label"
+              type="text"
+              placeholder="vd: iPhone của bạn"
+              value={label}
+              onInput={(e) => setLabel(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitPair()}
+            />
+            <div class="sheet-actions">
+              <button class="btn" disabled={busy || !code.trim()} onClick={submitPair}>
+                {busy ? status || "Đang ghép…" : "Ghép thiết bị"}
+              </button>
+            </div>
+            {status && !error && busy && <p class="pair-hint">{status}</p>}
+            {error && <Banner kind="err">{error}</Banner>}
+            <p class="pair-hint">
+              Ghép xong thiết bị này được cấp khóa vĩnh viễn — lần sau mở app là vào thẳng, không cần mã nữa.
+            </p>
+          </>
+        ) : (
+          <>
+            <label class="field" for="token-code">
+              Token dài hạn của bạn (master từ QR master trên máy, hoặc khóa của thiết bị cũ)
+            </label>
+            <input
+              id="token-code"
+              type="text"
+              placeholder="owm_… hoặc owd_…"
+              spellcheck={false}
+              value={code}
+              onInput={(e) => setCode(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && connectWithToken()}
+            />
+            <div class="sheet-actions">
+              <button class="btn" disabled={busy || !code.trim()} onClick={connectWithToken}>
+                {busy ? status || "Đang kiểm tra…" : "Kết nối"}
+              </button>
+            </div>
+            {status && !error && busy && <p class="pair-hint">{status}</p>}
+            {error && <Banner kind="err">{error}</Banner>}
+            <p class="pair-hint">Token nhập vào có hiệu lực vĩnh viễn — dùng cho thiết bị tin cậy của bạn.</p>
+          </>
+        )}
       </div>
 
-      <p class="pair-hint">
-        Ghép xong thiết bị này được cấp khóa vĩnh viễn — lần sau mở app là vào thẳng, không cần mã nữa.
-        Mất điện thoại / muốn bỏ quyền truy cập: vào Cài đặt → Thiết bị đã ghép → thu hồi.
-      </p>
+      <p class="pair-hint">Mất điện thoại / muốn bỏ quyền truy cập: vào Cài đặt → Thiết bị đã ghép → thu hồi.</p>
     </div>
   );
 }

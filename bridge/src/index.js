@@ -271,19 +271,30 @@ async function handleRequest(req, res) {
 server.requestTimeout = 0;
 server.headersTimeout = 60_000;
 
-// In QR pairing cho một URL gốc (local hoặc tunnel) — QR chứa MÃ ONE-TIME 30 phút,
-// không chứa khóa dài hạn (mô hình 9Remote: mã ngắn để ghép, khóa dài cấp sau).
-function printPairing(base, note) {
+/**
+ * In QR pairing ra terminal. Mặc định in mã one-time 30 phút (dùng 1 lần).
+ * withMaster = true: in thêm QR master (token vĩnh viễn) — chỉ hiển thị trực tiếp
+ * trên máy, KHÔNG chụp màn hình/chia sẻ vì có quyền vĩnh viễn.
+ */
+function printPairing(base, note, { withMaster = false } = {}) {
   printingPairing = true;
   const code = pairing.ensureCode();
   printingPairing = false;
   const pairingUrl = `${base}/#p=${code}`;
   console.log("");
   if (note) console.log(note);
+  console.log(`  QR ghép thiết bị (mã 1 lần, hết hạn sau ${CODE_TTL_MINUTES} phút):`);
   console.log(`  ${pairingUrl}`);
-  console.log(`  Mã ghép (1 lần, hết hạn sau ${CODE_TTL_MINUTES} phút): ${code.slice(0, 4)}-${code.slice(4)}`);
+  console.log(`  Mã ghép: ${code.slice(0, 4)}-${code.slice(4)}`);
   console.log("");
   qrcode.generate(pairingUrl, { small: true });
+  if (withMaster) {
+    const masterUrl = `${base}/#t=${config.mobileToken}`;
+    console.log("  QR MASTER (token vĩnh viễn — chỉ dùng tại máy, TUYỆT ĐỐI không chia sẻ):");
+    console.log(`  ${masterUrl}`);
+    console.log("");
+    qrcode.generate(masterUrl, { small: true });
+  }
   console.log("");
 }
 
@@ -294,7 +305,12 @@ server.listen(config.port, "127.0.0.1", () => {
   console.log(`listening on ${local} (localhost only - remote đi qua tunnel bên dưới)`);
   console.log(`openwork-server: ${state.server ? state.server.baseUrl : "not found yet (waiting for OpenWork...)"}`);
   console.log(`token status: ${state.tokenActive ? "ACTIVE" : state.restartRequired ? "needs OpenWork restart (one time)" : "pending"}`);
-  printPairing(config.publicUrl || local, "Mở link này (hoặc quét QR) trên điện thoại:");
+  // QR thứ 1 (mã one-time 30 phút): để ghép thiết bị mới — hết hạn tự chết.
+  // QR thứ 2 (master token): vĩnh viễn, chỉ in tại máy để chủ máy tiện tay
+  // nhập thẳng trên điện thoại của mình — TUYỆT ĐỐI không chụp/chia sẻ.
+  printPairing(config.publicUrl || local, "Mở link này (hoặc quét QR) trên điện thoại:", {
+    withMaster: true,
+  });
 
   // Auto Cloudflare Quick Tunnel: public URL miễn phí, không cần tài khoản.
   // URL đổi mỗi lần cloudflared chạy lại -> tự in QR mới. Tắt bằng OPENWORK_BRIDGE_TUNNEL=0
@@ -302,6 +318,7 @@ server.listen(config.port, "127.0.0.1", () => {
     startQuickTunnel(config.port, {
       onUrl: (url) => {
         state.tunnelUrl = url;
+        // Tunnel URL là public — chỉ in QR mã one-time, KHÔNG in QR master.
         printPairing(currentBase(), "[tunnel] URL public MỚI (dùng được từ 4G, không cần app nào trên điện thoại):");
       },
     }).catch((error) => console.error(`[tunnel] lỗi: ${error.message}`));
