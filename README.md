@@ -83,6 +83,7 @@ When the bridge starts it **opens a Cloudflare Quick Tunnel by itself** (downloa
 Things to know about Quick Tunnel:
 - **The URL changes every time the bridge/cloudflared restarts** (power loss, reboot...) — the bridge **prints a fresh QR** in the terminal; rescanning takes 10 seconds.
 - No SLA (personal use: keep the bridge running and it's fine). The bridge also revives cloudflared if it dies.
+- **Cloudflare rate-limits Quick Tunnel creation per IP (HTTP 429 / error 1015)** — restarting the bridge too often in a short window triggers it (each restart = a new tunnel request). The bridge backs off on its own (2 → 4 → ... max 10 minutes, also for tunnels the edge dumps right after granting) and the block lifts by itself: **don't keep restarting — that only extends the ban**.
 - To disable the tunnel: run the bridge with `OPENWORK_BRIDGE_TUNNEL=0`.
 
 **Permanent fixed URL — already available, $0:** the official web app runs on your own Cloudflare Worker (`worker/` in this repo, e.g. `https://YOUR-WORKER.workers.dev`). The bridge "reports its address" to the worker every 15 minutes (a tunnel change is reported immediately), so the phone only ever needs to remember this one URL — whatever the tunnel does, it gets found again. Device pairing QRs also point at this URL. The option below only matters if you want an extra privacy layer:

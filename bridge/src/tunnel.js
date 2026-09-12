@@ -88,8 +88,12 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
       if (stopped) return;
       // 429/1015 = Cloudflare rate-limit quick tunnel theo IP: chờ lâu dần
       // (2ph → 4ph → ... tối đa 10ph) thay vì dội 5s/lần làm limit kéo dài thêm.
-      if (sawRateLimit || code === 1) {
-        rateLimitStreak = sawRateLimit ? rateLimitStreak + 1 : 0;
+      // Code -1 (4294967295, Windows) = bị edge dump sau khi cấp URL hoặc bị giết
+      // ngoài — khi IP đang bị 1015 thì cũng phải chờ dài, không là dội 60s/lần
+      // tự nuôi tiếp limit (vicious loop đêm 13/09).
+      const dumped = code === 4294967295 || code === -1;
+      if (sawRateLimit || code === 1 || dumped) {
+        rateLimitStreak = sawRateLimit || dumped ? rateLimitStreak + 1 : 0;
       }
       let delay = Math.min(5000 * 2 ** Math.max(0, attempt - 1), 60_000);
       if (rateLimitStreak > 0) {
