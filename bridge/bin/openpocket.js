@@ -177,10 +177,24 @@ if (cmd === "edge") {
   const TENANT_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 
   if (sub === "join") {
-    const workerUrl = (args[2] || config.lookupUrl || "").replace(/\/+$/, "");
+    const arg = String(args[2] ?? "").trim();
+    let workerUrl = (arg || config.lookupUrl || "").replace(/\/+$/, "");
+    let user = "";
+    let pass = "";
+    // Dán nguyên LINK MỜI (.../#i=user:secret) cũng được — tự bóc user/pass,
+    // khỏi gõ gì thêm.
+    const linkMatch = /#i=([A-Za-z0-9][A-Za-z0-9-]{0,31}):([A-Za-z0-9_-]+)$/.exec(arg);
+    if (linkMatch) {
+      try {
+        workerUrl = new URL(arg).origin;
+      } catch {}
+      user = linkMatch[1].toLowerCase();
+      pass = linkMatch[2];
+      console.log(`Đọc được phòng "${user}" từ link mời.`);
+    }
     if (!/^https:\/\//i.test(workerUrl)) {
-      console.log("Dùng: openpocket edge join <địa-chỉ-worker>");
-      console.log("vd:   openpocket edge join https://YOUR-WORKER.workers.dev");
+      console.log("Dùng: openpocket edge join <link-mời hoặc địa-chỉ-worker>");
+      console.log("vd:   openpocket edge join https://YOUR-WORKER.workers.dev/#i=nam:owes_xxx");
       process.exit(1);
     }
     const { createInterface } = await import("node:readline/promises");
@@ -205,10 +219,16 @@ if (cmd === "edge") {
       }
     };
 
-    console.log(`Tham gia phòng trên worker: ${workerUrl}`);
-    const user = (await ask("Tên đăng nhập (mã phòng): ")).toLowerCase();
-    const pass = await askHidden("Mật khẩu: ");
-    const name = await ask("Tên máy hiển thị trên web (Enter để bỏ qua): ");
+    let name = "";
+    if (user) {
+      console.log(`Tham gia phòng trên worker: ${workerUrl}`);
+      name = await ask("Tên máy hiển thị trên web (Enter để bỏ qua): ");
+    } else {
+      console.log(`Tham gia phòng trên worker: ${workerUrl}`);
+      user = (await ask("Tên đăng nhập (mã phòng): ")).toLowerCase();
+      pass = await askHidden("Mật khẩu: ");
+      name = await ask("Tên máy hiển thị trên web (Enter để bỏ qua): ");
+    }
     if (!TENANT_RE.test(user)) {
       console.log("❌ Tên đăng nhập chỉ gồm a-z, 0-9 và dấu gạch ngang, 2-32 ký tự (vd: nam).");
       process.exit(1);
@@ -282,10 +302,12 @@ if (cmd === "code") {
   }
   console.log("");
   // Mã vĩnh viễn: đọc thẳng từ config (file local, an toàn vì lệnh chạy tại máy)
+  let fixedAddr = null;
   try {
     const config = loadConfig();
     // Ưu tiên worker (địa chỉ cố định) nếu máy đã join phòng; kèm &m= để web tự điền
     const base = (config.lookupUrl || `http://127.0.0.1:${config.port || 8788}`).replace(/\/+$/, "");
+    fixedAddr = config.lookupUrl || null;
     const mSuffix = config.lookupTenant ? `&m=${encodeURIComponent(config.lookupTenant)}` : "";
     const masterUrl = `${base}/#t=${config.mobileToken}${mSuffix}`;
     console.log("⭐ Mã VĨNH VIỄN (có hiệu lực mãi, chỉ dùng tại máy — đừng chia sẻ):");
@@ -299,7 +321,7 @@ if (cmd === "code") {
   }
   console.log("");
   console.log("Mã ghép sống 30 phút, dùng 1 lần. Master vĩnh viễn.");
-  console.log("Địa chỉ cố định (bookmark 1 lần, dùng mãi): https://YOUR-WORKER.workers.dev");
+  console.log("Địa chỉ cố định (bookmark 1 lần, dùng mãi): " + (fixedAddr || "(chưa cấu hình — openpocket edge join <worker>)"));
   process.exit(0);
 }
 

@@ -1,61 +1,62 @@
 # OpenWork Mobile
 
-Quản lý **sessions, workspaces và files** của [OpenWork](https://github.com/different-ai/openwork) desktop **từ điện thoại, ở bất kỳ đâu** — web app (PWA) tự kết nối mỗi khi mở trang, không cần APK, chạy được cả iOS lẫn Android, chi phí **0 đồng**.
+Manage **sessions, workspaces and files** of [OpenWork](https://github.com/different-ai/openwork) desktop **from your phone, from anywhere** — a web app (PWA) that reconnects by itself every time you open the page, no APK required, works on both iOS and Android, at a cost of **zero**.
 
-## Giới thiệu dự án
+## About this project
 
-OpenWork là app desktop (Electron, opensource) để chạy các AI coding agent — nhưng chỉ dùng được tại máy tính. Dự án này thêm một "cửa sau" chính chủ cho điện thoại:
+OpenWork is a desktop app (Electron, open source) for running AI coding agents — but it only works at the computer. This project adds an official "back door" for the phone:
 
-| Yêu cầu ban đầu | Cách đáp ứng |
+| Original requirement | How it is met |
 |---|---|
-| Quản lý session & workspace đang có | Bridge nối thẳng vào API có sẵn của openwork-server chạy trong OpenWork desktop |
-| Quản lý file khi ra ngoài | File manager: duyệt / xem / **sửa + lưu** / upload / tải về |
-| Chạy nhẹ | Bridge = 1 tiến trình Node, ~0 dependency; web app ~42KB (gzip 15KB); không DB riêng |
-| Tương tác từ xa, giữ kết nối | SSE streaming + auto-reconnect + offline queue (tin nhắn soạn offline tự gửi khi có mạng) |
-| Không APK, iOS dùng được | Web/PWA — mở link là tự kết nối, "Thêm vào màn hình chính" như app thật |
-| Miễn phí hoàn toàn | Cloudflare Quick Tunnel (không cần tài khoản) + model free của OpenCode Zen |
+| Manage existing sessions & workspaces | The bridge plugs straight into the openwork-server API already shipped inside OpenWork desktop |
+| Manage files while away | File manager: browse / view / **edit + save** / upload / download |
+| Stay lightweight | Bridge = 1 Node process, ~0 dependencies; web app ~42KB (15KB gzipped); no separate database |
+| Remote interaction that stays connected | SSE streaming + auto-reconnect + offline queue (messages composed offline are sent when back online) |
+| No APK, works on iOS | Web/PWA — open the link and it self-connects; "Add to Home Screen" behaves like a real app |
+| Completely free | Cloudflare Quick Tunnel (no account needed) + OpenCode Zen free models |
 
-**Nguyên tắc thiết kế:** không viết lại những gì OpenWork đã có. Bridge chỉ là lớp mỏng: tìm server → giữ token → chuyển tiếp có chọn lọc + serve web. OpenWork update thì mình chỉ sửa 2 adapter (đã ghi rõ trong [CODE_SUMMARY.md](./CODE_SUMMARY.md)).
+**Design principle:** never rewrite what OpenWork already provides. The bridge is a thin layer: find the server → hold the token → forward a selected surface + serve the web app. When OpenWork updates, only 2 adapters need fixing (documented in [CODE_SUMMARY.md](./CODE_SUMMARY.md)).
 
 ```
-Điện thoại (PWA, 4G/5G bất kỳ đâu — KHÔNG cần cài app nào)
-   │  HTTPS qua Cloudflare Quick Tunnel (bridge tự chạy, 0đ, không cần tài khoản)
+Phone (PWA, any 4G/5G — NO app install needed)
+   │  HTTPS via Cloudflare Quick Tunnel (bridge spawns it, $0, no account)
    ▼
-openwork-bridge  (máy tính, Node.js, 127.0.0.1:8788)
-   │  Bearer token owner (bridge tự mint, không lộ ra điện thoại)
+openwork-bridge  (the computer, Node.js, 127.0.0.1:8788)
+   │  Owner Bearer token (minted by the bridge, never exposed to the phone)
    ▼
-openwork-server  (API có sẵn trong OpenWork desktop, port động)
+openwork-server  (API shipped inside OpenWork desktop, dynamic port)
    ▼
 opencode engine  →  sessions · models · files
 ```
 
-## Tính năng (v1)
+## Features (v1)
 
-- 📁 **Workspaces**: danh sách live, tạo workspace mới (FAB gradient); khi tạo **bấm nút "Duyệt…" để chọn thư mục trên máy tính** (chip nhanh tên folder thật, chọc ổ đĩa → thư mục từng cấp, **"+ Thư mục mới"** tạo luôn chỗ ở cho project chưa có) — không cần gõ tay đường dẫn; folder chưa tồn tại cũng được, server tự tạo
-- 💬 **Sessions**: danh sách (busy/idle realtime), tạo mới, xem transcript đầy đủ (text/tool/reasoning, markdown + code block), gửi prompt (chọn model); **chữ agent chảy dần từng đoạn ngay khi đang trả lời**, mất mạng/khóa màn hình/đổi Wifi mở lại tự bắt kịp không cần thoát ra vào lại; khi agent đang chạy, **nút Gửi biến thành nút Dừng đỏ (■)** — bấm lại để ngắt như ChatGPT/Gemini, draft đang gõ được giữ nguyên
-- 🔐 **Permissions**: duyệt Allow/Deny ngay trên điện thoại khi agent xin phép
-- 🗂 **Files**: duyệt cây thư mục, xem/sửa + lưu file text, xem ảnh **+ PDF**, upload từ điện thoại, tải file về (hiện % + Hủy + nút Chia sẻ để iOS Lưu về Files)
-- 🖥 **Màn hình (v1.7, học cơ chế 9Remote)**: xem màn hình máy tính trực tiếp trên điện thoại (~3-4 hình/s, ảnh nén JPEG không lưu đĩa) và **điều khiển được luôn** — chạm = click, giữ kéo = kéo thả, nút chuột phải/cuộn/Enter/Esc, tổ hợp Ctrl/Alt/Shift/Win, **gõ tiếng Việt từ điện thoại** (đi đường clipboard nên không bị IME máy tính ăn chữ). Mặc định ở chế độ **Chỉ xem** — muốn điều khiển phải bật công tắc. Chi tiết bên dưới 👇
-- 📎 **File trong chat (2 chiều)**: file agent nhắc tới hiện **thẻ Mở/Tải về + Xem trong Files** ngay trong tin nhắn; nút **kẹp giấy** trong khung chat để gửi file/ảnh từ điện thoại cho agent đọc
-- 📴 **Offline queue** + auto-reconnect; PWA cài màn hình chính iOS/Android (icon 192/512 + maskable đủ chuẩn cài Android, apple-touch-icon cho iOS)
+- 📁 **Workspaces**: live list, create new workspaces (gradient FAB); while creating, **tap "Browse…" to pick a folder on the computer** (quick chips with real folder names, drill into drives → folders level by level, **"+ New folder"** creates a home for a project that isn't on disk yet) — no typing paths by hand; the folder doesn't have to exist, the server creates it
+- 💬 **Sessions**: list (busy/idle in realtime), create new, full transcript view (text/tool/reasoning, markdown + code blocks), send prompts (pick a model); **agent text streams into the bubble chunk by chunk while it replies**, and losing network / locking the screen / switching Wi-Fi recovers automatically when reopened — no need to leave and come back; while the agent runs, **the Send button morphs into a red Stop button (■)** — tap again to interrupt, ChatGPT/Gemini style, and the draft you were typing is kept
+- 🔐 **Permissions**: approve Allow/Deny right on the phone when the agent asks
+- 🗂 **Files**: browse the folder tree, view/edit + save text files, view images **and PDFs**, upload from the phone, download files (progress %, Cancel, and a Share button for iOS "Save to Files")
+- 🖥 **Screen (v1.7, mechanics learned from 9Remote)**: watch the computer's screen live on the phone (~3-4 frames/s, JPEG compressed, never written to disk) and **control it too** — tap = click, press-and-drag = drag & drop, right-click/scroll/Enter/Esc buttons, Ctrl/Alt/Shift/Win combos, **type Vietnamese from the phone** (text travels over the clipboard so the desktop IME can't mangle it). Defaults to **View only** — controlling requires flipping a switch. Details below 👇
+- 📎 **Files in chat (both ways)**: files the agent mentions show up as **Open/Download cards + "View in Files"** right inside the message; a **paperclip** button in the composer sends files/images from the phone for the agent to read
+- 📴 **Offline queue** + auto-reconnect; installable PWA on iOS/Android home screens (192/512 + maskable icons for Android installs, apple-touch-icon for iOS)
 
-## Giao diện (v4 "desktop-first")
+## UI (v4 "desktop-first")
 
-Nhân bản giao diện **OpenWork desktop thật** (soi trực tiếp app đang chạy + CSS
-`app-dist`): **light/dark tự theo hệ thống**, nền sáng `#f8fafc` / tối `#111113`,
-**nút chính đen (light) / trắng (dark)** như nút "Add skill" trên desktop,
-**chấm màu nhận diện workspace** (mỗi ws một màu cố định), **logo lục giác chính chủ** `openwork-mark.svg` (SVG gốc, có bản dark). Cấu trúc học từ các app điều khiển agent
-(Happy, Omnara): mở app là thấy **Phiên gần đây gộp mọi workspace**, nav nổi
-3 tab (Phiên · Workspace · Cài đặt), FAB tạo session. **Nút Trở lại (Sessions, Workspace, Đóng) luôn ghim cố định trên topbar** (vốn sticky trên đỉnh màn hình kèm blur và safe-area), cuộn nội dung dài đến đâu cũng không trôi mất. Theo skill nội bộ
-`pwa-workspace-ui` (`.zcode/skills/`): input 16px chống iOS zoom, nút ≥44px,
-safe-area, skeleton loading, `prefers-reduced-motion`, icon SVG toàn bộ.
+A faithful clone of the **real OpenWork desktop** UI (studied directly from the running app + its
+`app-dist` CSS): **light/dark follows the system**, backgrounds `#f8fafc` / `#111113`,
+**primary buttons black (light) / white (dark)** like the desktop "Add skill" button,
+**per-workspace color dots** (one fixed color per workspace), the official hexagon
+`openwork-mark.svg` logo (original SVG, dark variant included). The structure follows agent-control
+apps (Happy, Omnara): opening the app shows **recent sessions across all workspaces**, a floating
+3-tab nav (Sessions · Workspace · Settings), a FAB to create sessions. **Back buttons (Sessions, Workspace, Close) are always pinned to the topbar** (already sticky at the top with blur and safe-area), so they never scroll away no matter how long the content is. Follows the internal skill
+`pwa-workspace-ui` (`.zcode/skills/`): 16px inputs against iOS zoom, ≥44px touch targets,
+safe-area, skeleton loading, `prefers-reduced-motion`, all-SVG icons.
 
-## Yêu cầu
+## Requirements
 
-- Máy tính Windows đang chạy **OpenWork desktop** + **Node.js ≥ 20**
-- Điện thoại: **không cần cài gì** (mở link qua tunnel công cộng; muốn URL cố định thì cài Tailscale tùy chọn)
+- A Windows computer running **OpenWork desktop** + **Node.js ≥ 20**
+- Phone: **nothing to install** (open the link through the public tunnel; a fixed URL via optional Tailscale if wanted)
 
-## Cài đặt (máy tính — làm 1 lần)
+## Setup (computer — once)
 
 ```bash
 # 1. Bridge
@@ -64,120 +65,120 @@ cd bridge && npm install
 # 2. Web app
 cd ../web && npm install && npm run build
 
-# 3. Chạy bridge
+# 3. Run the bridge
 cd ../bridge && npm start
 ```
 
-Lần đầu chạy, bridge tự mint token vào OpenWork và in ra **QR chứa mã ghép một lần (sống 30 phút)**.
+On first run, the bridge mints a token into OpenWork and prints a **QR code holding a one-time pairing code (valid 30 minutes)**.
 
-> ⚠️ Sau lần chạy bridge **đầu tiên**, restart OpenWork desktop **đúng 1 lần** để token có hiệu lực (OpenWork chỉ nạp `tokens.json` lúc khởi động). Bridge tự nhận biết — làm 1 lần thôi.
+> ⚠️ After the **first** bridge run, restart OpenWork desktop **exactly once** so the token takes effect (OpenWork only loads `tokens.json` at startup). The bridge detects this — it's a one-time step.
 
-## Dùng trên điện thoại (không cần cài gì)
+## Using it on the phone (nothing to install)
 
-Bridge khởi động xong sẽ **tự mở Cloudflare Quick Tunnel** (tự tải cloudflared lần đầu, ~50MB) và in ra terminal:
-- **URL public** dạng `https://xxx.trycloudflare.com` kèm **QR chứa mã ghép một lần (30 phút)**
-- Mở link đó trên điện thoại (4G ở đâu cũng được) → app **tự ghép** → nhận **khóa vĩnh viễn riêng của thiết bị** → *Thêm vào màn hình chính*
-- Từ lần sau mở icon là vào thẳng, không cần mã nữa
+When the bridge starts it **opens a Cloudflare Quick Tunnel by itself** (downloads cloudflared on first run, ~50MB) and prints to the terminal:
+- A **public URL** like `https://xxx.trycloudflare.com` with a **QR holding a one-time pairing code (30 minutes)**
+- Open that link on the phone (4G works anywhere) → the app **pairs itself** → receives the **device's permanent key** → *Add to Home Screen*
+- From then on, tap the icon and you're in — no code needed again
 
-Điểm cần biết về Quick Tunnel:
-- **URL đổi mỗi lần bridge/cloudflared chạy lại** (mất điện, restart máy...) — bridge **tự in QR mới** trong terminal, quét lại 10 giây là xong.
-- Không SLA (dùng cá nhân: giữ bridge chạy là ổn). Bridge cũng tự revive cloudflared nếu nó chết.
-- Tắt tunnel: chạy bridge với `OPENWORK_BRIDGE_TUNNEL=0`.
+Things to know about Quick Tunnel:
+- **The URL changes every time the bridge/cloudflared restarts** (power loss, reboot...) — the bridge **prints a fresh QR** in the terminal; rescanning takes 10 seconds.
+- No SLA (personal use: keep the bridge running and it's fine). The bridge also revives cloudflared if it dies.
+- To disable the tunnel: run the bridge with `OPENWORK_BRIDGE_TUNNEL=0`.
 
-**URL cố định vĩnh viễn — đã có sẵn, 0đ:** web chính thức chạy tại [`https://YOUR-WORKER.workers.dev`](https://YOUR-WORKER.workers.dev) (Cloudflare Worker `worker/` trong dự án). Bridge tự "báo địa chỉ" lên worker mỗi 15 phút (đổi tunnel là báo ngay), nên điện thoại chỉ cần nhớ đúng 1 URL này — tunnel đổi bao nhiêu cũng tự tìm lại. QR ghép thiết bị cũng tự trỏ về URL này. Hai lựa chọn dưới đây chỉ cần khi muốn thêm lớp riêng tư:
+**Permanent fixed URL — already available, $0:** the official web app runs on your own Cloudflare Worker (`worker/` in this repo, e.g. `https://YOUR-WORKER.workers.dev`). The bridge "reports its address" to the worker every 15 minutes (a tunnel change is reported immediately), so the phone only ever needs to remember this one URL — whatever the tunnel does, it gets found again. Device pairing QRs also point at this URL. The two options below only matter if you want an extra privacy layer:
 
-| Cách | Chi phí | Ghi chú |
+| Option | Cost | Notes |
 |---|---|---|
-| **Worker openpocket (mặc định)** | 0đ | URL cố định + multi-tenant (mục dưới); đã deploy sẵn |
-| Cloudflare **Named Tunnel** + domain | ~200k/năm (tiền domain) | URL cố định; thêm được Cloudflare Access (OTP email) |
-| **Tailscale** (`tailscale serve --bg 8788`) | 0đ | URL cố định `https://<pc>.<tailnet>.ts.net`, riêng tư nhất — nhưng điện thoại phải cài app Tailscale |
+| **The openpocket Worker (default)** | $0 | Fixed URL + multi-tenant (section below); already deployed |
+| Cloudflare **Named Tunnel** + domain | ~$10/year (domain) | Fixed URL; can add Cloudflare Access (email OTP) |
+| **Tailscale** (`tailscale serve --bg 8788`) | $0 | Fixed URL `https://<pc>.<tailnet>.ts.net`, most private — but the phone must install Tailscale |
 
-**Tự chạy bridge khi bật máy (khuyên dùng):**
+**Auto-start the bridge at login (recommended):**
 ```bash
-openpocket autostart --enable --with-openwork   # đăng nhập Windows là bridge + OpenWork tự mở
-openpocket autostart --status                   # xem đang bật hay tắt
-openpocket autostart --disable                  # tắt tự chạy
+openpocket autostart --enable --with-openwork   # at Windows login, bridge + OpenWork open themselves
+openpocket autostart --status                   # check enabled or not
+openpocket autostart --disable                  # disable
 ```
-Không kèm `--with-openwork` thì chỉ bridge tự chạy (OpenWork bạn tự mở tay — bridge tự dò lại server mỗi 5s nên thứ tự không quan trọng).
+Without `--with-openwork`, only the bridge auto-starts (you open OpenWork manually — the bridge re-probes the server every 5s, so order doesn't matter).
 
-**Bật OpenWork từ điện thoại:** máy tính đang bật + bridge đang chạy mà app OpenWork chưa mở → mở app trên điện thoại sẽ thấy nút **"Bật OpenWork trên máy tính"** (ngay banner đỏ + trong Cài đặt → Trạng thái bridge). Bấm → đợi ~20s → bấm Kiểm tra lại. Lưu ý: máy tính tắt hẳn/ngủ sâu thì chịu — phải bật máy lên trước.
+**Launch OpenWork from the phone:** computer on + bridge running but the OpenWork app closed → the phone app shows a **"Launch OpenWork on the computer"** button (on the red banner + in Settings → Bridge status). Tap → wait ~20s → tap Re-check. Note: a fully shut down or deep-sleeping computer can't be woken — turn it on first.
 
-### Xem & điều khiển màn hình máy tính (tab "Màn hình")
+### Watch & control the computer's screen ("Screen" tab)
 
-Mở app → tab **Màn hình** (nav đáy) là thấy màn hình máy tính ngay, giống mở TV xem camera nhà:
+Open the app → **Screen** tab (bottom nav) and the computer's screen appears right away, like watching a home camera:
 
-- **Xem**: bridge chụp màn hình ~3-4 hình/s, nén JPEG và đẩy thẳng về điện thoại (RAM chỉ giữ đúng 1 khung — **không lưu vào đĩa gì cả**). Chọn chất lượng: Nhanh (tiết kiệm 3G) / Cân bằng / Nét. Màn đứng yên gần như tốn 0 byte.
-- **Điều khiển**: bấm nút "Chỉ xem" để đổi thành "Đang điều khiển" → **chạm vào hình = click tại đó**, **giữ rồi kéo = kéo thả**, các nút phụ: chuột phải, double-click, cuộn, Enter/Esc/Backspace/Tab, tổ hợp (bật sáng Ctrl/Alt/Shift/Win rồi bấm phím), và **ô gõ chữ tiếng Việt** — chữ được đưa sang máy tính qua clipboard + dán, nên dấu nguyên vẹn dù máy cài Unikey.
-- **Giới hạn đáng nhớ**: không thấy màn hình khóa / UAC (Windows chặn chụp secure desktop); chỉ monitor chính; không điều khiển được app chạy quyền As Admin; khoảng 3-4 hình/s là "chụp liên tục" chứ không phải video. Không ai xem thì bridge tự ngừng chụp sau 90 giây cho mát máy.
-- Cơ chế học từ **9Remote** (mổ xẻ bản npm cài trên máy): chụp bằng `node-screenshots` + nén `sharp`, điều khiển bằng daemon C# tự compile (SendInput), gõ chữ đi clipboard — đúng bài bản của họ nhưng tự dựng lại toàn bộ, không dùng code của họ.
+- **Watch**: the bridge captures ~3-4 frames/s, compresses to JPEG and pushes straight to the phone (RAM holds exactly 1 frame — **nothing is ever written to disk**). Quality presets: Fast (saves 3G) / Balanced / Sharp. A still screen costs nearly 0 bytes.
+- **Control**: flip "View only" to "Controlling" → **tap the image = click there**, **press and drag = drag & drop**, plus buttons for right-click, double-click, scroll, Enter/Esc/Backspace/Tab, modifier combos (light up Ctrl/Alt/Shift/Win then press a key), and a **Vietnamese text box** — text travels to the computer via clipboard + paste, so diacritics survive even with Unikey installed.
+- **Limits worth remembering**: lock screen / UAC can't be captured (Windows blocks secure-desktop capture); main monitor only; apps running as Administrator can't be controlled; 3-4 frames/s is "continuous stills", not video. With no viewer the bridge stops capturing after 90 seconds to cool down.
+- Mechanics learned from **9Remote** (studied from the npm package installed on the machine): capture via `node-screenshots` + compression via `sharp`, control via a self-compiled C# daemon (SendInput), text over the clipboard — their playbook, but fully re-implemented, none of their code.
 
-## Nhiều máy trên cùng một web (multi-tenant)
+## Many computers, one web app (multi-tenant)
 
-Web `YOUR-WORKER.workers.dev` là "tòa nhà nhiều phòng": ai cũng mở được, nhưng mỗi người chỉ đụng được OpenWork **máy nhà mình**. Chủ worker cấp cho mỗi người bạn một cặp **tên đăng nhập + mật khẩu** — dùng được cho cả 2 đầu:
+The shared worker URL is an "apartment building": anyone can open it, but each person only reaches **their own home machine**. The worker owner issues each friend a **username + password** pair — usable on both ends:
 
-| Đầu | Cách nhập |
+| End | How to sign in |
 |---|---|
-| Máy PC của bạn ấy | `openpocket edge join https://YOUR-WORKER.workers.dev` → nhập user/pass (1 lần, lưu config) — bridge tự heartbeat lên "phòng" của họ |
-| Điện thoại của bạn ấy | Mở web → tab **Đăng nhập** → nhập cùng cặp user/pass (1 lần — nhận khóa vĩnh viễn như pair thường, mật khẩu không lưu trên web) |
+| Friend's PC | `openpocket edge join https://YOUR-WORKER.workers.dev` → enter user/pass (once, saved to config) — their bridge heartbeats into "their room" |
+| Friend's phone | Open the web app → **Sign in** tab → same user/pass (once — receives a permanent key like a normal pair; the password is never stored on the web) |
 
-Lệnh phía chủ worker (chạy trong `worker/`, cần `wrangler` đã đăng nhập):
+Owner-side commands (run in `worker/`, requires a logged-in `wrangler`):
 
 ```bash
-node scripts/tenant.mjs add nam "Máy của Nam"   # cấp phòng + in "thẻ mời" gửi bạn
-node scripts/tenant.mjs list                    # xem các phòng đang có
-node scripts/tenant.mjs revoke nam              # xóa phòng (máy đó hết chỗ báo địa chỉ)
+node scripts/tenant.mjs add alice "Alice's PC"   # issue a room + print an "invite card" (auto-copied to clipboard — paste it to your friend)
+node scripts/tenant.mjs list                     # list rooms
+node scripts/tenant.mjs revoke alice             # delete a room (that machine loses its address-reporting slot)
 ```
 
-Máy của chủ worker không phải đổi gì — không join phòng thì tiếp tục chạy luồng `machine:main` như cũ. Giới hạn đáng nhớ: bridge heartbeat mỗi 15 phút nên KV free (~1000 ghi/ngày) đủ cho **~10 phòng**; mỗi điện thoại ghép 1 máy (đổi máy = Cài đặt → Gỡ pairing → đăng nhập lại).
+The worker owner's own machine changes nothing — without joining a room it keeps the `machine:main` flow as before. A limit worth remembering: the bridge heartbeats every 15 minutes, so free KV (~1000 writes/day) fits about **~10 rooms**; each phone pairs with 1 machine (changing machines = Settings → Unpair → sign in again).
 
-## Cấu trúc dự án
+## Project layout
 
 ```
 bridge/          # Node.js — discovery, token bootstrap, proxy, static, QR
-  src/           # index.js (entry) · proxy.js · discovery.js · bootstrap.js · auth.js · screen.js + desktop-input.cs (màn hình) · fslist.js …
-  test/          # unit test (npm test)
-  scripts/       # e2e-live.mjs, dbg-prompt.mjs, dbg-screen.mjs (test live với OpenWork thật)
-worker/          # Cloudflare Worker "openpocket" — URL cố định + multi-tenant
-  src/index.js   # /__register (đăng ký phòng) · /api/* (relay theo phòng) · serve web
-  scripts/tenant.mjs # cấp/xóa phòng (tài khoản user/pass) trên KV
-web/             # PWA Preact + Vite → build ra web/dist do bridge serve
-  src/pages/     # pairing (Đăng nhập/Ghép/Nhập token) · workspaces · sessions · chat · files · screen (màn hình) · settings
+  src/           # index.js (entry) · proxy.js · discovery.js · bootstrap.js · auth.js · screen.js + desktop-input.cs (screen) · fslist.js …
+  test/          # unit tests (npm test)
+  scripts/       # e2e-live.mjs, dbg-prompt.mjs, dbg-screen.mjs (live tests against a real OpenWork)
+worker/          # Cloudflare Worker "openpocket" — fixed URL + multi-tenant
+  src/index.js   # /__register (room check-in) · /api/* (per-room relay) · serves the web app
+  scripts/tenant.mjs # issue/delete rooms (user/pass accounts) on KV
+web/             # PWA Preact + Vite → builds to web/dist served by the bridge
+  src/pages/     # pairing (Sign in/Pair/Enter token) · workspaces · sessions · chat · files · screen · settings
   src/components/# ui.jsx (Loading/Skeleton/Empty/Banner/Sheet/Confirm) · icons.jsx (SVG set)
-  .zcode/skills/ # pwa-workspace-ui: skill thiết kế nội bộ (tokens · ui-rules · pwa-checklist)
-README.md        # file này
-CODE_SUMMARY.md  # bản đồ code + bảng "triệu chứng → chỗ sửa"
+  .zcode/skills/ # pwa-workspace-ui: internal design skill (tokens · ui-rules · pwa-checklist)
+README.md        # this file
+CODE_SUMMARY.md  # code map + the "symptom → where to fix" table
 ```
 
-## Bảo mật (mô hình Pair Device học từ 9Remote)
+## Security (Pair Device model, learned from 9Remote)
 
-- **Mã ghép một lần, sống 30 phút**: nằm trong QR/terminal của bridge — dùng đúng 1 lần rồi chết. QR bị lộ cũng chỉ nguy hiểm trong 30 phút.
-- **Khóa thiết bị vĩnh viễn (`owd_...`)**: sau khi ghép, mỗi điện thoại nhận khóa riêng (lưu trong điện thoại, bridge chỉ lưu hash). Mở lại app bao giờ cũng vào thẳng.
-- **Thu hồi từng thiết bị**: trong app → Cài đặt → *Thiết bị đã ghép*. Mất điện thoại? Bấm thu hồi là nó mất quyền truy cập ngay lập tức.
-- **Phòng (multi-tenant)**: secret của mỗi phòng nằm trên worker KV và bridge của người đó; worker KHÔNG giữ khóa điện thoại của ai — mọi khóa vẫn do bridge tự kiểm tra. Web chỉ lưu khóa vĩnh viễn, không lưu mật khẩu. Đăng nhập sai tên hoặc sai mật khẩu trả **cùng một câu trả lời** — người lạ không dò ra được phòng nào tồn tại, càng không thấy máy của nhau. Xóa phòng (`tenant.mjs revoke`) là máy đó không tự báo địa chỉ được nữa.
-- Token master `owm_...` chỉ là đường dự phòng in trên terminal (dùng tại máy, không đưa cho ai).
-- Bridge chỉ nghe `127.0.0.1` — bên ngoài chỉ thấy qua tunnel/tailnet; mọi request phải có token hợp lệ (deny-by-default); `/api/pair` được rate-limit chống dò mã.
-- Token owner `owt_...` của OpenWork không bao giờ gửi ra browser; proxy whitelist chỉ cho phép path quản trị (`bridge/src/proxy.js`).
+- **One-time pairing code, lives 30 minutes**: printed in the bridge's QR/terminal — used exactly once, then dead. Even a leaked QR is only dangerous for 30 minutes.
+- **Permanent device key (`owd_...`)**: after pairing, each phone gets its own key (stored on the phone; the bridge keeps only a hash). Reopening the app always goes straight in.
+- **Revoke per device**: in the app → Settings → *Paired devices*. Lost your phone? Revoke it and it loses access instantly.
+- **Rooms (multi-tenant)**: each room's secret lives on the worker KV and in that person's bridge; the worker holds NO phone keys — every key is still verified by the bridge. The web stores the permanent key only, never the password. Wrong username or wrong password returns **the exact same answer** — strangers can't probe which rooms exist, let alone see each other's machines. Deleting a room (`tenant.mjs revoke`) means that machine can no longer report its address.
+- The `owm_...` master token is only a fallback printed in the terminal (use it at the machine, share it with no one).
+- The bridge listens on `127.0.0.1` only — the outside world sees it only through the tunnel/tailnet; every request needs a valid token (deny-by-default); `/api/pair` is rate-limited against code guessing.
+- OpenWork's `owt_...` owner token never reaches the browser; the proxy whitelist only allows admin paths (`bridge/src/proxy.js`).
 
-## Xử lý sự cố nhanh
+## Quick troubleshooting
 
-| Triệu chứng | Cách xử lý |
+| Symptom | Fix |
 |---|---|
-| Ghi/lỗi `"Sign in to verify policy"` | Mở OpenWork desktop đăng nhập/verify lại (phiên cloud hết hạn) |
-| Prompt gửi xong không có reply | Chưa chọn model trong chat — model là bắt buộc |
-| Không tìm thấy openwork-server | OpenWork desktop có đang chạy không? |
-| Khác | Mở [CODE_SUMMARY.md](./CODE_SUMMARY.md) — bảng tra đầy đủ |
+| Writes fail with `"Sign in to verify policy"` | Open OpenWork desktop and sign in/verify again (cloud session expired) |
+| Prompt sent but no reply comes back | No model picked in chat — a model is mandatory |
+| openwork-server not found | Is OpenWork desktop actually running? |
+| Other | Open [CODE_SUMMARY.md](./CODE_SUMMARY.md) — the full lookup table |
 
-## Phát triển
+## Development
 
 ```bash
-cd bridge && npm test                                   # unit test
-node bridge/scripts/e2e-live.mjs <wsId> <provider> <model>   # E2E live
-cd web && npm run dev                                   # dev server (proxy /api qua bridge)
-cd web && npm run build && cd ../worker && npx wrangler deploy # build + deploy worker "địa chỉ cố định" (openpocket)
-cd web && npm run deploy                                # build + deploy worker phụ openwork-mobile-web (vite-plugin, URL dự phòng)
-cd worker && node scripts/tenant.mjs add <user> "Tên"   # cấp phòng multi-tenant (list / revoke để quản)
+cd bridge && npm test                                   # unit tests
+node bridge/scripts/e2e-live.mjs <wsId> <provider> <model>   # live E2E
+cd web && npm run dev                                   # dev server (proxies /api through the bridge)
+cd web && npm run build && cd ../worker && npx wrangler deploy # build + deploy the "fixed URL" worker (openpocket)
+cd web && npm run deploy                                # build + deploy the secondary openwork-mobile-web worker (vite-plugin, backup URL)
+cd worker && node scripts/tenant.mjs add <user> "Name"   # issue a multi-tenant room (list / revoke to manage)
 ```
 
-## Quy tắc dự án
+## Project rules
 
-> 📌 **Mỗi khi thay đổi code/cấu trúc/hành vi, PHẢI cập nhật đồng thời `README.md` và `CODE_SUMMARY.md` trong cùng commit.** README = mặt ngoài (cách dùng, tính năng); CODE_SUMMARY = mặt trong (chỗ sửa, bản đồ API).
+> 📌 **Every time code/structure/behavior changes, `README.md` AND `CODE_SUMMARY.md` MUST be updated in the same commit.** README = the outside (usage, features); CODE_SUMMARY = the inside (where to fix, API map). Documentation is written in English.

@@ -26,7 +26,7 @@ if (!namespaceId) {
   process.exit(1);
 }
 
-const DEFAULT_WORKER_URL = "https://YOUR-WORKER.workers.dev";
+const DEFAULT_WORKER_URL = process.env.OWM_WORKER_URL || "https://YOUR-WORKER.workers.dev";
 const TENANT_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 
 // Gọi wrangler TRỰC TIẾP bằng node (không qua shell): spawnSync("npx", …, shell:true)
@@ -60,6 +60,18 @@ function kvSoft(...args) {
   return result.status === 0 ? result.stdout : null;
 }
 
+// Đưa text vào clipboard (best-effort — fail im lặng, user tự copy tay)
+function copyToClipboard(text) {
+  const cmds = { win32: ["clip"], darwin: ["pbcopy"], linux: ["wl-copy"] };
+  const cmd = cmds[process.platform];
+  if (!cmd) return false;
+  try {
+    return spawnSync(cmd[0], [], { input: text, shell: false }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
 const [, , action, user, ...rest] = process.argv;
 
 if (action === "add") {
@@ -71,6 +83,9 @@ if (action === "add") {
   }
   const displayName = rest[0]?.trim() || name;
   const workerUrl = (rest[1] || DEFAULT_WORKER_URL).replace(/\/+$/, "");
+  if (workerUrl.includes("YOUR-WORKER")) {
+    console.error("(!) Đang dùng URL placeholder — truyền URL worker thật làm đối số (hoặc đặt env OWM_WORKER_URL) để thẻ mời đúng địa chỉ thật.");
+  }
   const secret = `owes_${randomBytes(24).toString("hex")}`;
   const existing = kvSoft("get", `tenant:${name}`);
   if (existing !== null && String(existing).trim().startsWith("{")) {
@@ -83,25 +98,35 @@ if (action === "add") {
     `tenant:${name}`,
     JSON.stringify({ secret, name: displayName, createdAt: Date.now() })
   );
+  // Link mời: điện thoại bấm là tự đăng nhập (web bắt #i=), máy tính dán vào
+  // `openpocket edge join <link>` cũng đọc được user/pass ngay trong link.
+  const inviteLink = `${workerUrl}/#i=${name}:${secret}`;
+  const invite = [
+    "=================================================================",
+    ` THẺ MỜI — phòng "${name}" (${displayName})`,
+    "=================================================================",
+    ` Tên đăng nhập : ${name}`,
+    ` Mật khẩu      : ${secret}`,
+    "-----------------------------------------------------------------",
+    " 🔗 LINK MỜI — gửi cho bạn ấy (chat riêng vì có chứa mật khẩu):",
+    `   ${inviteLink}`,
+    "-----------------------------------------------------------------",
+    " Bạn ấy chỉ cần:",
+    " BƯỚC 1 — MÁY TÍNH (cài bridge xong, bridge đang chạy):",
+    "   openpocket edge join <dán nguyên link ở trên>",
+    " BƯỚC 2 — ĐIỆN THOẠI: bấm link → tự vào app luôn, không gõ gì.",
+    "",
+    " (Cách gõ tay dự phòng: mở web → tab Đăng nhập → nhập user/pass trên)",
+    " Lưu ý: làm BƯỚC 1 TRƯỚC — máy phải đang chạy bridge mới đăng nhập được.",
+    "=================================================================",
+  ].join("\n");
   console.log("");
-  console.log("=================================================================");
-  console.log(` THẺ MỜI — phòng "${name}" (${displayName})`);
-  console.log("=================================================================");
-  console.log(` Tên đăng nhập : ${name}`);
-  console.log(` Mật khẩu      : ${secret}`);
-  console.log("-----------------------------------------------------------------");
-  console.log(` Gửi kèm 2 bước này cho bạn ấy (web: ${workerUrl}):`);
-  console.log("");
-  console.log(" BƯỚC 1 — trên MÁY TÍNH của bạn ấy (terminal bridge):");
-  console.log(`   openpocket edge join ${workerUrl}`);
-  console.log("   → nhập tên đăng nhập + mật khẩu ở trên (1 lần, lưu luôn)");
-  console.log("");
-  console.log(" BƯỚC 2 — trên ĐIỆN THOẠI của bạn ấy:");
-  console.log(`   mở ${workerUrl}`);
-  console.log('   → tab "Đăng nhập" → nhập CÙNG cặp trên (1 lần, lưu luôn)');
-  console.log("");
-  console.log(" Lưu ý: làm BƯỚC 1 TRƯỚC — máy phải đang chạy bridge mới đăng nhập được.");
-  console.log("=================================================================");
+  console.log(invite);
+  if (copyToClipboard(invite + "\n")) {
+    console.log("📋 Đã copy thẻ mời vào clipboard — dán (Ctrl+V) gửi bạn qua Zalo/Messenger là xong.");
+  } else {
+    console.log("ℹ️  Tự copy bằng tay: quét khối thẻ mời ở trên rồi Ctrl+C.");
+  }
   process.exit(0);
 }
 
