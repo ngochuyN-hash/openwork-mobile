@@ -88,6 +88,17 @@ export async function apiWakeOpenWork() {
   return payload;
 }
 
+/** Duyệt thư mục máy tính để chọn path khi tạo workspace.
+ * Không truyền path → trả {roots, quick, home}; truyền path → {path, parent, dirs}. */
+export async function apiFsList(path) {
+  const qs = path ? `?path=${encodeURIComponent(path)}` : "";
+  const res = await fetch(`/api/fs/ls${qs}`, { headers: authHeaders() });
+  if (res.status === 401) throw new Error("UNPAIRED");
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(payload?.message ?? `fs ${res.status}`);
+  return payload;
+}
+
 /** Gọi openwork-server qua bridge. path bắt đầu bằng "/". */
 export async function ow(path, { method = "GET", body, headers = {}, raw = false, signal } = {}) {
   const res = await fetch(`/api/ow${path}`, {

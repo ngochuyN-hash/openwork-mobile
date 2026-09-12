@@ -6,10 +6,11 @@ import { isAuthorized, isTokenAuthorized, requestToken } from "../src/auth.js";
 import { hashToken } from "../src/bootstrap.js";
 import { candidateExePaths, findOpenWorkExe } from "../src/openwork-launch.js";
 import { AUTOSTART_TASK_NAME, buildAutostartAction, bridgeEntryPath } from "../src/autostart.js";
+import { listDirs } from "../src/fslist.js";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 
 test("parseListeningPorts filters by pid and extracts ports", () => {
   const netstat = [
@@ -132,4 +133,30 @@ test("lệnh autostart schtasks bọc ngoặc kép kỹ đường dẫn có dấ
   assert.match(bridgeEntryPath(), /index\.js$/);
   const action = buildAutostartAction();
   assert.match(action, /^".+" ".+index\.js"$/);
+});
+
+test("listDirs: chỉ trả thư mục, bỏ ẩn/rác hệ thống, sắp A→Z", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ow-fslist-"));
+  try {
+    for (const dir of ["Zeta", "alpha", "Project 2", "Project 10", ".git", "$RECYCLE.BIN", "System Volume Information"]) {
+      mkdirSync(join(root, dir));
+    }
+    writeFileSync(join(root, "readme.md"), "x"); // file thì phải bị lọc
+    const result = await listDirs(root);
+    // .git, $RECYCLE.BIN, System Volume Information bị lọc; readme.md là file cũng bị lọc
+    assert.deepEqual(result.dirs.map((d) => d.name), [
+      "alpha",
+      "Project 2",
+      "Project 10",
+      "Zeta",
+    ]);
+    assert.ok(result.dirs.every((d) => ![".git", "$RECYCLE.BIN", "readme.md"].includes(d.name)));
+    assert.ok(result.parent);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("listDirs: lỗi rõ ràng khi thư mục không tồn tại", async () => {
+  await assert.rejects(() => listDirs(join(tmpdir(), "ow-khong-ton-tai-xyz-123")), /không tồn tại/);
 });

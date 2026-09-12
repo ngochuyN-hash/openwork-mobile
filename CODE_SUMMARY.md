@@ -46,6 +46,7 @@
 | `src/lookup.js` | Heartbeat lên Worker (địa chỉ cố định): đăng ký URL tunnel hiện tại ngay khi đổi + giữ ấm mỗi 60s. |
 | `src/openwork-launch.js` | Tìm file OpenWork.exe (env `OPENWORK_EXE` → config `openworkExe` → `%LOCALAPPDATA%\Programs\@openworkdesktop\`) + mở app detached ẩn. Dùng cho endpoint wake + tự mở lúc khởi động. |
 | `src/autostart.js` | Dựng câu lệnh schtasks cho `openpocket autostart` (task `OpenPocketBridge`, ONLOGON, quoting đường dẫn có dấu cách). |
+| `src/fslist.js` | Duyệt thư mục cho tính năng "Duyệt…" khi tạo workspace: `listRoots()` (ổ đĩa Windows dò A–Z + quick links Nhà/Desktop/Documents/Downloads) và `listDirs(path)` (CHỈ thư mục — không lộ file, bỏ ẩn `.`/rác hệ thống, symlink soi đích, sắp A→Z vi-locale). |
 | `bin/openpocket.js` | Lệnh toàn cục: start/stop/status/logs/code + `autostart --enable [--with-openwork]/--status/--disable` (Task Scheduler, chạy ẩn, log ra bridge.log). |
 | `src/paths.js` | Vị trí `%APPDATA%\openwork` (env `OPENWORK_DIR` override cho test). |
 | `test/bridge.test.js` | Unit: netstat parse, whitelist + traversal, auth, hash. `npm test` |
@@ -72,7 +73,7 @@
 | `src/app.jsx` | Hash router (`#/`, `#/ws/:id`, `#/ws/:id/chat/:sid`, `#/ws/:id/files`, `#/settings`), topbar logo + version + **nút Trở lại ghim cố định** theo route (sessions -> #/workspaces, chat/files -> #/ws/:id; nhận event `owm:topback` từ FileViewer), StatusBanners, BottomNav nổi (`bottomnav-wrap`). |
 | `src/pages/home.jsx` | Home = session gần đây GỘP mọi workspace (pattern Happy/Omnara), poll 15s, chấm màu ws (`wsColor`), FAB tạo session trong ws mới nhất. Tạo session KHÔNG gửi title — để server tự sinh tên theo nội dung như desktop. |
 | `src/pages/pairing.jsx` | Nhập mã `owm_...` lần đầu; hero logo gradient. |
-| `src/pages/workspaces.jsx` | List card có tile + FAB thêm workspace; sheet tạo mới (POST /workspaces/local). |
+| `src/pages/workspaces.jsx` | List card có tile + FAB thêm workspace; sheet tạo mới (POST /workspaces/local) có ô path **+ nút "Duyệt…" mở `FolderPickerSheet`**: duyệt thư mục máy tính qua `/api/fs/ls` (chip nhanh Nhà/Desktop/Documents/Downloads/ổ đĩa, lên cấp trên, chạm thư mục để đi vào, "Chọn thư mục này" điền vào ô path). |
 | `src/pages/sessions.jsx` | Card session có dot busy/idle + FAB tạo session mới (KHÔNG gửi title — server tự sinh tên); nút back đã dọn lên topbar; SSE live. |
 | `src/pages/chat.jsx` | Transcript (text/tool/reasoning; markdown tối giản: code block/inline code/list — `MarkdownText`), composer nút send icon gradient + **model picker (bắt buộc)** + **nút kẹp giấy đính kèm file** (upload vào `mobile-uploads/` rồi gửi prompt kèm đường dẫn), offline queue, permission cards (Allow/Deny), SSE events. Nút back dọn lên topbar. **Nút Gửi morph thành nút Dừng** (`busy = running && !sending`, icon `StopIcon`, nền đỏ `.btn-send.stop`, chống double-tap bằng `aborting`, draft giữ nguyên, Ctrl+Enter khi busy = abort) — xóa hẳn nút "Dừng agent" cũ. **Realtime liên tục (v1.6)**: vá chữ streaming vào bong bóng đang chạy (`applyStreamingPatch` — nhận cả delta/snapshot từ `message.part.updated`/`message.updated`), lọc session nới lỏng (`sameSession`: nhận `sessionID/sessionId/properties/message/part` + prefix `ses_`), **poll dự phòng 2.5s chỉ khi `running`** + watchdog 30s chống chết kênh ngầm + `onerror`/mở lại app/có mạng lại đều hỏi lại ngay, chỉ bám đáy khi user đang đọc cuối. **File agent nhắc tới**: `findFileRefsInText()` quét text + tool input/output → `FileRefCard` (Mở/Tải về qua `/files/stat` + `/files/raw`, Xem trong Files) + `linkifyFiles()` biến đường dẫn trong text thành link tải. |
 | `src/pages/files.jsx` | Duyệt `/opencode/file` (icon tile, size qua `Intl.NumberFormat` vi-VN); xem/sửa+lưu + upload qua `/files/raw` (base64 chunk qua helper chung, báo tiến trình từng file); xem ảnh (png/jpg/gif/webp/bmp/ico/svg/avif) + **PDF inline (iframe)**; tải về qua `owDownload()` (fetch + Blob + thanh % + Hủy + nút Chia sẻ cho iOS Lưu về Files). Nút back dọn lên topbar, nút Đóng viewer phát event `owm:topback`. |
@@ -94,6 +95,7 @@
 | SSE không stream / đứt liên tục | `bridge/src/proxy.js` (isSSE + keepalive) + `index.js` (`server.requestTimeout = 0`) |
 | Phone không pair được | `bridge/src/auth.js` + token trong `%APPDATA%\openwork-bridge\config.json`; QR in lúc bridge khởi động |
 | Sai danh sách workspace | Do openwork-server; kiểm tra `%APPDATA%\openwork\server.json` |
+| Tạo workspace phải gõ tay đường dẫn / muốn sửa trình duyệt thư mục | `bridge/src/fslist.js` (liệt kê) + `bridge/src/index.js` (route `/api/fs/ls`) + `web/src/pages/workspaces.jsx` (`FolderPickerSheet`) |
 | Web trắng / không load | Build lại `web/` (`npm run build`) — bridge serve `web/dist` qua `bridge/src/static.js` |
 | Muốn đổi màu/tông giao diện | `web/src/styles.css` (`:root` tokens) + đồng bộ `.zcode/skills/pwa-workspace-ui/references/tokens.md` |
 | Nút bị che notch/home indicator | Safe-area: `--sat/--sab` trong `web/src/styles.css` (topbar, bottomnav-wrap, FAB, composer) |
@@ -125,6 +127,7 @@
 | `GET /api/devices` · `DELETE /api/devices/:id` | owm_/owd_ | Danh sách thiết bị đã ghép + thu hồi |
 | `POST /api/recheck` | owm_ | Ép discovery lại |
 | `POST /api/openwork/wake` | owm_/owd_ (rate-limit 5/phút/IP) | Mở OpenWork desktop trên máy tính (đang chạy rồi → `alreadyRunning`; mới mở → `launched`) |
+| `GET /api/fs/ls?path=` | owm_/owd_ | Duyệt thư mục máy tính. Không `path` → `{isWindows, home, roots[], quick[]}`; có `path` → `{path, parent, name, dirs[]}` (chỉ thư mục). Lỗi: 404 ENOENT/ENOTDIR, 403 EACCES — message tiếng Việt |
 | `/api/ow/<path>` | owm_ (header hoặc `?_t=` cho GET) | Proxy openwork-server. Whitelist: `/workspaces*`, `/workspace/:id/(events|session-groups|files|opencode/*|engine/reload|artifacts|inbox)`, `/approvals*`, `/files/sessions/*`, `/experimental/(ui-control|extensions)`, `/status`, `/capabilities`, `/whoami`, `/health` |
 
 ## Endpoint openwork-server hay dùng (gọi qua `/api/ow/`)

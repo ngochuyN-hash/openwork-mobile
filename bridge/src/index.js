@@ -12,6 +12,7 @@ import { startQuickTunnel } from "./tunnel.js";
 import { startLookup } from "./lookup.js";
 import { PairingService, CODE_TTL_MINUTES } from "./pairing.js";
 import { findOpenWorkExe, launchOpenWork } from "./openwork-launch.js";
+import { listDirs, listRoots } from "./fslist.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -284,6 +285,23 @@ async function handleRequest(req, res) {
         const code = error?.code === "openwork_exe_not_found" ? "openwork_exe_not_found" : "wake_failed";
         res.writeHead(code === "wake_failed" ? 500 : 404, { "content-type": "application/json" });
         res.end(JSON.stringify({ code, message: String(error?.message ?? error), candidates: error?.candidates ?? undefined }));
+      }
+      return;
+    }
+
+    // Duyệt thư mục máy tính để tạo workspace khỏi gõ tay đường dẫn.
+    // Chỉ liệt kê THƯ MỤC (không file), nằm sau khóa thiết bị như các API khác.
+    if (req.method === "GET" && pathname === "/api/fs/ls") {
+      const target = url.searchParams.get("path")?.trim();
+      try {
+        const result = target ? await listDirs(target) : { ...(await listRoots()), ok: true };
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(result));
+      } catch (error) {
+        res.writeHead(error?.code === "ENOENT" || error?.code === "ENOTDIR" ? 404 : 403, {
+          "content-type": "application/json",
+        });
+        res.end(JSON.stringify({ code: error?.code ?? "fs_error", message: String(error?.message ?? error) }));
       }
       return;
     }

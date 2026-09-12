@@ -1,7 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
-import { ow, unwrap } from "../api.js";
+import { apiFsList, ow, unwrap } from "../api.js";
 import { navigate } from "../app.jsx";
-import { WsIcon } from "../components/icons.jsx";
+import { FolderIcon, WsIcon } from "../components/icons.jsx";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
 import { wsColor } from "./home.jsx";
 
@@ -98,6 +98,7 @@ function CreateWorkspaceDialog({ onClose, onCreated }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [showPicker, setShowPicker] = useState(false);
 
   async function create() {
     setBusy(true);
@@ -118,15 +119,21 @@ function CreateWorkspaceDialog({ onClose, onCreated }) {
       <div class="card sheet" role="dialog" aria-modal="true" aria-label="Tạo workspace mới" onClick={(e) => e.stopPropagation()}>
         <h3>Tạo workspace mới</h3>
         <label class="field" for="new-ws-path">Đường dẫn thư mục trên máy tính (vd: C:\Projects\MyApp)</label>
-        <input
-          id="new-ws-path"
-          type="text"
-          value={path}
-          autocomplete="off"
-          spellcheck={false}
-          onInput={(e) => setPath(e.currentTarget.value)}
-          placeholder="C:\Projects\MyApp…"
-        />
+        <div style="display:flex;gap:8px">
+          <input
+            id="new-ws-path"
+            type="text"
+            style="flex:1;min-width:0"
+            value={path}
+            autocomplete="off"
+            spellcheck={false}
+            onInput={(e) => setPath(e.currentTarget.value)}
+            placeholder="C:\Projects\MyApp…"
+          />
+          <button class="btn" style="flex:none" onClick={() => setShowPicker(true)}>
+            Duyệt…
+          </button>
+        </div>
         <label class="field" for="new-ws-name">Tên hiển thị (tùy chọn)</label>
         <input
           id="new-ws-name"
@@ -144,6 +151,134 @@ function CreateWorkspaceDialog({ onClose, onCreated }) {
           </button>
           <button class="btn" disabled={busy || !path.trim()} onClick={create}>
             {busy ? "Đang tạo…" : "Tạo"}
+          </button>
+        </div>
+      </div>
+      {showPicker && <FolderPickerSheet onPick={(p) => { setPath(p); setShowPicker(false); }} onClose={() => setShowPicker(false)} />}
+    </div>
+  );
+}
+
+/** Sheet duyệt thư mục máy tính: chọc ổ đĩa → thư mục → bấm chọn.
+ * Mở lần đầu rơi vào thư mục Nhà cho nhanh; vẫn còn nút lên cấp trên. */
+function FolderPickerSheet({ onPick, onClose }) {
+  const [quick, setQuick] = useState(null); // {roots, quick, home} từ bridge
+  const [view, setView] = useState(null); // {kind:"dir", path, parent, dirs} hoặc {kind:"roots"}
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  async function goTo(target) {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await apiFsList(target);
+      setView({ kind: "dir", ...data });
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function goUp() {
+    if (!view || view.kind !== "dir") return;
+    if (view.parent) goTo(view.parent);
+    else if (quick) setView({ kind: "roots" }); // đang ở gốc ổ đĩa → về danh sách ổ
+  }
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const roots = await apiFsList();
+        setQuick(roots);
+        // Có thư mục Nhà thì mở luôn đó, không thì vào ổ đầu tiên
+        const start = roots.home ?? roots.roots?.[0]?.path;
+        if (start) {
+          const data = await apiFsList(start);
+          setView({ kind: "dir", ...data });
+        } else {
+          setView({ kind: "roots" });
+        }
+      } catch (e) {
+        setError(String(e.message || e));
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const canPick = view?.kind === "dir";
+
+  return (
+    <div
+      class="sheet-backdrop"
+      style="z-index:60"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClose();
+      }}
+    >
+      <div class="card sheet" role="dialog" aria-modal="true" aria-label="Chọn thư mục" onClick={(e) => e.stopPropagation()}>
+        <div class="sheet-grabber" aria-hidden="true" />
+        <h3 style="margin-bottom:10px">Chọn thư mục</h3>
+
+        {quick && (
+          <div class="fs-chips">
+            {quick.quick?.map((q) => (
+              <button key={q.path} class="btn small ghost" disabled={loading} onClick={() => goTo(q.path)}>
+                {q.label}
+              </button>
+            ))}
+            {quick.roots?.map((r) => (
+              <button key={r.path} class="btn small ghost" disabled={loading} onClick={() => goTo(r.path)}>
+                Ổ {r.name}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {view?.kind === "dir" && (
+          <div class="fs-path mono" title={view.path}>
+            {view.path}
+          </div>
+        )}
+
+        {view?.kind === "dir" && (
+          <div class="fs-list">
+            <button class="fs-row" disabled={loading} onClick={goUp}>
+              <span class="fs-up" aria-hidden="true">↩</span>
+              <span style="flex:1">{view.parent ? "Lên cấp trên" : "Danh sách ổ đĩa"}</span>
+            </button>
+            {view.dirs?.map((d) => (
+              <button key={d.path} class="fs-row" disabled={loading} onClick={() => goTo(d.path)}>
+                <FolderIcon size={18} />
+                <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{d.name}</span>
+              </button>
+            ))}
+            {!loading && view.dirs?.length === 0 && <div class="hint" style="padding:8px 2px">Không có thư mục con nào.</div>}
+          </div>
+        )}
+
+        {view?.kind === "roots" && quick && (
+          <div class="fs-list">
+            {quick.roots?.map((r) => (
+              <button key={r.path} class="fs-row" disabled={loading} onClick={() => goTo(r.path)}>
+                <FolderIcon size={18} />
+                <span style="flex:1">Ổ {r.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {loading && <Loading />}
+        {error && <Banner kind="err">{error}</Banner>}
+
+        <div class="sheet-actions">
+          <button class="btn ghost" onClick={onClose}>
+            Đóng
+          </button>
+          <button class="btn primary" disabled={loading || !canPick} onClick={() => canPick && onPick(view.path)}>
+            Chọn thư mục này
           </button>
         </div>
       </div>
