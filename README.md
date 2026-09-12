@@ -124,10 +124,11 @@ The shared worker URL is an "apartment building": anyone can open it, but each p
 Owner-side commands (run in `worker/`, requires a logged-in `wrangler`):
 
 ```bash
-node scripts/tenant.mjs add alice "Alice's PC"   # issue a room + invite card with a tap-to-join LINK (auto-copied to clipboard — paste it to your friend)
-node scripts/tenant.mjs list                     # list rooms
-node scripts/tenant.mjs revoke alice             # delete a room (that machine loses its address-reporting slot)
+openpocket tenant add alice "Alice's PC"   # issue a room + invite card with a tap-to-join LINK (auto-copied to clipboard — paste it to your friend)
+openpocket tenant list                     # list rooms
+openpocket tenant revoke alice             # delete a room (that machine loses its address-reporting slot)
 ```
+Runs from any terminal — without an explicit worker URL it takes `lookupUrl` from this machine's bridge config (or env `OWM_WORKER_URL`). Same thing via `node worker/scripts/tenant.mjs …`.
 
 The worker owner's own machine changes nothing — without joining a room it keeps the `machine:main` flow as before. A limit worth remembering: the bridge heartbeats every 15 minutes, so free KV (~1000 writes/day) fits about **~10 rooms**; each phone pairs with 1 machine (changing machines = Settings → Unpair → sign in again).
 

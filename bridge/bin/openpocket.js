@@ -273,6 +273,29 @@ if (cmd === "edge") {
   process.exit(1);
 }
 
+if (cmd === "tenant") {
+  // Cấp/quản lý phòng multi-tenant mà KHÔNG cần nhớ đường dẫn script worker:
+  //   openpocket tenant add <user> "Tên hiển thị" [địa-chỉ-worker]
+  //   openpocket tenant list
+  //   openpocket tenant revoke <user>
+  // Không truyền URL worker thì tự lấy từ config máy này (lookupUrl) — máy đã
+  // heartbeat lên worker nào thì cấp phòng cho worker đó.
+  const sub = (args[1] || "list").toLowerCase();
+  const script = join(BIN_DIR, "..", "..", "worker", "scripts", "tenant.mjs");
+  if (!existsSync(script)) {
+    console.log("Không tìm thấy worker/scripts/tenant.mjs cạnh thư mục bridge — chạy từ repo dự án.");
+    process.exit(1);
+  }
+  const config = loadConfig();
+  const rest = args.slice(2);
+  if (sub === "add" && !rest.some((a) => /^https:\/\//i.test(a))) {
+    const url = process.env.OWM_WORKER_URL || config.lookupUrl;
+    if (url) rest.push(url.replace(/\/+$/, ""));
+  }
+  const result = spawnSync(process.execPath, [script, sub, ...rest], { stdio: "inherit" });
+  process.exit(result.status ?? 1);
+}
+
 if (cmd === "code") {
   if (!existsSync(logFile())) {
     console.log("Bridge chưa chạy. Chạy: openpocket start");
@@ -332,8 +355,11 @@ Dùng:
   openpocket status   Xem bridge có chạy không
   openpocket logs     Xem log (tail 50 dòng, Ctrl+C để thoát)
   openpocket code     Xem mã ghép + link mở trên điện thoại
-  openpocket edge join <địa-chỉ-worker>   Tham gia "phòng" trên worker chung (nhập user/pass do chủ worker cấp, 1 lần)
+  openpocket edge join <link-mời|worker>  Tham gia "phòng" trên worker chung (dán link mời là được, 1 lần)
   openpocket edge status                  Xem phòng đang tham gia
+  openpocket tenant add <user> "Tên"      Cấp phòng mới cho bạn (thẻ mời + link tự copy — gửi qua chat)
+  openpocket tenant list                  Xem các phòng đang có
+  openpocket tenant revoke <user>         Xóa phòng
   openpocket autostart --enable [--with-openwork]   Tự chạy bridge khi đăng nhập Windows
   openpocket autostart --status                     Xem tự chạy đang bật hay tắt
   openpocket autostart --disable                    Tắt tự chạy`);
