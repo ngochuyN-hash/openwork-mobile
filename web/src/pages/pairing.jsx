@@ -1,5 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import { setToken, apiState, apiPair, apiPairTenant, pairingCodeFromHash } from "../api.js";
+import { setToken, apiState, apiPair, apiPairTenant, pairingCodeFromHash, inviteFromHash } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 import { OpenWorkMark } from "../components/logo.jsx";
 
@@ -87,10 +87,21 @@ export function PairingScreen({ onPaired }) {
     loginWithTenant(user, pass, label);
   }
 
-  // Tự ghép khi mở từ QR/link .../#p=MÃ(&m=PHÒNG)
+  // Tự chạy khi mở link: #p=MÃ(&m=PHÒNG) → ghép; #i=USER:SECRET (link mời) →
+  // tự đăng nhập luôn. Link mời hỏng/máy chưa join → màn Đăng nhập vẫn được
+  // điền sẵn user/pass, bấm lại một phát là xong.
   useEffect(() => {
     const fromHash = pairingCodeFromHash();
-    if (fromHash) pairWithCode(fromHash, "");
+    if (fromHash) {
+      pairWithCode(fromHash, "");
+      return;
+    }
+    const invite = inviteFromHash();
+    if (invite) {
+      setUser(invite.user);
+      setPass(invite.secret);
+      loginWithTenant(invite.user, invite.secret, "");
+    }
   }, []);
 
   return (

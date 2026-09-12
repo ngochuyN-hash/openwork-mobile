@@ -70,6 +70,15 @@ export function pairingCodeFromHash() {
   return "";
 }
 
+// Link mời multi-tenant dạng .../#i=<user>:<secret> — trả {user, secret}
+// (xóa hash ngay) để màn pairing tự đăng nhập; bấm link là vào, không gõ gì.
+export function inviteFromHash() {
+  const match = /^#i=([A-Za-z0-9][A-Za-z0-9-]{0,31}):([A-Za-z0-9_-]+)/.exec(location.hash);
+  if (!match) return null;
+  history.replaceState(null, "", location.pathname + location.search);
+  return { user: match[1].toLowerCase(), secret: match[2] };
+}
+
 /** Ghép thiết bị bằng mã 30 phút → nhận khóa vĩnh viễn owd_... */
 export async function apiPair(code, label) {
   const res = await fetch("/api/pair", {

@@ -114,17 +114,17 @@ Open the app → **Screen** tab (bottom nav) and the computer's screen appears r
 
 ## Many computers, one web app (multi-tenant)
 
-The shared worker URL is an "apartment building": anyone can open it, but each person only reaches **their own home machine**. The worker owner issues each friend a **username + password** pair — usable on both ends:
+The shared worker URL is an "apartment building": anyone can open it, but each person only reaches **their own home machine**. The worker owner issues each friend a **username + password** pair — and `add` also prints an **invite LINK** (`…/#i=user:secret`) with the card auto-copied to the clipboard: paste it to your friend and they never type anything:
 
 | End | How to sign in |
 |---|---|
-| Friend's PC | `openpocket edge join https://YOUR-WORKER.workers.dev` → enter user/pass (once, saved to config) — their bridge heartbeats into "their room" |
-| Friend's phone | Open the web app → **Sign in** tab → same user/pass (once — receives a permanent key like a normal pair; the password is never stored on the web) |
+| Friend's PC | `openpocket edge join` → paste the invite link (user/pass are read from it; once, saved to config) — their bridge heartbeats into "their room" |
+| Friend's phone | Tap the invite link → signs in by itself and lands straight in the app (typing fallback: open the web → **Sign in** tab → same user/pass; a permanent key is received like a normal pair — the password is never stored on the web) |
 
 Owner-side commands (run in `worker/`, requires a logged-in `wrangler`):
 
 ```bash
-node scripts/tenant.mjs add alice "Alice's PC"   # issue a room + print an "invite card" (auto-copied to clipboard — paste it to your friend)
+node scripts/tenant.mjs add alice "Alice's PC"   # issue a room + invite card with a tap-to-join LINK (auto-copied to clipboard — paste it to your friend)
 node scripts/tenant.mjs list                     # list rooms
 node scripts/tenant.mjs revoke alice             # delete a room (that machine loses its address-reporting slot)
 ```
