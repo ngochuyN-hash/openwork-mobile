@@ -26,7 +26,7 @@ if (!namespaceId) {
   process.exit(1);
 }
 
-const DEFAULT_WORKER_URL = process.env.OWM_WORKER_URL || "https://YOUR-WORKER.workers.dev";
+const DEFAULT_WORKER_URL = "https://YOUR-WORKER.workers.dev";
 const TENANT_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 
 // Gọi wrangler TRỰC TIẾP bằng node (không qua shell): spawnSync("npx", …, shell:true)
@@ -83,9 +83,6 @@ if (action === "add") {
   }
   const displayName = rest[0]?.trim() || name;
   const workerUrl = (rest[1] || DEFAULT_WORKER_URL).replace(/\/+$/, "");
-  if (workerUrl.includes("YOUR-WORKER")) {
-    console.error("(!) Đang dùng URL placeholder — truyền URL worker thật làm đối số (hoặc đặt env OWM_WORKER_URL) để thẻ mời đúng địa chỉ thật.");
-  }
   const secret = `owes_${randomBytes(24).toString("hex")}`;
   const existing = kvSoft("get", `tenant:${name}`);
   if (existing !== null && String(existing).trim().startsWith("{")) {

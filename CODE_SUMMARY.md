@@ -134,6 +134,7 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | Taps in the Screen tab land offset | DPI: the daemon `SetProcessDPIAware` + PING returns the daemon's dims, and the bridge trusts the daemon (`screen.js` `ensureDaemon`); the web must send coords normalized 0..1 against the image box (`screen.jsx` `normFromEvent`) |
 | Stream drops fast / image freezes | The web self-reconnects with backoff (`screen.jsx` effect + `runIdRef`); a slow viewer gets cut by the bridge at 3MB pending — both sides actively reconnect; if it loops forever check `screen.js` `wakeLoop()` errorStreak |
 | The 4-tab nav feels cramped on small screens | `styles.css` `.bottomnav` (max-width 420px, 4 buttons); `ScreenIcon` in `icons.jsx` |
+| `git push` ends with "failed to push some refs" right after a 🔒 washer message | INTENTIONAL — the pre-push hook (machine-local `.githooks/pre-push`) already published the sanitized mirror; the raw push is always cancelled so originals never leave the machine (see README "Publishing & privacy"). Gate blocked with 🛑 = a real name/URL survived the wash — fix that file |
 
 ## Bridge API routes (called by the phone)
 

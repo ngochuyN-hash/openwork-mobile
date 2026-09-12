@@ -11,3 +11,6 @@ Thumbs.db
 !.dev.vars.example
 .env*
 !.env.example
+
+# publishing washer hook is machine-local (never published to the remote)
+.githooks/

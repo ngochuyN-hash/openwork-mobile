@@ -325,12 +325,10 @@ if (cmd === "code") {
   }
   console.log("");
   // Mã vĩnh viễn: đọc thẳng từ config (file local, an toàn vì lệnh chạy tại máy)
-  let fixedAddr = null;
   try {
     const config = loadConfig();
     // Ưu tiên worker (địa chỉ cố định) nếu máy đã join phòng; kèm &m= để web tự điền
     const base = (config.lookupUrl || `http://127.0.0.1:${config.port || 8788}`).replace(/\/+$/, "");
-    fixedAddr = config.lookupUrl || null;
     const mSuffix = config.lookupTenant ? `&m=${encodeURIComponent(config.lookupTenant)}` : "";
     const masterUrl = `${base}/#t=${config.mobileToken}${mSuffix}`;
     console.log("⭐ Mã VĨNH VIỄN (có hiệu lực mãi, chỉ dùng tại máy — đừng chia sẻ):");
@@ -344,7 +342,7 @@ if (cmd === "code") {
   }
   console.log("");
   console.log("Mã ghép sống 30 phút, dùng 1 lần. Master vĩnh viễn.");
-  console.log("Địa chỉ cố định (bookmark 1 lần, dùng mãi): " + (fixedAddr || "(chưa cấu hình — openpocket edge join <worker>)"));
+  console.log("Địa chỉ cố định (bookmark 1 lần, dùng mãi): https://YOUR-WORKER.workers.dev");
   process.exit(0);
 }
 

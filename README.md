@@ -180,6 +180,10 @@ cd web && npm run deploy                                # build + deploy the sec
 cd worker && node scripts/tenant.mjs add <user> "Name"   # issue a multi-tenant room (list / revoke to manage)
 ```
 
+## Publishing & privacy
+
+`git push` from this repo is intercepted by a repo-local pre-push hook (`.githooks/pre-push`, enabled via `core.hooksPath` — a machine-local, gitignored file that is NOT part of the published repo): it builds a sanitized mirror of the history — commit identity rewritten to `ngochuyN-hash` with a noreply email, the real worker URL replaced with `https://YOUR-WORKER.workers.dev`, personal names washed — force-pushes that mirror to origin, then cancels the raw push. The local repo keeps the originals; raw refs never leave the machine. If a name/URL still survives somewhere, the hook's safety gate blocks the push instead. Don't bypass with `--no-verify`.
+
 ## Project rules
 
 > 📌 **Every time code/structure/behavior changes, `README.md` AND `CODE_SUMMARY.md` MUST be updated in the same commit.** README = the outside (usage, features); CODE_SUMMARY = the inside (where to fix, API map). Documentation is written in English.
