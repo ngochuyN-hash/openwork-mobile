@@ -32,7 +32,7 @@ opencode engine  →  sessions · models · files
 ## Tính năng (v1)
 
 - 📁 **Workspaces**: danh sách live, tạo workspace mới (FAB gradient)
-- 💬 **Sessions**: danh sách (busy/idle realtime), tạo mới, xem transcript đầy đủ (text/tool/reasoning, markdown + code block), gửi prompt (chọn model), abort
+- 💬 **Sessions**: danh sách (busy/idle realtime), tạo mới, xem transcript đầy đủ (text/tool/reasoning, markdown + code block), gửi prompt (chọn model); **chữ agent chảy dần từng đoạn ngay khi đang trả lời**, mất mạng/khóa màn hình/đổi Wifi mở lại tự bắt kịp không cần thoát ra vào lại; khi agent đang chạy, **nút Gửi biến thành nút Dừng đỏ (■)** — bấm lại để ngắt như ChatGPT/Gemini, draft đang gõ được giữ nguyên
 - 🔐 **Permissions**: duyệt Allow/Deny ngay trên điện thoại khi agent xin phép
 - 🗂 **Files**: duyệt cây thư mục, xem/sửa + lưu file text, xem ảnh **+ PDF**, upload từ điện thoại, tải file về (hiện % + Hủy + nút Chia sẻ để iOS Lưu về Files)
 - 📎 **File trong chat (2 chiều)**: file agent nhắc tới hiện **thẻ Mở/Tải về + Xem trong Files** ngay trong tin nhắn; nút **kẹp giấy** trong khung chat để gửi file/ảnh từ điện thoại cho agent đọc
