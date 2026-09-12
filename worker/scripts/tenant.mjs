@@ -9,7 +9,7 @@
 //   - web    : tab "Đăng nhập"
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,18 +29,35 @@ if (!namespaceId) {
 const DEFAULT_WORKER_URL = "https://YOUR-WORKER.workers.dev";
 const TENANT_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 
+// Gọi wrangler TRỰC TIẾP bằng node (không qua shell): spawnSync("npx", …, shell:true)
+// trên Windows để cmd nuốt mất dấu nháy của giá trị JSON — KV từng lưu
+// `{secret:…}` không còn là JSON hợp lệ và worker đọc không ra secret.
+let wranglerJs = join(WORKER_DIR, "..", "web", "node_modules", "wrangler", "bin", "wrangler.js");
+if (!existsSync(wranglerJs)) {
+  wranglerJs = "npx"; // dự phòng: cài wrangler toàn cục / PATH
+}
+function wranglerCmd(...args) {
+  const base = wranglerJs === "npx" ? ["wrangler"] : [wranglerJs];
+  return spawnSync(
+    wranglerJs === "npx" ? "npx" : process.execPath,
+    [...base, "kv", "key", ...args, "--namespace-id", namespaceId, "--remote"],
+    { cwd: WORKER_DIR, encoding: "utf8", shell: false }
+  );
+}
 function kv(...args) {
-  const result = spawnSync("npx", ["wrangler", "kv", "key", ...args, "--namespace-id", namespaceId, "--remote"], {
-    cwd: WORKER_DIR,
-    encoding: "utf8",
-    shell: process.platform === "win32",
-  });
+  const result = wranglerCmd(...args);
   if (result.status !== 0) {
     console.error(result.stdout || "");
     console.error(result.stderr || "wrangler thất bại");
     process.exit(1);
   }
   return result.stdout;
+}
+
+// get dùng cho kiểm tra tồn tại: 404 (chưa có phòng) là chuyện bình thường
+function kvSoft(...args) {
+  const result = wranglerCmd(...args);
+  return result.status === 0 ? result.stdout : null;
 }
 
 const [, , action, user, ...rest] = process.argv;
@@ -55,12 +72,8 @@ if (action === "add") {
   const displayName = rest[0]?.trim() || name;
   const workerUrl = (rest[1] || DEFAULT_WORKER_URL).replace(/\/+$/, "");
   const secret = `owes_${randomBytes(24).toString("hex")}`;
-  const existed = spawnSync(
-    "npx",
-    ["wrangler", "kv", "key", "get", `tenant:${name}`, "--namespace-id", namespaceId, "--remote"],
-    { cwd: WORKER_DIR, encoding: "utf8", shell: process.platform === "win32" }
-  );
-  if (existed.status === 0) {
+  const existing = kvSoft("get", `tenant:${name}`);
+  if (existing !== null && String(existing).trim().startsWith("{")) {
     console.log(`⚠️  Phòng "${name}" đã tồn tại — chạy lại sẽ GHI ĐÈ mật khẩu cũ (thiết bị cũ vẫn hoạt động).`);
     console.log("   Muốn xóa hẳn: node scripts/tenant.mjs revoke " + name);
     process.exit(1);

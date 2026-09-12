@@ -153,7 +153,7 @@ CODE_SUMMARY.md  # bản đồ code + bảng "triệu chứng → chỗ sửa"
 - **Mã ghép một lần, sống 30 phút**: nằm trong QR/terminal của bridge — dùng đúng 1 lần rồi chết. QR bị lộ cũng chỉ nguy hiểm trong 30 phút.
 - **Khóa thiết bị vĩnh viễn (`owd_...`)**: sau khi ghép, mỗi điện thoại nhận khóa riêng (lưu trong điện thoại, bridge chỉ lưu hash). Mở lại app bao giờ cũng vào thẳng.
 - **Thu hồi từng thiết bị**: trong app → Cài đặt → *Thiết bị đã ghép*. Mất điện thoại? Bấm thu hồi là nó mất quyền truy cập ngay lập tức.
-- **Phòng (multi-tenant)**: secret của mỗi phòng nằm trên worker KV và bridge của người đó; worker KHÔNG giữ khóa điện thoại của ai — mọi khóa vẫn do bridge tự kiểm tra. Web chỉ lưu khóa vĩnh viễn, không lưu mật khẩu. Xóa phòng (`tenant.mjs revoke`) là máy đó không tự báo địa chỉ được nữa.
+- **Phòng (multi-tenant)**: secret của mỗi phòng nằm trên worker KV và bridge của người đó; worker KHÔNG giữ khóa điện thoại của ai — mọi khóa vẫn do bridge tự kiểm tra. Web chỉ lưu khóa vĩnh viễn, không lưu mật khẩu. Đăng nhập sai tên hoặc sai mật khẩu trả **cùng một câu trả lời** — người lạ không dò ra được phòng nào tồn tại, càng không thấy máy của nhau. Xóa phòng (`tenant.mjs revoke`) là máy đó không tự báo địa chỉ được nữa.
 - Token master `owm_...` chỉ là đường dự phòng in trên terminal (dùng tại máy, không đưa cho ai).
 - Bridge chỉ nghe `127.0.0.1` — bên ngoài chỉ thấy qua tunnel/tailnet; mọi request phải có token hợp lệ (deny-by-default); `/api/pair` được rate-limit chống dò mã.
 - Token owner `owt_...` của OpenWork không bao giờ gửi ra browser; proxy whitelist chỉ cho phép path quản trị (`bridge/src/proxy.js`).

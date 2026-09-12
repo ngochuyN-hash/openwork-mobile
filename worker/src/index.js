@@ -124,11 +124,17 @@ export default {
 
     // 2. /api/* → relay tới tunnel hiện tại của phòng
     if (url.pathname.startsWith("/api/")) {
-      // Đăng nhập web: phòng nằm trong body.user (web chưa có phòng để gửi header)
+      // Đăng nhập web: phòng nằm trong body.user (web chưa có phòng để gửi header).
+      // Worker tự so secret TRƯỚC khi relay: phòng lạ và sai mật khẩu cùng một câu
+      // 401 — người lạ không dò ra được phòng nào tồn tại (bridge vẫn so lại lần 2).
       if (url.pathname === "/api/pair/tenant" && request.method === "POST") {
         const body = await readJson(request);
         const tenant = String(body?.user ?? "").trim().toLowerCase();
         if (!TENANT_RE.test(tenant)) {
+          return json({ code: "invalid_credentials", message: "Sai tên đăng nhập hoặc mật khẩu." }, 401);
+        }
+        const record = await env.OWM_STATE.get(`tenant:${tenant}`, "json").catch(() => null);
+        if (!record?.secret || !(await sameSecret(String(body?.secret ?? ""), record.secret))) {
           return json({ code: "invalid_credentials", message: "Sai tên đăng nhập hoặc mật khẩu." }, 401);
         }
         return relay(env, `machine:${tenant}`, request, url, body);
