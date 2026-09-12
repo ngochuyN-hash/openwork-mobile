@@ -2,6 +2,9 @@
 
 > Tài liệu tra nhanh "gặp lỗi thì sửa ở đâu". Cập nhật sau mỗi milestone.
 > Cập nhật lần cuối: 2026-09-12 (v1 hoàn thiện, đã E2E qua bridge thật)
+>
+> 📌 **Quy tắc (yêu cầu của chủ dự án):** mỗi khi thay đổi code/cấu trúc/hành vi,
+> PHẢI cập nhật đồng thời file này VÀ `README.md` trong cùng commit.
 
 ## Kiến trúc tổng thể (1 dòng)
 

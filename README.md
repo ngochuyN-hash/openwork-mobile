@@ -1,85 +1,110 @@
 # OpenWork Mobile
 
-Web app (PWA) quản lý **sessions, workspaces và files** của [OpenWork](https://github.com/different-ai/openwork) desktop từ điện thoại — không cần APK, iOS & Android đều dùng được, tự kết nối mỗi khi mở trang.
+Quản lý **sessions, workspaces và files** của [OpenWork](https://github.com/different-ai/openwork) desktop **từ điện thoại, ở bất kỳ đâu** — web app (PWA) tự kết nối mỗi khi mở trang, không cần APK, chạy được cả iOS lẫn Android, chi phí **0 đồng**.
+
+## Giới thiệu dự án
+
+OpenWork là app desktop (Electron, opensource) để chạy các AI coding agent — nhưng chỉ dùng được tại máy tính. Dự án này thêm một "cửa sau" chính chủ cho điện thoại:
+
+| Yêu cầu ban đầu | Cách đáp ứng |
+|---|---|
+| Quản lý session & workspace đang có | Bridge nối thẳng vào API có sẵn của openwork-server chạy trong OpenWork desktop |
+| Quản lý file khi ra ngoài | File manager: duyệt / xem / **sửa + lưu** / upload / tải về |
+| Chạy nhẹ | Bridge = 1 tiến trình Node, ~0 dependency; web app ~38KB (gzip 14KB); không DB riêng |
+| Tương tác từ xa, giữ kết nối | SSE streaming + auto-reconnect + offline queue (tin nhắn soạn offline tự gửi khi có mạng) |
+| Không APK, iOS dùng được | Web/PWA — mở link là tự kết nối, "Thêm vào màn hình chính" như app thật |
+| Miễn phí hoàn toàn | Tailscale gói Personal (3 user / 100 thiết bị) + model free của OpenCode Zen |
+
+**Nguyên tắc thiết kế:** không viết lại những gì OpenWork đã có. Bridge chỉ là lớp mỏng: tìm server → giữ token → chuyển tiếp có chọn lọc + serve web. OpenWork update thì mình chỉ sửa 2 adapter (đã ghi rõ trong [CODE_SUMMARY.md](./CODE_SUMMARY.md)).
 
 ```
-Điện thoại (PWA, bất kỳ đâu có mạng)
-   │  HTTPS qua tailscale serve
+Điện thoại (PWA, 4G/5G bất kỳ đâu)
+   │  HTTPS (cert thật) qua tailscale serve
    ▼
-openwork-bridge  (máy tính, 127.0.0.1:8788)
-   │  Bearer token owner (tự mint)
+openwork-bridge  (máy tính, Node.js, 127.0.0.1:8788)
+   │  Bearer token owner (bridge tự mint, không lộ ra điện thoại)
    ▼
-openwork-server  (có sẵn trong OpenWork desktop, port động)
+openwork-server  (API có sẵn trong OpenWork desktop, port động)
    ▼
-opencode engine  →  sessions / models / files
+opencode engine  →  sessions · models · files
 ```
-
-Gặp lỗi → mở **[CODE_SUMMARY.md](./CODE_SUMMARY.md)** — bảng "triệu chứng → chỗ sửa".
 
 ## Tính năng (v1)
 
-- Danh sách workspaces & sessions (cập nhật live qua SSE)
-- Xem transcript, gửi prompt (chọn model), abort session
-- Trả lời permission request từ xa (Allow/Deny)
-- File manager: duyệt cây thư mục, xem/sửa + lưu file text, xem ảnh, upload từ điện thoại, tải file về
-- Tạo session mới / tạo workspace mới
-- Offline queue (tin nhắn soạn khi mất mạng tự gửi khi nối lại), PWA cài màn hình chính
+- 📁 **Workspaces**: danh sách live, tạo workspace mới
+- 💬 **Sessions**: danh sách (busy/idle realtime), tạo mới, xem transcript đầy đủ (text/tool/reasoning), gửi prompt (chọn model), abort
+- 🔐 **Permissions**: duyệt Allow/Deny ngay trên điện thoại khi agent xin phép
+- 🗂 **Files**: duyệt cây thư mục, xem/sửa + lưu file text, xem ảnh, upload từ điện thoại, tải file về
+- 📴 **Offline queue** + auto-reconnect; PWA cài màn hình chính iOS/Android
+
+## Yêu cầu
+
+- Máy tính Windows đang chạy **OpenWork desktop** + **Node.js ≥ 20**
+- Điện thoại cài **Tailscale** (miễn phí) — dùng từ xa; trong nhà cũng đi qua đường này cho đơn giản
 
 ## Cài đặt (máy tính — làm 1 lần)
 
 ```bash
 # 1. Bridge
-cd bridge
-npm install
+cd bridge && npm install
 
 # 2. Web app
-cd ../web
-npm install
-npm run build
+cd ../web && npm install && npm run build
 
 # 3. Chạy bridge
-cd ../bridge
-npm start
+cd ../bridge && npm start
 ```
 
-Lần đầu chạy, bridge tự:
-1. Mint token owner vào `%APPDATA%\openwork\tokens.json`
-2. In ra màn hình **QR + URL pairing + mã `owm_...`**
+Lần đầu chạy, bridge tự mint token vào OpenWork và in ra **QR + mã pairing `owm_...`**.
 
-> ⚠️ **Restart OpenWork desktop đúng 1 lần** sau lần chạy bridge đầu tiên để token có hiệu lực (OpenWork chỉ nạp tokens.json lúc khởi động). Bridge tự nhận biết — không cần làm gì thêm.
+> ⚠️ Sau lần chạy bridge **đầu tiên**, restart OpenWork desktop **đúng 1 lần** để token có hiệu lực (OpenWork chỉ nạp `tokens.json` lúc khởi động). Bridge tự nhận biết — làm 1 lần thôi.
 
-## Dùng trên điện thoại (Tailscale — miễn phí)
+## Dùng trên điện thoại
 
-1. Cài [Tailscale](https://tailscale.com) trên **máy tính** và **điện thoại**, đăng nhập cùng tài khoản (gói Personal miễn phí).
-2. Trên máy tính chạy 1 lệnh:
-   ```
-   tailscale serve --bg 8788
-   ```
-   → được URL dạng `https://<tên-máy>.<tailnet>.ts.net` (HTTPS cert thật).
-3. Mở `npm start` của bridge — terminal in URL pairing kèm QR cho URL tailscale:
-   ```
-   set OPENWORK_PUBLIC_URL=https://<tên-máy>.<tailnet>.ts.net   (Windows: setx)
-   ```
-4. Quét QR trên điện thoại → tự pair → "Thêm vào màn hình chính" để dùng như app.
+1. Cài Tailscale trên **máy tính + điện thoại**, đăng nhập cùng tài khoản (miễn phí).
+2. Trên máy tính: `tailscale serve --bg 8788` → có URL `https://<tên-máy>.<tailnet>.ts.net`.
+3. Muốn QR in đúng URL tailscale: `setx OPENWORK_PUBLIC_URL https://<tên-máy>.<tailnet>.ts.net` rồi chạy lại bridge.
+4. Mở link/QR trên điện thoại → tự pair → *Thêm vào màn hình chính*.
 
-Trong nhà/cùng WiFi cũng đi qua tailscale (đơn giản hóa — đã bỏ chế độ LAN riêng theo yêu cầu).
+**Chạy bridge tự động khi bật máy (tùy chọn):** Task Scheduler → Action: `node "C:\Antigravity\Openwork Mobile App\bridge\src\index.js"`, Trigger: At log on.
 
-## Chạy bridge tự động khi bật máy (tùy chọn)
+## Cấu trúc dự án
 
-Task Scheduler → Create Task:
-- Trigger: At log on
-- Action: `node "C:\Antigravity\Openwork Mobile App\bridge\src\index.js"`
+```
+bridge/          # Node.js — discovery, token bootstrap, proxy, static, QR
+  src/           # index.js (entry) · proxy.js · discovery.js · bootstrap.js · auth.js …
+  test/          # unit test (npm test)
+  scripts/       # e2e-live.mjs, dbg-prompt.mjs (test live với OpenWork thật)
+web/             # PWA Preact + Vite → build ra web/dist do bridge serve
+  src/pages/     # pairing · workspaces · sessions · chat · files · settings
+README.md        # file này
+CODE_SUMMARY.md  # bản đồ code + bảng "triệu chứng → chỗ sửa"
+```
 
 ## Bảo mật
 
-- Bridge chỉ nghe `127.0.0.1` — bên ngoài chỉ thấy qua tailnet của bạn (không lộ internet).
-- Điện thoại pair bằng token `owm_...` riêng (revoke: xóa field `mobileToken` trong `%APPDATA%\openwork-bridge\config.json` rồi chạy lại bridge).
-- Token owner `owt_...` của OpenWork không bao giờ gửi ra browser — bridge tự inject.
-- Proxy whitelist: chỉ các path quản trị được chuyển tiếp (xem `bridge/src/proxy.js`).
+- Bridge chỉ nghe `127.0.0.1` — bên ngoài chỉ thấy qua tailnet của bạn, không lộ internet công cộng.
+- Điện thoại pair bằng token `owm_...` riêng (revoke: xóa `mobileToken` trong `%APPDATA%\openwork-bridge\config.json`, chạy lại bridge).
+- Token owner `owt_...` của OpenWork không bao giờ gửi ra browser.
+- Proxy whitelist: chỉ path quản trị được chuyển tiếp (`bridge/src/proxy.js`).
 
-## Lưu ý quan trọng
+## Xử lý sự cố nhanh
 
-- **OpenWork phải đang chạy** trên máy tính (engine tắt = không chat được; file manager vẫn hoạt động).
-- Nếu mọi thao tác ghi trả lỗi `"Sign in to verify your organization's policy"` → mở OpenWork desktop và đăng nhập/verify lại (hết hạn phiên cloud). Bridge và web sẽ tự hoạt động lại.
-- Gửi prompt **phải kèm model** (`{providerID, modelID}`) — web app tự xử lý qua model picker; nếu dùng API trực tiếp thì nhớ truyền.
-- OpenWork update có thể đổi format dữ liệu → sửa 2 adapter (`discovery.js`, `bootstrap.js`), xem CODE_SUMMARY.md.
+| Triệu chứng | Cách xử lý |
+|---|---|
+| Ghi/lỗi `"Sign in to verify policy"` | Mở OpenWork desktop đăng nhập/verify lại (phiên cloud hết hạn) |
+| Prompt gửi xong không có reply | Chưa chọn model trong chat — model là bắt buộc |
+| Không tìm thấy openwork-server | OpenWork desktop có đang chạy không? |
+| Khác | Mở [CODE_SUMMARY.md](./CODE_SUMMARY.md) — bảng tra đầy đủ |
+
+## Phát triển
+
+```bash
+cd bridge && npm test                                   # unit test
+node bridge/scripts/e2e-live.mjs <wsId> <provider> <model>   # E2E live
+cd web && npm run dev                                   # dev server (proxy /api qua bridge)
+```
+
+## Quy tắc dự án
+
+> 📌 **Mỗi khi thay đổi code/cấu trúc/hành vi, PHẢI cập nhật đồng thời `README.md` và `CODE_SUMMARY.md` trong cùng commit.** README = mặt ngoài (cách dùng, tính năng); CODE_SUMMARY = mặt trong (chỗ sửa, bản đồ API).
