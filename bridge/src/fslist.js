@@ -31,7 +31,9 @@ export async function listRoots() {
   const roots = isWindows ? await windowsDrives() : [{ name: "/", path: "/" }];
 
   const home = homedir();
-  const quick = [{ label: "Nhà", path: home }];
+  // Label = tên folder thật trên máy (vd "user"), không dịch ra tiếng Việt —
+  // user muốn thấy y chang những gì có trong File Explorer.
+  const quick = [{ label: home.split(/[\\/]+/).filter(Boolean).pop() ?? home, path: home }];
   for (const sub of ["Desktop", "Documents", "Downloads"]) {
     const dir = join(home, sub);
     try {
