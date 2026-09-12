@@ -67,7 +67,12 @@ export async function proxyToOpenWork(req, res, upstreamPath, { baseUrl, ownerTo
   if (query) upstream.search = `?${query}`;
 
   const controller = new AbortController();
-  req.on("close", () => controller.abort());
+  // CHỈ abort khi client thật sự ngắt kết nối. Lưu ý: trong Node 18+,
+  // req 'close' phát cả khi request kết thúc bình thường - dùng res + guard.
+  req.on("aborted", () => controller.abort());
+  res.on("close", () => {
+    if (!res.writableEnded) controller.abort();
+  });
 
   const headers = {
     authorization: `Bearer ${ownerToken}`,
@@ -79,8 +84,22 @@ export async function proxyToOpenWork(req, res, upstreamPath, { baseUrl, ownerTo
   const hasBody = !["GET", "HEAD"].includes(req.method.toUpperCase());
   let body = undefined;
   if (hasBody) {
-    body = Readable.toWeb(req);
-    headers["content-type"] ||= "application/json";
+    // Buffer request body thay vì stream: openwork-server treo với chunked
+    // encoding, và body mobile gửi (prompt/upload) đều nhỏ. Cap 64MB chống lạm dụng.
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > 64 * 1024 * 1024) {
+        res.writeHead(413, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: "payload_too_large", message: "Body over 64MB" }));
+        return;
+      }
+      chunks.push(chunk);
+    }
+    body = Buffer.concat(chunks);
+    if (body.length > 0) headers["content-type"] ||= "application/json";
+    else body = undefined;
   }
 
   let response;
@@ -89,7 +108,6 @@ export async function proxyToOpenWork(req, res, upstreamPath, { baseUrl, ownerTo
       method: req.method.toUpperCase(),
       headers,
       body,
-      duplex: body ? "half" : undefined,
       signal: controller.signal,
       redirect: "manual",
     });
@@ -121,11 +139,16 @@ export async function proxyToOpenWork(req, res, upstreamPath, { baseUrl, ownerTo
       if (!res.writableEnded) res.write(":keepalive\n\n");
     }, 20_000);
     res.on("close", () => clearInterval(keepalive));
-    Readable.fromWeb(response.body).pipe(res);
+    Readable.fromWeb(response.body)
+      .on("error", () => res.end())
+      .pipe(res);
     return;
   }
 
   res.writeHead(response.status, outHeaders);
-  if (response.body) Readable.fromWeb(response.body).pipe(res);
-  else res.end();
+  if (response.body) {
+    Readable.fromWeb(response.body)
+      .on("error", () => res.end())
+      .pipe(res);
+  } else res.end();
 }

@@ -18,3 +18,19 @@ export function deny(res) {
   res.writeHead(401, { "content-type": "application/json" });
   res.end(JSON.stringify({ code: "unauthorized", message: "Invalid bridge token" }));
 }
+
+function sameToken(presented, expected) {
+  const a = Buffer.from(String(presented));
+  const b = Buffer.from(String(expected));
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * Auth cho request không đặt được header (EventSource, <img>, link tải file):
+ * chấp nhận ?_t=<mobile token> nhưng CHỈ cho GET.
+ */
+export function isQueryAuthorized(req, url, mobileToken) {
+  if (req.method.toUpperCase() !== "GET") return false;
+  const presented = url.searchParams.get("_t");
+  return Boolean(presented && mobileToken && sameToken(presented, mobileToken));
+}

@@ -4,7 +4,7 @@ import qrcode from "qrcode-terminal";
 import { loadConfig, saveConfig, bridgeDataDir } from "./config.js";
 import { ensureOwnerToken } from "./bootstrap.js";
 import { discoverServer, checkTokenActive, readEngineRegistry, probeServerUrl } from "./discovery.js";
-import { isAuthorized, deny } from "./auth.js";
+import { isAuthorized, isQueryAuthorized, deny } from "./auth.js";
 import { proxyToOpenWork } from "./proxy.js";
 import { createStaticHandler } from "./static.js";
 import { openworkFilePath } from "./paths.js";
@@ -109,12 +109,24 @@ if (state.restartRequired && !state.tokenActive) {
 // ---------------------------------------------------------------------------
 const handleStatic = createStaticHandler(join(__dirname, "..", "..", "web", "dist"));
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer((req, res) => {
+  handleRequest(req, res).catch((error) => {
+    console.error("[bridge] request error:", error);
+    if (!res.headersSent) {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ code: "internal_error", message: String(error?.message ?? error) }));
+    } else {
+      res.end();
+    }
+  });
+});
+
+async function handleRequest(req, res) {
   const url = new URL(req.url ?? "/", `http://127.0.0.1:${config.port}`);
   const pathname = decodeURIComponent(url.pathname);
 
   if (pathname.startsWith("/api/")) {
-    if (!isAuthorized(req, config.mobileToken)) return deny(res);
+    if (!isAuthorized(req, config.mobileToken) && !isQueryAuthorized(req, url, config.mobileToken)) return deny(res);
 
     if (req.method === "GET" && pathname === "/api/state") {
       const engine = readEngineRegistry();
@@ -170,7 +182,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" || req.method === "HEAD") return handleStatic(req, res, pathname);
   res.writeHead(405);
   res.end();
-});
+}
 
 // Long-lived SSE proxied connections need generous timeouts.
 server.requestTimeout = 0;
@@ -199,4 +211,13 @@ server.listen(config.port, "127.0.0.1", () => {
 process.on("SIGINT", () => {
   console.log("\n[bridge] bye");
   process.exit(0);
+});
+
+// Lưới an toàn: bridge là tiến trình dài hạn, một lỗi bất ngờ không được làm
+// chết nó. Log và tiếp tục.
+process.on("uncaughtException", (error) => {
+  console.error("[bridge] uncaughtException:", error);
+});
+process.on("unhandledRejection", (error) => {
+  console.error("[bridge] unhandledRejection:", error);
 });
