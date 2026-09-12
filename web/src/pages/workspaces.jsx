@@ -1,6 +1,8 @@
 import { useEffect, useState } from "preact/hooks";
-import { ow, unwrap, timeAgo } from "../api.js";
+import { ow, unwrap } from "../api.js";
 import { navigate } from "../app.jsx";
+import { PlusIcon } from "../components/icons.jsx";
+import { Banner, Empty, Loading } from "../components/ui.jsx";
 
 export function WorkspacesPage() {
   const [workspaces, setWorkspaces] = useState(null);
@@ -23,18 +25,25 @@ export function WorkspacesPage() {
 
   return (
     <>
-      <div class="row-between" style="margin-bottom:12px">
-        <span style="color:var(--text-dim);font-size:13px">{workspaces ? `${workspaces.length} workspace` : "…"}</span>
-        <button class="btn small ghost" onClick={() => setShowCreate(true)}>
-          + Thêm workspace
+      <div class="page-head">
+        <span class="hint">{workspaces ? `${workspaces.length} workspace` : "…"}</span>
+        <button class="btn small ghost btn-icon" onClick={() => setShowCreate(true)}>
+          <PlusIcon size={14} /> Thêm workspace
         </button>
       </div>
 
-      {error && <div class="banner err"><span>{error}</span></div>}
+      {error && <Banner kind="err" actionLabel="Thử lại" onAction={load}>{error}</Banner>}
 
-      {workspaces === null && !error && <div class="empty"><span class="spinner" /> Đang tải…</div>}
+      {workspaces === null && !error && <Loading />}
 
-      {workspaces?.length === 0 && <div class="empty">Chưa có workspace nào. Tạo mới bên OpenWork desktop hoặc bấm “Thêm workspace”.</div>}
+      {workspaces?.length === 0 && (
+        <Empty
+          title="Chưa có workspace nào"
+          hint="Tạo mới bên OpenWork desktop, hoặc bấm nút dưới để thêm thư mục."
+          actionLabel="Thêm workspace"
+          onAction={() => setShowCreate(true)}
+        />
+      )}
 
       {workspaces?.map((ws) => (
         <div key={ws.id} class="card tap" onClick={() => navigate(`#/ws/${encodeURIComponent(ws.id)}`)}>
@@ -43,7 +52,7 @@ export function WorkspacesPage() {
             <span class="badge">{ws.workspaceType === "remote" ? "remote" : "local"}</span>
           </div>
           <div class="meta mono">{ws.path ?? ""}</div>
-          <div style="display:flex;gap:8px;margin-top:10px">
+          <div class="page-actions" style="margin-top:10px">
             <button
               class="btn small"
               onClick={(e) => {
@@ -92,19 +101,31 @@ function CreateWorkspaceDialog({ onClose, onCreated }) {
   }
 
   return (
-    <div style="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:50;display:flex;align-items:flex-end" onClick={onClose}>
-      <div
-        class="card"
-        style="margin:0;width:100%;border-radius:16px 16px 0 0;padding-bottom:calc(18px + var(--safe-bottom))"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <div class="sheet-backdrop" onClick={onClose}>
+      <div class="card sheet" role="dialog" aria-modal="true" aria-label="Tạo workspace mới" onClick={(e) => e.stopPropagation()}>
         <h3>Tạo workspace mới</h3>
-        <label class="field">Đường dẫn thư mục trên máy tính (vd: C:\Projects\MyApp)</label>
-        <input type="text" value={path} onInput={(e) => setPath(e.currentTarget.value)} placeholder="C:\Projects\MyApp" />
-        <label class="field">Tên hiển thị (tùy chọn)</label>
-        <input type="text" value={name} onInput={(e) => setName(e.currentTarget.value)} placeholder="MyApp" />
-        {error && <p style="color:var(--danger);font-size:13px">{error}</p>}
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+        <label class="field" for="new-ws-path">Đường dẫn thư mục trên máy tính (vd: C:\Projects\MyApp)</label>
+        <input
+          id="new-ws-path"
+          type="text"
+          value={path}
+          autocomplete="off"
+          spellcheck={false}
+          onInput={(e) => setPath(e.currentTarget.value)}
+          placeholder="C:\Projects\MyApp…"
+        />
+        <label class="field" for="new-ws-name">Tên hiển thị (tùy chọn)</label>
+        <input
+          id="new-ws-name"
+          type="text"
+          value={name}
+          autocomplete="off"
+          spellcheck={false}
+          onInput={(e) => setName(e.currentTarget.value)}
+          placeholder="MyApp…"
+        />
+        {error && <Banner kind="err">{error}</Banner>}
+        <div class="sheet-actions">
           <button class="btn ghost" onClick={onClose}>
             Đóng
           </button>

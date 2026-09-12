@@ -10,16 +10,16 @@ OpenWork là app desktop (Electron, opensource) để chạy các AI coding agen
 |---|---|
 | Quản lý session & workspace đang có | Bridge nối thẳng vào API có sẵn của openwork-server chạy trong OpenWork desktop |
 | Quản lý file khi ra ngoài | File manager: duyệt / xem / **sửa + lưu** / upload / tải về |
-| Chạy nhẹ | Bridge = 1 tiến trình Node, ~0 dependency; web app ~38KB (gzip 14KB); không DB riêng |
+| Chạy nhẹ | Bridge = 1 tiến trình Node, ~0 dependency; web app ~42KB (gzip 15KB); không DB riêng |
 | Tương tác từ xa, giữ kết nối | SSE streaming + auto-reconnect + offline queue (tin nhắn soạn offline tự gửi khi có mạng) |
 | Không APK, iOS dùng được | Web/PWA — mở link là tự kết nối, "Thêm vào màn hình chính" như app thật |
-| Miễn phí hoàn toàn | Tailscale gói Personal (3 user / 100 thiết bị) + model free của OpenCode Zen |
+| Miễn phí hoàn toàn | Cloudflare Quick Tunnel (không cần tài khoản) + model free của OpenCode Zen |
 
 **Nguyên tắc thiết kế:** không viết lại những gì OpenWork đã có. Bridge chỉ là lớp mỏng: tìm server → giữ token → chuyển tiếp có chọn lọc + serve web. OpenWork update thì mình chỉ sửa 2 adapter (đã ghi rõ trong [CODE_SUMMARY.md](./CODE_SUMMARY.md)).
 
 ```
-Điện thoại (PWA, 4G/5G bất kỳ đâu)
-   │  HTTPS (cert thật) qua tailscale serve
+Điện thoại (PWA, 4G/5G bất kỳ đâu — KHÔNG cần cài app nào)
+   │  HTTPS qua Cloudflare Quick Tunnel (bridge tự chạy, 0đ, không cần tài khoản)
    ▼
 openwork-bridge  (máy tính, Node.js, 127.0.0.1:8788)
    │  Bearer token owner (bridge tự mint, không lộ ra điện thoại)
@@ -40,7 +40,7 @@ opencode engine  →  sessions · models · files
 ## Yêu cầu
 
 - Máy tính Windows đang chạy **OpenWork desktop** + **Node.js ≥ 20**
-- Điện thoại cài **Tailscale** (miễn phí) — dùng từ xa; trong nhà cũng đi qua đường này cho đơn giản
+- Điện thoại: **không cần cài gì** (mở link qua tunnel công cộng; muốn URL cố định thì cài Tailscale tùy chọn)
 
 ## Cài đặt (máy tính — làm 1 lần)
 
@@ -59,12 +59,22 @@ Lần đầu chạy, bridge tự mint token vào OpenWork và in ra **QR + mã p
 
 > ⚠️ Sau lần chạy bridge **đầu tiên**, restart OpenWork desktop **đúng 1 lần** để token có hiệu lực (OpenWork chỉ nạp `tokens.json` lúc khởi động). Bridge tự nhận biết — làm 1 lần thôi.
 
-## Dùng trên điện thoại
+## Dùng trên điện thoại (không cần cài gì)
 
-1. Cài Tailscale trên **máy tính + điện thoại**, đăng nhập cùng tài khoản (miễn phí).
-2. Trên máy tính: `tailscale serve --bg 8788` → có URL `https://<tên-máy>.<tailnet>.ts.net`.
-3. Muốn QR in đúng URL tailscale: `setx OPENWORK_PUBLIC_URL https://<tên-máy>.<tailnet>.ts.net` rồi chạy lại bridge.
-4. Mở link/QR trên điện thoại → tự pair → *Thêm vào màn hình chính*.
+Bridge khởi động xong sẽ **tự mở Cloudflare Quick Tunnel** (tự tải cloudflared lần đầu, ~50MB) và in ra terminal:
+- **URL public** dạng `https://xxx.trycloudflare.com` kèm **QR** và token pairing
+- Mở link đó trên điện thoại (4G ở đâu cũng được) → tự pair → *Thêm vào màn hình chính* để dùng như app
+
+Điểm cần biết về Quick Tunnel:
+- **URL đổi mỗi lần bridge/cloudflared chạy lại** (mất điện, restart máy...) — bridge **tự in QR mới** trong terminal, quét lại 10 giây là xong.
+- Không SLA (dùng cá nhân: giữ bridge chạy là ổn). Bridge cũng tự revive cloudflared nếu nó chết.
+- Tắt tunnel: chạy bridge với `OPENWORK_BRIDGE_TUNNEL=0`.
+
+**Muốn URL cố định vĩnh viễn + không cần quét lại QR** — 2 lựa chọn nâng cấp:
+| Cách | Chi phí | Ghi chú |
+|---|---|---|
+| Cloudflare **Named Tunnel** + domain | ~200k/năm (tiền domain) | URL cố định; thêm được Cloudflare Access (OTP email) — bảo mật đẹp nhất khi lộ công khai |
+| **Tailscale** (`tailscale serve --bg 8788`) | 0đ | URL cố định `https://<pc>.<tailnet>.ts.net`, riêng tư nhất — nhưng điện thoại phải cài app Tailscale |
 
 **Chạy bridge tự động khi bật máy (tùy chọn):** Task Scheduler → Action: `node "C:\Antigravity\Openwork Mobile App\bridge\src\index.js"`, Trigger: At log on.
 

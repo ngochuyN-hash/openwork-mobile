@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { ow, unwrap, sseUrl, getToken } from "../api.js";
 import { navigate } from "../app.jsx";
+import { BackButton, Banner, Empty, Loading } from "../components/ui.jsx";
 
 const SSE_EVENTS = [
   "session.updated",
@@ -210,18 +211,16 @@ export function ChatPage({ route }) {
 
   return (
     <>
-      <div class="row-between" style="margin-bottom:10px">
-        <button class="btn small ghost" onClick={() => navigate(`#/ws/${encodeURIComponent(wsId)}`)}>
-          ‹ Sessions
-        </button>
+      <div class="page-head">
+        <BackButton label="Sessions" onBack={() => navigate(`#/ws/${encodeURIComponent(wsId)}`)} />
         {running && (
           <button class="btn small danger" onClick={abort}>
-            ■ Abort
+            Dừng agent
           </button>
         )}
       </div>
 
-      {error && <div class="banner err"><span>{error}</span></div>}
+      {error && <div class="banner err" role="alert" aria-live="polite"><span>{error}</span></div>}
 
       {permissions.map((p) => (
         <div class="permission-card" key={p.id ?? p.requestID}>
@@ -240,9 +239,11 @@ export function ChatPage({ route }) {
         </div>
       ))}
 
-      <div class="chat-list">
-        {messages === null && <div class="empty"><span class="spinner" /> Đang tải…</div>}
-        {messages?.length === 0 && <div class="empty">Session trống. Gửi prompt đầu tiên nhé.</div>}
+      <div class="chat-list" aria-live="polite">
+        {messages === null && <Loading />}
+        {messages?.length === 0 && (
+          <Empty title="Session trống" hint="Gửi prompt đầu tiên cho agent nhé." />
+        )}
         {messages?.map((m) => (
           <MessageBubble key={m.id} message={m} />
         ))}
@@ -255,10 +256,11 @@ export function ChatPage({ route }) {
       </div>
 
       <div class="composer">
-        <div style="flex:1">
+        <div style="flex:1;min-width:0">
           {models.length > 0 && (
             <select
-              style="margin-bottom:6px;font-size:12px;padding:6px 8px"
+              class="model-picker"
+              aria-label="Chọn model cho agent"
               value={model}
               onChange={(e) => {
                 setModel(e.currentTarget.value);
@@ -300,19 +302,19 @@ function MessageBubble({ message }) {
   return (
     <div class={`msg ${role}`}>
       {parts.map((part, i) => {
-        if (part.type === "text") return <span key={i}>{part.text}</span>;
+        if (part.type === "text") return <MarkdownText key={i} text={part.text} plain={role === "user"} />;
         if (part.type === "tool") {
           const status = part.state?.status ?? "";
           return (
             <span class="tool-chip" key={i}>
-              ⚙ {part.tool ?? "tool"} {status ? `· ${status}` : ""}
+              {part.tool ?? "tool"}{status ? ` · ${status}` : ""}
             </span>
           );
         }
         if (part.type === "reasoning" && part.text) {
           return (
             <span class="tool-chip" key={i}>
-              💭 {part.text.slice(0, 140)}
+              {part.text.slice(0, 140)}
               {part.text.length > 140 ? "…" : ""}
             </span>
           );
@@ -321,4 +323,39 @@ function MessageBubble({ message }) {
       })}
     </div>
   );
+}
+
+/** Markdown tối giản cho bubble assistant (không thêm dep): code block,
+ *  inline code, list gạch đầu dòng, xuống dòng. Tin user giữ text thuần. */
+function MarkdownText({ text, plain }) {
+  if (plain || !text) return <span class="msg-text">{text}</span>;
+  const blocks = String(text).split(/```/);
+  return (
+    <span class="msg-md">
+      {blocks.map((block, i) => {
+        if (i % 2 === 1) return <pre key={i}><code>{block.replace(/^\w+\n/, "")}</code></pre>;
+        return (
+          <span key={i}>
+            {block.split("\n").map((line, j) => {
+              const trimmed = line.trim();
+              if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+                return <span key={j}>• {renderInline(trimmed.slice(2))}<br /></span>;
+              }
+              if (/^\d+[.)] /.test(trimmed)) {
+                return <span key={j}>{renderInline(line)}<br /></span>;
+              }
+              return line ? <span key={j}>{renderInline(line)}<br /></span> : <br key={j} />;
+            })}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+/** Inline code `...` trong một dòng (không thêm dep). */
+function renderInline(line) {
+  const chunks = String(line).split("`");
+  if (chunks.length === 1) return line;
+  return chunks.map((chunk, i) => (i % 2 === 1 ? <code key={i}>{chunk}</code> : <span key={i}>{chunk}</span>));
 }

@@ -8,6 +8,7 @@ import { isAuthorized, isQueryAuthorized, deny } from "./auth.js";
 import { proxyToOpenWork } from "./proxy.js";
 import { createStaticHandler } from "./static.js";
 import { openworkFilePath } from "./paths.js";
+import { startQuickTunnel } from "./tunnel.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -33,6 +34,7 @@ const state = {
   tokenActive: false,
   restartRequired: boot.restartRequired,
   lastCheckAt: 0,
+  tunnelUrl: "", // URL trycloudflare.com hiện tại (đổi mỗi lần cloudflared chạy lại)
 };
 
 async function refreshDiscovery({ force = false } = {}) {
@@ -142,7 +144,7 @@ async function handleRequest(req, res) {
           tokenActive: state.tokenActive,
           restartRequired: state.restartRequired,
           engine: engine ? { pid: engine.ownerPid, enginePort: engine.port } : null,
-          publicUrl: config.publicUrl || null,
+          publicUrl: state.tunnelUrl || config.publicUrl || null,
         })
       );
       return;
@@ -188,22 +190,37 @@ async function handleRequest(req, res) {
 server.requestTimeout = 0;
 server.headersTimeout = 60_000;
 
-server.listen(config.port, "127.0.0.1", () => {
-  const local = `http://127.0.0.1:${config.port}`;
-  const base = config.publicUrl || local;
+// In QR pairing cho một URL gốc (local hoặc tunnel)
+function printPairing(base, note) {
   const pairingUrl = `${base}/#t=${config.mobileToken}`;
-
   console.log("");
-  console.log(`OpenWork Mobile bridge v${BRIDGE_VERSION}`);
-  console.log(`listening on ${local} (localhost only - use 'tailscale serve' for remote)`);
-  console.log(`openwork-server: ${state.server ? state.server.baseUrl : "not found yet (waiting for OpenWork...)"}`);
-  console.log(`token status: ${state.tokenActive ? "ACTIVE" : state.restartRequired ? "needs OpenWork restart (one time)" : "pending"}`);
-  console.log("");
-  console.log("Open this on your phone (after 'tailscale serve --bg " + config.port + "'):");
+  if (note) console.log(note);
   console.log(`  ${pairingUrl}`);
   console.log("");
   qrcode.generate(pairingUrl, { small: true });
   console.log("");
+}
+
+server.listen(config.port, "127.0.0.1", () => {
+  const local = `http://127.0.0.1:${config.port}`;
+  console.log("");
+  console.log(`OpenWork Mobile bridge v${BRIDGE_VERSION}`);
+  console.log(`listening on ${local} (localhost only - remote đi qua tunnel bên dưới)`);
+  console.log(`openwork-server: ${state.server ? state.server.baseUrl : "not found yet (waiting for OpenWork...)"}`);
+  console.log(`token status: ${state.tokenActive ? "ACTIVE" : state.restartRequired ? "needs OpenWork restart (one time)" : "pending"}`);
+  printPairing(config.publicUrl || local, "Mở link này (hoặc quét QR) trên điện thoại:");
+
+  // Auto Cloudflare Quick Tunnel: public URL miễn phí, không cần tài khoản.
+  // URL đổi mỗi lần cloudflared chạy lại -> tự in QR mới. Tắt bằng OPENWORK_BRIDGE_TUNNEL=0
+  if (process.env.OPENWORK_BRIDGE_TUNNEL !== "0") {
+    startQuickTunnel(config.port, {
+      onUrl: (url) => {
+        state.tunnelUrl = url;
+        printPairing(url, `[tunnel] URL public MỚI (dùng được từ 4G, không cần app nào trên điện thoại):`);
+      },
+    }).catch((error) => console.error(`[tunnel] lỗi: ${error.message}`));
+  }
+
   console.log(`Pairing token (manual entry): ${config.mobileToken}`);
   console.log(`Bridge data dir: ${bridgeDataDir()}`);
 });

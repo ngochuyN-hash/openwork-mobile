@@ -1,5 +1,7 @@
 import { useEffect, useState, useCallback } from "preact/hooks";
 import { getToken, apiState } from "./api.js";
+import { WsIcon, GearIcon } from "./components/icons.jsx";
+import { Banner } from "./components/ui.jsx";
 import { PairingScreen } from "./pages/pairing.jsx";
 import { WorkspacesPage } from "./pages/workspaces.jsx";
 import { SessionsPage } from "./pages/sessions.jsx";
@@ -110,24 +112,20 @@ function StatusBanners({ state, onRecheck }) {
   if (!state) return null;
   if (state.restartRequired && !state.tokenActive) {
     return (
-      <div class="banner warn">
-        <span>
-          Cần <b>restart OpenWork đúng 1 lần</b> để kích hoạt token cho bridge. Xong rồi bấm kiểm tra lại.
-        </span>
-        <button class="btn small ghost" onClick={onRecheck}>
-          Kiểm tra lại
-        </button>
-      </div>
+      <Banner
+        kind="warn"
+        actionLabel="Kiểm tra lại"
+        onAction={onRecheck}
+      >
+        Cần <b>restart OpenWork đúng 1 lần</b> để kích hoạt token cho bridge. Xong rồi bấm kiểm tra lại.
+      </Banner>
     );
   }
   if (!state.server) {
     return (
-      <div class="banner err">
-        <span>Không tìm thấy openwork-server — OpenWork desktop có đang chạy không?</span>
-        <button class="btn small ghost" onClick={onRecheck}>
-          Thử lại
-        </button>
-      </div>
+      <Banner kind="err" actionLabel="Thử lại" onAction={onRecheck}>
+        Không tìm thấy openwork-server — OpenWork desktop có đang chạy không?
+      </Banner>
     );
   }
   return null;
@@ -135,25 +133,15 @@ function StatusBanners({ state, onRecheck }) {
 
 function BottomNav({ current }) {
   const tab = (name, label, path, icon) => (
-    <button class={current === name ? "active" : ""} onClick={() => navigate(path)}>
-      {icon}
+    <button class={current === name ? "active" : ""} onClick={() => navigate(path)} aria-current={current === name ? "page" : undefined}>
+      <span class="nav-pill">{icon}</span>
       <span>{label}</span>
     </button>
   );
   return (
     <nav class="bottomnav">
-      {tab("workspaces", "Workspaces", "#/", (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="3" y="7" width="18" height="13" rx="2" />
-          <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-        </svg>
-      ))}
-      {tab("settings", "Cài đặt", "#/settings", (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-        </svg>
-      ))}
+      {tab("workspaces", "Workspace", "#/", <WsIcon />)}
+      {tab("settings", "Cài đặt", "#/settings", <GearIcon />)}
     </nav>
   );
 }

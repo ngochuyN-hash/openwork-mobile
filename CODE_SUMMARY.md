@@ -1,18 +1,21 @@
 # CODE_SUMMARY — OpenWork Mobile
 
 > Tài liệu tra nhanh "gặp lỗi thì sửa ở đâu". Cập nhật sau mỗi milestone.
-> Cập nhật lần cuối: 2026-09-12 (v1 hoàn thiện, đã E2E qua bridge thật)
+> Cập nhật lần cuối: 2026-09-12 (v1.1: auto Cloudflare Quick Tunnel, đã test public URL qua internet)
 >
 > 📌 **Quy tắc (yêu cầu của chủ dự án):** mỗi khi thay đổi code/cấu trúc/hành vi,
 > PHẢI cập nhật đồng thời file này VÀ `README.md` trong cùng commit.
 
 ## Kiến trúc tổng thể (1 dòng)
 
-Điện thoại mở PWA → (HTTPS qua `tailscale serve`) → **openwork-bridge** (Node, 127.0.0.1:8788) → **openwork-server** (API có sẵn trong OpenWork desktop, port động) → opencode engine sidecar.
+Điện thoại mở PWA qua **Cloudflare Quick Tunnel** (public, 0đ, không cần app) → **openwork-bridge** (Node, 127.0.0.1:8788) → **openwork-server** (API có sẵn trong OpenWork desktop, port động) → opencode engine sidecar.
 
 ```
-[Phone: PWA]  ←REST+SSE→  [bridge :8788]  ←proxy whitelist, inject Bearer owt_ owner→  [openwork-server :62222*]  →  [opencode engine :49363*]
-                                                                                              (*port ĐỔI mỗi lần chạy OpenWork)
+[Phone: PWA qua trycloudflare.com]  ←HTTPS qua CF edge←  cloudflared (bridge tự spawn)
+        │  REST + SSE (Bearer owm_)
+        ▼
+[bridge :8788]  ←proxy whitelist, inject Bearer owt_ owner→  [openwork-server :62222*]  →  [opencode engine]
+                                                                    (*port ĐỔI mỗi lần chạy OpenWork)
 ```
 
 ## Vì sao kiến trúc này
@@ -35,6 +38,7 @@
 | `src/proxy.js` | Reverse proxy `/api/ow/*` → openwork-server. Whitelist sau khi **normalize dot-segments**, method allowlist, inject Bearer owner, **body buffer (cap 64MB)**, stream response + SSE keepalive 20s. |
 | `src/auth.js` | Phone → bridge: `owm_` token (header) + `?_t=` (chỉ GET, cho EventSource/img). timingSafeEqual. |
 | `src/static.js` | Serve `web/dist` (SPA fallback index.html). |
+| `src/tunnel.js` | Auto Cloudflare Quick Tunnel (học từ 9Remote): tự tải cloudflared về data dir, spawn `tunnel --url :8788`, dò URL trycloudflare.com từ log, tự chạy lại khi chết, gọi `onUrl` (index.js in QR mới). Tắt bằng `OPENWORK_BRIDGE_TUNNEL=0`. |
 | `src/paths.js` | Vị trí `%APPDATA%\openwork` (env `OPENWORK_DIR` override cho test). |
 | `test/bridge.test.js` | Unit: netstat parse, whitelist + traversal, auth, hash. `npm test` |
 | `scripts/e2e-live.mjs` | E2E: tạo session → prompt_async → poll reply → delete. `node scripts/e2e-live.mjs <wsId> <providerId> <modelId>` |
@@ -68,6 +72,8 @@
 | Phone không pair được | `bridge/src/auth.js` + token trong `%APPDATA%\openwork-bridge\config.json`; QR in lúc bridge khởi động |
 | Sai danh sách workspace | Do openwork-server; kiểm tra `%APPDATA%\openwork\server.json` |
 | Web trắng / không load | Build lại `web/` (`npm run build`) — bridge serve `web/dist` qua `bridge/src/static.js` |
+| Tunnel không lên / URL public không mở được | `bridge/src/tunnel.js` (download cloudflared, parse URL từ log). Lưu ý: URL ĐỔI mỗi lần cloudflared chạy lại — terminal bridge in QR mới |
+| Điện thoại mất kết nối sau khi restart máy | URL tunnel đã đổi — quét lại QR trong terminal bridge (hoặc nâng cấp named tunnel/Tailscale cho URL cố định, xem README) |
 | OpenWork update đổi format dữ liệu | Adapter cô lập: `discovery.js` (engine-instances.json), `bootstrap.js` (tokens.json) |
 
 ## Route API của bridge (phone gọi)
@@ -112,6 +118,7 @@
 - **POST body qua proxy phải buffer** — stream (chunked) làm openwork-server treo không hồi đáp.
 - opencode engine trong OpenWork spawn bằng `OPENCODE_SERVER_USERNAME/PASSWORD` random mỗi lần — credential thật chỉ nằm trong memory openwork-server, **registry authProbe là giá trị stale** → đừng cố gọi thẳng engine.
 - Đã E2E full 2026-09-12: tạo session → prompt (model `opencode/nemotron-3-ultra-free`) → reply "OK" sau ~35s → delete; ghi/đọc file `bridge-test.txt` OK.
+- **Quick Tunnel (v1.1):** học từ [9Remote](https://github.com/decolua/9remote) — họ cũng dùng quick tunnel, nhưng thêm: tự động hóa cloudflared + QR lại khi URL đổi + (họ có) edge lookup Workers map machineId→URL. Mình đã làm 2 cái đầu; cái thứ 3 (Workers) để sau nếu cần auto-rediscovery hoàn toàn. Đã test public URL qua CF edge: /api/state + web + workspaces đều 200.
 
 ## Chạy
 

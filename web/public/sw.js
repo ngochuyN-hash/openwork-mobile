@@ -1,9 +1,16 @@
 // Service worker: app-shell precache so the PWA opens instantly / offline.
-const CACHE = "owm-shell-v1";
-const SHELL = ["/", "/icon.svg", "/manifest.webmanifest"];
+// Chỉ cache tài nguyên tĩnh cùng origin; không bao giờ cache /api/* (REST+SSE).
+const CACHE = "owm-shell-v2";
+// index.html dùng navigate-fallback (không precache cứng vì Vite hash asset mỗi build).
+const SHELL = ["/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil(
+    caches
+      .open(CACHE)
+      .then((cache) => cache.addAll(SHELL).catch(() => {}))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener("activate", (event) => {
@@ -17,6 +24,11 @@ self.addEventListener("fetch", (event) => {
   // Never cache API/SSE traffic - always go to network.
   if (url.pathname.startsWith("/api/")) return;
   if (event.request.method !== "GET") return;
+  // SPA: điều hướng trong app luôn trả index.html (offline vẫn mở được shell).
+  if (event.request.mode === "navigate") {
+    event.respondWith(fetch(event.request).catch(() => caches.match("/").then((r) => r || fetch("/"))));
+    return;
+  }
 
   event.respondWith(
     caches.match(event.request).then((cached) => {

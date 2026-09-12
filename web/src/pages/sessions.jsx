@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { ow, unwrap, timeAgo, sseUrl } from "../api.js";
 import { navigate } from "../app.jsx";
+import { PlusIcon } from "../components/icons.jsx";
+import { BackButton, Banner, Empty, SkeletonList } from "../components/ui.jsx";
 
 export function SessionsPage({ route }) {
   const { wsId } = route;
@@ -69,29 +71,26 @@ export function SessionsPage({ route }) {
     }
   }
 
-  const sessionCount = sessions?.length ?? 0;
-
   return (
     <>
-      <div class="row-between" style="margin-bottom:12px">
-        <button class="btn small ghost" onClick={() => navigate("#/")}>
-          ‹ Workspaces
-        </button>
-        <button class="btn small" onClick={newSession}>
-          + Session mới
+      <div class="page-head">
+        <BackButton label="Workspace" onBack={() => navigate("#/")} />
+        <button class="btn small btn-icon" onClick={newSession}>
+          <PlusIcon size={14} /> Session mới
         </button>
       </div>
 
-      {error && <div class="banner err"><span>{error}</span></div>}
+      {error && <Banner kind="err" actionLabel="Thử lại" onAction={load}>{error}</Banner>}
 
-      {sessions === null && !error && <div class="empty"><span class="spinner" /> Đang tải…</div>}
+      {sessions === null && !error && <SkeletonList rows={3} />}
 
       {sessions?.length === 0 && (
-        <div class="empty">
-          Workspace này chưa có session nào.
-          <br />
-          Bấm “+ Session mới” để bắt đầu.
-        </div>
+        <Empty
+          title="Workspace này chưa có session nào"
+          hint="Bấm nút dưới để bắt đầu trò chuyện với agent."
+          actionLabel="Tạo session mới"
+          onAction={newSession}
+        />
       )}
 
       {sessions?.map((s) => {
@@ -103,8 +102,8 @@ export function SessionsPage({ route }) {
             onClick={() => navigate(`#/ws/${encodeURIComponent(wsId)}/chat/${encodeURIComponent(s.id)}`)}
           >
             <div class="row-between">
-              <h3 style="flex:1;margin-right:8px">{s.title || "Không tiêu đề"}</h3>
-              <span class={`badge ${status === "busy" ? "busy" : status ? "ok" : ""}`}>{status ?? ""}</span>
+              <h3>{s.title || "Không tiêu đề"}</h3>
+              {status && <span class={`badge ${status === "busy" ? "busy" : "ok"}`}>{status}</span>}
             </div>
             <div class="meta">
               {timeAgo(s.time?.updated)} · <span class="mono">{s.id}</span>
