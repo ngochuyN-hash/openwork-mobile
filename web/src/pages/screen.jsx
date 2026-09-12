@@ -1,10 +1,12 @@
 // Trang "Màn hình": xem + điều khiển máy tính từ điện thoại (v1.7, học cơ chế
 // 9remote — chụp liên tục đẩy frame, điều khiển bằng tap/kéo). Frame JPEG chảy
 // qua stream binary của bridge; lệnh điều khiển là POST riêng, tọa độ 0..1.
-// v1.8: nút toàn màn hình + chụp ảnh lưu điện thoại + dán clipboard điện thoại.
 // v1.9: bố cục nút học Y CHANG 9remote — 1 thanh icon nổi trên khung hình, bật
-// từng panel Bàn phím / Chuột / Clipboard (key label tiếng Anh chuẩn keycap),
-// phông OpenWork (tokens v4, không glassmorphism).
+// từng panel Bàn phím / Chuột / Clipboard, keycap tiếng Anh.
+// v2.0: cắt 3 nút vô nghĩa theo phản hồi user — Tạm dừng (rời app đã tự ngắt
+// stream), chọn chất lượng (chốt cứng 1 thông số tốt cho màn phone), nút
+// "Chỉ xem" to cồng kềnh (thay bằng icon khoá trên toolbar: khoá = chỉ xem,
+// chống bấm nhầm lên PC thật; mở khoá = điều khiển).
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { apiScreenInfo, owScreenInput, owScreenStream } from "../api.js";
 import { Banner } from "../components/ui.jsx";
@@ -13,15 +15,15 @@ import {
   ClipboardIcon,
   ExpandIcon,
   KeyboardIcon,
+  LockIcon,
   MouseIcon,
   MousePointerIcon,
+  UnlockIcon,
 } from "../components/icons.jsx";
 
-const QUALITY_PRESETS = {
-  fast: { label: "Nhanh", w: 720, q: 45 },
-  balanced: { label: "Cân bằng", w: 880, q: 55 },
-  sharp: { label: "Nét", w: 1100, q: 68 },
-};
+// Thông số stream duy nhất: 880px vừa nét trên màn phone, JPEG 55 đủ đọc chữ —
+// từng có 3 preset chọn tay nhưng không ai đổi (phản hồi user 13/09/2026).
+const STREAM_PARAMS = { w: 880, q: 55 };
 // Sticky modifiers — bật sáng rồi bấm phím = tổ hợp, xong tự nhả (như 9remote).
 const MODS = [
   { id: "ctrl", label: "Ctrl" },
@@ -54,10 +56,9 @@ const NAV_KEYS = [
 
 export function ScreenPage() {
   const [info, setInfo] = useState(null); // {available, screen}
-  const [preset, setPreset] = useState("balanced");
-  const [paused, setPaused] = useState(false);
-  const [control, setControl] = useState(false); // mặc định CHỈ XEM — khỏi bấm nhầm
-  const [status, setStatus] = useState("connecting"); // connecting|live|idle|paused|error|unavailable
+  const [paused, setPaused] = useState(false); // CHỈ nội bộ: ẩn app thì ngắt stream, đỡ pin/3G
+  const [armed, setArmed] = useState(false); // mở khoá điều khiển (mặc định khoá = chỉ xem)
+  const [status, setStatus] = useState("connecting"); // connecting|live|paused|error|unavailable
   const [errorMsg, setErrorMsg] = useState("");
   const [fps, setFps] = useState(0);
   const [url, setUrl] = useState("");
@@ -72,7 +73,7 @@ export function ScreenPage() {
   const urlRef = useRef("");
   const frameBlobRef = useRef(null); // frame JPEG gần nhất — cho nút Chụp ảnh
   const dragRef = useRef(null); // {lastSent: ms} khi đang kéo
-  const runIdRef = useRef(0); // hủy vòng nối lại khi preset/pause/unmount đổi
+  const runIdRef = useRef(0); // hủy vòng nối lại khi pause/unmount đổi
   const textInputRef = useRef(null);
 
   // ---- kiểm tra máy có hỗ trợ không
@@ -86,11 +87,11 @@ export function ScreenPage() {
     };
   }, []);
 
-  // ---- vòng stream: nối lại khi đứt, dừng khi pause/unmount/đổi chất lượng
+  // ---- vòng stream: nối lại khi đứt, dừng khi app ẩn/unmount
   useEffect(() => {
     if (!info?.available || paused) return;
     const myRun = ++runIdRef.current;
-    const { w, q } = QUALITY_PRESETS[preset];
+    const { w, q } = STREAM_PARAMS;
     const abort = new AbortController();
     setStatus("connecting");
     let frameCount = 0;
@@ -148,7 +149,7 @@ export function ScreenPage() {
       clearInterval(fpsTimer);
       setStatus("paused");
     };
-  }, [info?.available, preset, paused]);
+  }, [info?.available, paused]);
 
   // Ẩn app thì ngắt stream cho đỡ pin/3G, quay lại thì nối tiếp; thoát faux-full khi ẩn.
   useEffect(() => {
@@ -186,7 +187,7 @@ export function ScreenPage() {
   };
 
   const onPointerDown = (e) => {
-    if (!control) return;
+    if (!armed) return;
     const p = normFromEvent(e);
     if (!p) return;
     lastPoint.current = p;
@@ -195,7 +196,7 @@ export function ScreenPage() {
     sendInput({ type: "down", ...p });
   };
   const onPointerMove = (e) => {
-    if (!control || !dragRef.current) return;
+    if (!armed || !dragRef.current) return;
     const p = normFromEvent(e);
     if (!p) return;
     lastPoint.current = p;
@@ -205,7 +206,7 @@ export function ScreenPage() {
     sendInput({ type: "move", ...p });
   };
   const onPointerUp = (e) => {
-    if (!control || !dragRef.current) return;
+    if (!armed || !dragRef.current) return;
     const p = normFromEvent(e) ?? lastPoint.current;
     dragRef.current = null;
     sendInput({ type: "up", ...p });
@@ -251,7 +252,7 @@ export function ScreenPage() {
 
   // Nút Clipboard kiểu 9remote: mở panel gõ chữ + nạp clipboard điện thoại vào ô.
   const openClipboard = async () => {
-    setControl(true); // ý định gõ chữ = muốn điều khiển
+    setArmed(true); // ý định gõ chữ = muốn điều khiển
     setPanel("text");
     try {
       const clip = await navigator.clipboard.readText();
@@ -262,9 +263,9 @@ export function ScreenPage() {
     setTimeout(() => textInputRef.current?.focus(), 50);
   };
 
-  // Bật panel điều khiển nào đó = ý định điều khiển luôn (như vào tab Input của 9remote).
+  // Bật panel điều khiển nào đó = ý định điều khiển → tự mở khoá.
   const togglePanel = (name) => {
-    setControl(true);
+    setArmed(true);
     setPanel((p) => (p === name ? null : name));
   };
 
@@ -297,7 +298,7 @@ export function ScreenPage() {
         {url ? (
           <img
             ref={imgRef}
-            class={`screen-img ${control ? "control" : ""}`}
+            class={`screen-img ${armed ? "control" : ""}`}
             src={url}
             alt="Màn hình máy tính"
             draggable={false}
@@ -310,10 +311,11 @@ export function ScreenPage() {
         ) : (
           <div class="screen-placeholder" style={`aspect-ratio:${screenRatio}`}>
             {status === "connecting" && !unavailable ? <span class="spinner" /> : null}
-            <p>{unavailable ? "Không khả dụng" : paused ? "Đã tạm dừng" : "Đang nối stream màn hình…"}</p>
+            <p>{unavailable ? "Không khả dụng" : "Đang nối stream màn hình…"}</p>
           </div>
         )}
-        {/* Thanh icon nổi phía dưới khung hình — bố cục học y chang 9remote */}
+        {/* Thanh icon nổi phía dưới khung hình — bố cục học y chang 9remote.
+            Khoá mở = điều khiển hình (chống bấm nhầm lên PC thật khi khoá). */}
         <div class="stage-toolbar">
           <button
             class={`stage-btn ${panel === "keys" ? "on" : ""}`}
@@ -343,6 +345,15 @@ export function ScreenPage() {
             <ClipboardIcon size={20} />
           </button>
           <span class="stage-sep" aria-hidden="true" />
+          <button
+            class={`stage-btn ${armed ? "on" : ""}`}
+            disabled={unavailable}
+            aria-label={armed ? "Khoá điều khiển — chỉ xem" : "Mở khoá để điều khiển"}
+            aria-pressed={armed}
+            onClick={() => setArmed((a) => !a)}
+          >
+            {armed ? <UnlockIcon size={20} /> : <LockIcon size={20} />}
+          </button>
           <button class="stage-btn" onClick={saveSnapshot} disabled={!url} aria-label="Lưu ảnh màn hình về điện thoại">
             <CameraIcon size={20} />
           </button>
@@ -356,7 +367,7 @@ export function ScreenPage() {
           </button>
         </div>
         {paused && url && (
-          <button class="screen-paused" onClick={() => setPaused(false)}>Tạm dừng — bấm để xem tiếp</button>
+          <button class="screen-paused" onClick={() => setPaused(false)}>Đang nối lại — bấm nếu máy âm thầm</button>
         )}
       </div>
       {full && (
@@ -364,7 +375,7 @@ export function ScreenPage() {
       )}
 
       {/* Panel trượt ra dưới khung hình — mỗi lần 1 panel, kiểu tab Input 9remote */}
-      {panel === "keys" && control && (
+      {panel === "keys" && armed && (
         <div class="screen-panel">
           <div class="screen-row">
             {MODS.map((m) => (
@@ -402,7 +413,7 @@ export function ScreenPage() {
         </div>
       )}
 
-      {panel === "mouse" && control && (
+      {panel === "mouse" && armed && (
         <div class="screen-panel">
           <div class="screen-row">
             <button class="screen-key" disabled={sending} onClick={() => sendInput({ type: "rclick", ...at })}>Right-click</button>
@@ -414,7 +425,7 @@ export function ScreenPage() {
         </div>
       )}
 
-      {panel === "text" && control && (
+      {panel === "text" && armed && (
         <div class="screen-panel">
           <form
             class="screen-textrow"
@@ -442,38 +453,14 @@ export function ScreenPage() {
 
       <div class="screen-bar">
         <span class={`badge ${status === "live" ? "ok" : status === "error" ? "err" : "busy"}`}>
-          {status === "live" ? `Đang xem${fps ? ` · ${fps} hình/2s` : ""}` : status === "connecting" ? "Đang nối…" : status === "paused" ? "Tạm dừng" : "Mất nối"}
+          {status === "live"
+            ? `Đang xem${armed ? " · đã mở khoá" : ""}${fps ? ` · ${fps} hình/2s` : ""}`
+            : status === "connecting"
+              ? "Đang nối…"
+              : status === "paused"
+                ? "Tạm nghỉ — đang chờ bạn mở lại"
+                : "Mất nối"}
         </span>
-        <button class="btn ghost small" onClick={() => setPaused((p) => !p)}>
-          {paused ? "Xem tiếp" : "Tạm dừng"}
-        </button>
-        <button
-          class={`btn small ${control ? "danger-solid" : "ghost"}`}
-          disabled={unavailable}
-          onClick={() => {
-            setControl((c) => !c);
-            setPanel(null);
-          }}
-          aria-pressed={control}
-        >
-          {control ? "Đang điều khiển" : "Chỉ xem"}
-        </button>
-      </div>
-
-      <div class="screen-qual" role="radiogroup" aria-label="Chất lượng hình">
-        <span class="screen-qual-label">Chất lượng</span>
-        <div class="seg">
-          {Object.entries(QUALITY_PRESETS).map(([id, p]) => (
-            <button
-              key={id}
-              class={`seg-btn ${preset === id ? "on" : ""}`}
-              onClick={() => setPreset(id)}
-              aria-pressed={preset === id}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
       </div>
     </div>
   );
