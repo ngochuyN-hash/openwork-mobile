@@ -1,7 +1,7 @@
 # CODE_SUMMARY — OpenWork Mobile
 
 > Tài liệu tra nhanh "gặp lỗi thì sửa ở đâu". Cập nhật sau mỗi milestone.
-> Cập nhật lần cuối: 2026-09-12 (v1.5: nút Trở lại ghim cố định trên topbar + deploy Worker openpocket + file 2 chiều trong chat)
+> Cập nhật lần cuối: 2026-09-13 (v1.6: chữ agent streaming từng nhịp trong chat + nút Gửi morph thành nút Dừng + worker web `openwork-mobile-web` qua vite-plugin, SW v5)
 >
 > 📌 **Quy tắc (yêu cầu của chủ dự án):** mỗi khi thay đổi code/cấu trúc/hành vi,
 > PHẢI cập nhật đồng thời file này VÀ `README.md` trong cùng commit.
@@ -77,7 +77,8 @@
 | `src/pages/chat.jsx` | Transcript (text/tool/reasoning; markdown tối giản: code block/inline code/list — `MarkdownText`), composer nút send icon gradient + **model picker (bắt buộc)** + **nút kẹp giấy đính kèm file** (upload vào `mobile-uploads/` rồi gửi prompt kèm đường dẫn), offline queue, permission cards (Allow/Deny), SSE events. Nút back dọn lên topbar. **Nút Gửi morph thành nút Dừng** (`busy = running && !sending`, icon `StopIcon`, nền đỏ `.btn-send.stop`, chống double-tap bằng `aborting`, draft giữ nguyên, Ctrl+Enter khi busy = abort) — xóa hẳn nút "Dừng agent" cũ. **Realtime liên tục (v1.6)**: vá chữ streaming vào bong bóng đang chạy (`applyStreamingPatch` — nhận cả delta/snapshot từ `message.part.updated`/`message.updated`), lọc session nới lỏng (`sameSession`: nhận `sessionID/sessionId/properties/message/part` + prefix `ses_`), **poll dự phòng 2.5s chỉ khi `running`** + watchdog 30s chống chết kênh ngầm + `onerror`/mở lại app/có mạng lại đều hỏi lại ngay, chỉ bám đáy khi user đang đọc cuối. **File agent nhắc tới**: `findFileRefsInText()` quét text + tool input/output → `FileRefCard` (Mở/Tải về qua `/files/stat` + `/files/raw`, Xem trong Files) + `linkifyFiles()` biến đường dẫn trong text thành link tải. |
 | `src/pages/files.jsx` | Duyệt `/opencode/file` (icon tile, size qua `Intl.NumberFormat` vi-VN); xem/sửa+lưu + upload qua `/files/raw` (base64 chunk qua helper chung, báo tiến trình từng file); xem ảnh (png/jpg/gif/webp/bmp/ico/svg/avif) + **PDF inline (iframe)**; tải về qua `owDownload()` (fetch + Blob + thanh % + Hủy + nút Chia sẻ cho iOS Lưu về Files). Nút back dọn lên topbar, nút Đóng viewer phát event `owm:topback`. |
 | `src/pages/settings.jsx` | Trạng thái bridge, recheck, gỡ pairing (ConfirmDialog), hướng dẫn tailscale. |
-| `public/sw.js` | App-shell precache v4 (`owm-shell-v4`) + navigate fallback (offline mở được shell); không cache `/api/*`. |
+| `public/sw.js` | App-shell precache v5 (`owm-shell-v5`) + navigate fallback (offline mở được shell); không cache `/api/*`. Bump version mỗi lần đổi UI để PWA xóa cache cũ. |
+| `wrangler.jsonc` (trong web/) | Worker phụ `openwork-mobile-web` qua `@cloudflare/vite-plugin` — deploy nhanh `cd web && npm run deploy` (build + wrangler). URL chính chủ vẫn là worker `openpocket` (deploy từ `worker/`). |
 | `public/icon*.png/svg` + manifest | Icon nền `#111113` + vạch xanh `#0090ff` đặc (đúng logo desktop) 192/512 + maskable (safe zone 80%); manifest có id/scope/lang/orientation/shortcuts. |
 
 ## Bảng "triệu chứng → chỗ sửa"
@@ -109,7 +110,7 @@
 | Tải file không hiện % / không resume | `bridge/src/proxy.js` từng chỉ forward 5 header — đã thêm `content-length/content-range/accept-ranges` |
 | Bấm Tải về trên iOS mở file trong tab thay vì lưu / file lớn không biết tiến trình | `web/src/api.js` (`owDownload()`: fetch header auth + đọc stream hiện % + AbortController) + `files.jsx` (nút Tải về Blob + thanh progress + Hủy + nút Chia sẻ qua `navigator.share` để iOS Lưu về Files) + `bridge/src/proxy.js` (tự gắn `content-disposition: attachment` fallback từ `?path=` khi upstream quên); test `filenameFromQuery` trong `bridge/test/bridge.test.js` |
 | Nút Trở lại Sessions / Workspace bị trôi theo nội dung khi cuộn | `web/src/app.jsx` + `web/src/styles.css` — chuyển nút Trở lại lên `topbar` (vốn đã sticky ở đỉnh, kèm blur và safe-area), gỡ `BackButton` trôi trong `page-head` ở chat, sessions, files. FileViewer mượn topbar qua event `owm:topback` |
-| Sửa code web nhưng điện thoại vẫn hiện bản cũ | Phải build `npm run build` trong `web/` rồi deploy worker: `cd worker && npx wrangler deploy`. Đã bump `CACHE = "owm-shell-v4"` trong `web/public/sw.js` để PWA kích hoạt xóa cache cũ |
+| Sửa code web nhưng điện thoại vẫn hiện bản cũ | Phải build `npm run build` trong `web/` rồi deploy worker: `cd worker && npx wrangler deploy` (worker chính chủ `openpocket`, nhớ `--config` nếu chạy từ web/) hoặc nhanh hơn `cd web && npm run deploy` (worker phụ `openwork-mobile-web`). Đã bump `CACHE = "owm-shell-v5"` trong `web/public/sw.js` để PWA kích hoạt xóa cache cũ |
 | Bridge không tự chạy khi đăng nhập Windows | `openpocket autostart --enable [--with-openwork]` tạo task `OpenPocketBridge` (ONLOGON) trong Task Scheduler — xem `bridge/src/autostart.js` + `bridge/bin/openpocket.js`. Cần quyền admin lần đầu; xem trạng thái bằng `--status` |
 | Điện thoại báo mất server mà OpenWork chưa mở | Bấm nút "Bật OpenWork trên máy tính" (banner đỏ + Cài đặt) → `POST /api/openwork/wake` → `bridge/src/openwork-launch.js` tự tìm exe và mở app. Tìm không thấy exe thì set `openworkExe` trong config hoặc env `OPENWORK_EXE`. Máy tắt hẳn/ngủ sâu thì chịu, phải bật máy trước |
 | Muốn bấm nút Gửi để ngắt agent như ChatGPT/Gemini | `chat.jsx` — nút Gửi tự morph thành nút Dừng đỏ (`busy = running && !sending`) khi agent chạy; bấm lại gọi `abort()`, draft giữ nguyên |

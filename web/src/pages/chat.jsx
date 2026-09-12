@@ -13,6 +13,66 @@ const SSE_EVENTS = [
   "connection.updated",
 ];
 
+// SSE engine các bản trả tên trường khác nhau — nhận hết để khỏi bỏ sót tin.
+function eventSessionId(data) {
+  if (!data || typeof data !== "object") return "";
+  return (
+    data.sessionID ??
+    data.sessionId ??
+    data.session_id ??
+    data.properties?.sessionID ??
+    data.properties?.sessionId ??
+    data.message?.sessionID ??
+    data.message?.sessionId ??
+    data.part?.sessionID ??
+    data.part?.sessionId ??
+    ""
+  );
+}
+
+function sameSession(eventSid, currentSid) {
+  if (!eventSid) return true; // event chung (permission/connection) — cứ nhận
+  if (eventSid === currentSid) return true;
+  const strip = (s) => String(s ?? "").replace(/^ses_/, "");
+  return strip(eventSid) === strip(currentSid);
+}
+
+function eventMessageId(data) {
+  if (!data || typeof data !== "object") return "";
+  return (
+    data.messageID ??
+    data.messageId ??
+    data.message_id ??
+    data.info?.id ??
+    data.message?.id ??
+    data.message?.info?.id ??
+    data.part?.messageID ??
+    data.part?.messageId ??
+    data.properties?.messageID ??
+    data.properties?.messageId ??
+    data.properties?.part?.messageID ??
+    ""
+  );
+}
+
+// Bóc chữ mới từ event part — engine có thể gửi snapshot full hoặc delta.
+function eventPartText(data) {
+  if (!data || typeof data !== "object") return "";
+  const part =
+    (data.part && typeof data.part === "object" ? data.part : null) ??
+    data.properties?.part ??
+    null;
+  if (typeof data.delta === "string" && data.delta) return data.delta;
+  if (typeof data.text === "string" && data.text && !data.parts) return data.text;
+  if (part) {
+    if (typeof part.text === "string" && part.text) return part.text;
+    if (typeof part.delta === "string" && part.delta) return part.delta;
+  }
+  const propDelta = data.properties?.delta ?? data.properties?.text;
+  if (typeof propDelta === "string" && propDelta) return propDelta;
+  return "";
+}
+
 export function ChatPage({ route }) {
   const { wsId, sessionId } = route;
   const [session, setSession] = useState(null);
@@ -31,6 +91,10 @@ export function ChatPage({ route }) {
   const bottomRef = useRef(null);
   const draftRef = useRef("");
   draftRef.current = draft;
+  // Mốc event SSE cuối + trạng thái running cho watchdog/poll dự phòng.
+  const lastEventAt = useRef(Date.now());
+  const runningRef = useRef(false);
+  runningRef.current = running;
 
   const base = `/workspace/${encodeURIComponent(wsId)}/opencode`;
 
@@ -68,7 +132,9 @@ export function ChatPage({ route }) {
     try {
       const payload = await ow(`${base}/permission`);
       const list = unwrap(payload) ?? [];
-      setPermissions(list.filter((p) => !p.sessionID || p.sessionID === sessionId));
+      setPermissions(
+        list.filter((p) => sameSession(p.sessionID ?? p.sessionId ?? p.properties?.sessionID, sessionId))
+      );
     } catch {
       setPermissions([]);
     }
@@ -117,39 +183,167 @@ export function ChatPage({ route }) {
       })
       .catch(() => {});
 
-    let timer = null;
-    const scheduleMessages = () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
+    // Vá chữ streaming vào bong bóng đang chạy để thấy chữ nối dài dần,
+    // thay vì chờ fetch full mới vẽ. Heuristic snapshot-vs-delta:
+    // snapshot (chunk chứa sẵn prefix cũ) thì thay, delta thì nối thêm.
+    const applyStreamingPatch = (messageId, chunk) => {
+      if (!chunk) return;
+      setMessages((prev) => {
+        const list = [...(prev ?? [])];
+        let idx = -1;
+        if (messageId) idx = list.findIndex((m) => (m.info?.id ?? m.id) === messageId);
+        if (idx < 0) {
+          for (let i = list.length - 1; i >= 0; i--) {
+            if ((list[i].info?.role ?? list[i].role) === "assistant") {
+              idx = i;
+              break;
+            }
+          }
+        }
+        if (idx < 0) {
+          list.push({
+            info: { id: messageId || `stream-${Date.now()}`, role: "assistant", time: { created: Date.now() } },
+            parts: [{ type: "text", text: chunk }],
+          });
+          return list;
+        }
+        const msg = { ...list[idx], parts: [...(list[idx].parts ?? [])] };
+        let pIdx = -1;
+        for (let i = msg.parts.length - 1; i >= 0; i--) {
+          if (msg.parts[i]?.type === "text") {
+            pIdx = i;
+            break;
+          }
+        }
+        if (pIdx < 0) {
+          msg.parts = [...msg.parts, { type: "text", text: chunk }];
+        } else {
+          const cur = msg.parts[pIdx]?.text ?? "";
+          let next;
+          if (!cur) next = chunk;
+          else if (chunk.startsWith(cur)) next = chunk; // snapshot full
+          else if (cur.endsWith(chunk)) next = cur; // event phát lại đuôi cũ
+          else next = cur + chunk; // delta
+          msg.parts[pIdx] = { ...msg.parts[pIdx], text: next };
+        }
+        list[idx] = msg;
+        return list;
+      });
+    };
+
+    // Nhịp hỏi lại: nhanh cho chữ streaming (có vá optimistic ngay nên chỉ
+    // cần chốt full sau ~900ms), chậm 500ms cho session/permission như cũ.
+    let fastTimer = null;
+    let slowTimer = null;
+    const scheduleFast = () => {
+      clearTimeout(fastTimer);
+      fastTimer = setTimeout(() => {
+        loadMessages();
+        loadStatus();
+      }, 900);
+    };
+    const scheduleSlow = () => {
+      clearTimeout(slowTimer);
+      slowTimer = setTimeout(() => {
         loadMessages();
         loadStatus();
       }, 500);
     };
 
     const es = new EventSource(sseUrl(`${base}/event`));
-    const onEvent = (event) => {
+    const onEvent = (name, event) => {
+      lastEventAt.current = Date.now();
       let data = null;
       try {
         data = JSON.parse(event.data);
       } catch {}
-      if (!data || data.sessionID === undefined || data.sessionID === sessionId) scheduleMessages();
+      if (!sameSession(eventSessionId(data), sessionId)) return;
+      if (name === "message.part.updated") {
+        const chunk = eventPartText(data);
+        if (chunk) {
+          applyStreamingPatch(eventMessageId(data), chunk);
+          setRunning(true); // vào guồng stream ngay, poll dự phòng bám theo
+        }
+        scheduleFast();
+        return;
+      }
+      if (name === "message.updated") {
+        const snapshot =
+          data?.message?.parts?.filter((p) => p?.type === "text").map((p) => p.text ?? "").join("") ??
+          "";
+        if (snapshot) applyStreamingPatch(eventMessageId(data), snapshot);
+        scheduleFast();
+        return;
+      }
+      if (name === "permission.updated") loadPermissions();
+      scheduleSlow();
     };
-    for (const name of SSE_EVENTS) es.addEventListener(name, onEvent);
-    es.onmessage = onEvent; // event không có tên
-    es.onopen = () => flushQueue();
-    const onOnline = () => flushQueue();
+    for (const name of SSE_EVENTS) es.addEventListener(name, (e) => onEvent(name, e));
+    es.onmessage = (e) => onEvent("message", e); // event không có tên
+    es.onopen = () => {
+      lastEventAt.current = Date.now();
+      flushQueue();
+    };
+    // SSE chết ngầm (tunnel đổi, mobile ngủ, server restart) thì trình duyệt
+    // tự nối lại — hỏi lại ngay để khỏi đứng hình chờ event tiếp theo.
+    es.onerror = () => {
+      loadMessages();
+      loadStatus();
+    };
+    const refetchVisible = () => {
+      if (document.visibilityState === "visible") {
+        lastEventAt.current = Date.now();
+        loadMessages();
+        loadStatus();
+      }
+    };
+    const onOnline = () => {
+      lastEventAt.current = Date.now();
+      flushQueue();
+    };
+    document.addEventListener("visibilitychange", refetchVisible);
+    window.addEventListener("focus", refetchVisible);
     window.addEventListener("online", onOnline);
 
     return () => {
-      clearTimeout(timer);
+      clearTimeout(fastTimer);
+      clearTimeout(slowTimer);
       es.close();
+      document.removeEventListener("visibilitychange", refetchVisible);
+      window.removeEventListener("focus", refetchVisible);
       window.removeEventListener("online", onOnline);
     };
   }, [wsId, sessionId]);
 
+  // Poll dự phòng CHỈ khi agent đang chạy (2.5s) + watchdog chống chết kênh
+  // ngầm (30s không event mà vẫn running thì hỏi lại). Hết chạy là dừng ngay
+  // để đỡ tốn pin/4G.
   useEffect(() => {
+    if (!running) return;
+    const poll = setInterval(() => {
+      loadMessages();
+      loadStatus();
+    }, 2500);
+    const watch = setInterval(() => {
+      if (runningRef.current && Date.now() - lastEventAt.current > 30_000) {
+        lastEventAt.current = Date.now();
+        loadMessages();
+        loadStatus();
+      }
+    }, 10_000);
+    return () => {
+      clearInterval(poll);
+      clearInterval(watch);
+    };
+  }, [running, wsId, sessionId, loadMessages, loadStatus]);
+
+  useEffect(() => {
+    // Trang cuộn trên window (không có khung cuộn riêng) — chỉ bám đáy khi
+    // user đang đọc cuối, đang lội lên trên thì không giật.
+    const gap = document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
+    if (gap > 260) return;
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages?.length]);
+  }, [messages]);
 
   function modelBody() {
     if (!model || !model.includes("/")) return undefined;
@@ -277,8 +471,8 @@ export function ChatPage({ route }) {
         {messages?.length === 0 && (
           <Empty title="Session trống" hint="Gửi prompt đầu tiên cho agent nhé." />
         )}
-        {messages?.map((m) => (
-          <MessageBubble key={m.id} message={m} wsId={wsId} />
+        {messages?.map((m, i) => (
+          <MessageBubble key={m.info?.id ?? m.id ?? `msg-${i}`} message={m} wsId={wsId} />
         ))}
         {running && (
           <div class="msg assistant">

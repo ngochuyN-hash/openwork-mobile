@@ -138,7 +138,8 @@ CODE_SUMMARY.md  # bản đồ code + bảng "triệu chứng → chỗ sửa"
 cd bridge && npm test                                   # unit test
 node bridge/scripts/e2e-live.mjs <wsId> <provider> <model>   # E2E live
 cd web && npm run dev                                   # dev server (proxy /api qua bridge)
-cd web && npm run build && cd ../worker && npx wrangler deploy # build + deploy worker "địa chỉ cố định"
+cd web && npm run build && cd ../worker && npx wrangler deploy # build + deploy worker "địa chỉ cố định" (openpocket)
+cd web && npm run deploy                                # build + deploy worker phụ openwork-mobile-web (vite-plugin, URL dự phòng)
 ```
 
 ## Quy tắc dự án

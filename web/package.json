@@ -5,13 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "deploy": "npm run build && wrangler deploy",
+    "preview": "npm run build && wrangler dev"
   },
   "dependencies": {
     "preact": "^10.24.3"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.54.8",
     "@preact/preset-vite": "^2.9.3",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "wrangler": "^4.131.1"
   }
 }
