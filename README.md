@@ -125,7 +125,8 @@ The shared worker URL is an "apartment building": anyone can open it, but each p
 Owner-side commands (run in `worker/`, requires a logged-in `wrangler`):
 
 ```bash
-openpocket tenant add alice "Alice's PC"   # issue a room + invite card with a tap-to-join LINK (auto-copied to clipboard — paste it to your friend)
+openpocket add alice                       # ask for a password, then print the invite link (auto-copied)
+openpocket tenant add alice "Alice's PC"   # same, but auto-generates a strong password
 openpocket tenant list                     # list rooms
 openpocket tenant revoke alice             # delete a room (that machine loses its address-reporting slot)
 ```

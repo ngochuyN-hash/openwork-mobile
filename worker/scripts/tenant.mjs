@@ -81,9 +81,23 @@ if (action === "add") {
     console.log("      user chỉ gồm a-z, 0-9, dấu gạch ngang (2-32 ký tự), vd: nam");
     process.exit(1);
   }
+  // --pass <mật-khẩu>: dùng mật khẩu người chủ tự đặt (từ `openpocket add`);
+  // không có thì sinh mật khẩu khỏe ngẫu nhiên. Mật khẩu phải nằm gọn trong
+  // link mời (#i=user:secret) nên cấm dấu cách, ':' và '&'.
+  // Tách --pass TRƯỚC khi đọc name/url khỏi rest, kẻo lệch vị trí đối số.
+  let customPass = "";
+  const passIdx = rest.indexOf("--pass");
+  if (passIdx !== -1) {
+    customPass = String(rest[passIdx + 1] ?? "");
+    rest.splice(passIdx, 2);
+  }
   const displayName = rest[0]?.trim() || name;
   const workerUrl = (rest[1] || DEFAULT_WORKER_URL).replace(/\/+$/, "");
-  const secret = `owes_${randomBytes(24).toString("hex")}`;
+  if (customPass && (customPass.length < 8 || /[\s:&]/.test(customPass))) {
+    console.log("❌ Mật khẩu cần ≥ 8 ký tự, không chứa dấu cách, ':' hay '&'.");
+    process.exit(1);
+  }
+  const secret = customPass || `owes_${randomBytes(24).toString("hex")}`;
   const existing = kvSoft("get", `tenant:${name}`);
   if (existing !== null && String(existing).trim().startsWith("{")) {
     console.log(`⚠️  Phòng "${name}" đã tồn tại — chạy lại sẽ GHI ĐÈ mật khẩu cũ (thiết bị cũ vẫn hoạt động).`);
