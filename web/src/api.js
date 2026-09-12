@@ -1,5 +1,9 @@
 // API client: same-origin với bridge. Token pairing lưu ở localStorage.
 const TOKEN_KEY = "owm_token";
+// Multi-tenant: "phòng" = máy đang kết nối. Lưu kèm token; mọi request kèm
+// header x-owm-tenant (worker dùng để chọn đúng bridge), SSE dùng ?_m=.
+const TENANT_KEY = "owm_tenant";
+const TENANT_NAME_KEY = "owm_tenant_name";
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY) ?? "";
@@ -13,23 +17,55 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+export function getTenant() {
+  return localStorage.getItem(TENANT_KEY) ?? "";
+}
+
+export function getTenantName() {
+  return localStorage.getItem(TENANT_NAME_KEY) || getTenant();
+}
+
+export function setTenant(id, name = "") {
+  const clean = String(id ?? "").trim().toLowerCase();
+  if (!clean) return;
+  localStorage.setItem(TENANT_KEY, clean);
+  if (name && name !== clean) localStorage.setItem(TENANT_NAME_KEY, name);
+  else localStorage.removeItem(TENANT_NAME_KEY);
+}
+
+export function clearTenant() {
+  localStorage.removeItem(TENANT_KEY);
+  localStorage.removeItem(TENANT_NAME_KEY);
+}
+
+// Bóc giá trị từ hash dạng #<key>=GIÁ_TRỊ[&m=PHÒNG], xóa hash sau khi đọc.
+function parseHashParam(key) {
+  const match = new RegExp(`^#${key}=([^&]+)(?:&m=([^&]+))?`).exec(location.hash);
+  if (!match?.[1]) return null;
+  history.replaceState(null, "", location.pathname + location.search);
+  return {
+    value: decodeURIComponent(match[1]),
+    tenant: match[2] ? decodeURIComponent(match[2]) : "",
+  };
+}
+
 // Auto-pairing kiểu cũ (master token trong #t=) — vẫn giữ làm đường dự phòng.
 export function absorbTokenFromHash() {
-  const match = /^#t=(.+)$/.exec(location.hash);
-  if (match?.[1]) {
-    setToken(match[1].trim());
-    history.replaceState(null, "", location.pathname + location.search);
+  const parsed = parseHashParam("t");
+  if (parsed?.value) {
+    setToken(parsed.value);
+    if (parsed.tenant) setTenant(parsed.tenant);
     return true;
   }
   return false;
 }
 
-// Mã one-time từ QR/link dạng .../#p=<code> — màn pairing sẽ tự ghép.
+// Mã one-time từ QR/link dạng .../#p=<code>&m=<phòng> — màn pairing sẽ tự ghép.
 export function pairingCodeFromHash() {
-  const match = /^#p=(.+)$/.exec(location.hash);
-  if (match?.[1]) {
-    history.replaceState(null, "", location.pathname + location.search);
-    return match[1].trim();
+  const parsed = parseHashParam("p");
+  if (parsed?.value) {
+    if (parsed.tenant) setTenant(parsed.tenant);
+    return parsed.value;
   }
   return "";
 }
@@ -38,12 +74,32 @@ export function pairingCodeFromHash() {
 export async function apiPair(code, label) {
   const res = await fetch("/api/pair", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: tenantHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({ code: code.trim(), label: label?.trim() || undefined }),
   });
   const payload = await res.json().catch(() => null);
   if (!res.ok) throw new Error(payload?.message ?? `HTTP ${res.status}`);
   return payload; // {token, device}
+}
+
+/** Đăng nhập multi-tenant: user+pass do chủ worker cấp → khóa vĩnh viễn.
+ * Trả {token, device, tenant, machineName}; khóa + phòng lưu luôn localStorage —
+ * mật khẩu KHÔNG được lưu, lần sau mở app là vào thẳng. */
+export async function apiPairTenant(user, secret, label) {
+  const res = await fetch("/api/pair/tenant", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      user: String(user ?? "").trim().toLowerCase(),
+      secret: String(secret ?? ""),
+      label: label?.trim() || undefined,
+    }),
+  });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(payload?.message ?? `HTTP ${res.status}`);
+  setToken(payload.token);
+  setTenant(payload.tenant, payload.machineName);
+  return payload;
 }
 
 export async function apiDevices() {
@@ -63,6 +119,14 @@ function authHeaders(extra = {}) {
   const token = getToken();
   const headers = { ...extra };
   if (token) headers["authorization"] = `Bearer ${token}`;
+  return tenantHeaders(headers);
+}
+
+// Header chọn "phòng" (máy) — worker dùng để relay tới đúng bridge.
+function tenantHeaders(extra = {}) {
+  const tenant = getTenant();
+  const headers = { ...extra };
+  if (tenant) headers["x-owm-tenant"] = tenant;
   return headers;
 }
 
@@ -96,6 +160,19 @@ export async function apiFsList(path) {
   if (res.status === 401) throw new Error("UNPAIRED");
   const payload = await res.json().catch(() => null);
   if (!res.ok) throw new Error(payload?.message ?? `fs ${res.status}`);
+  return payload;
+}
+
+/** Tạo thư mục mới con bên trong `dir` (nút "+ Thư mục mới" trong picker). */
+export async function apiFsMkdir(dir, name) {
+  const res = await fetch("/api/fs/mkdir", {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ dir, name }),
+  });
+  if (res.status === 401) throw new Error("UNPAIRED");
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(payload?.message ?? `mkdir ${res.status}`);
   return payload;
 }
 
@@ -181,10 +258,11 @@ function guessName(path) {
   return clean.slice(cut + 1) || "download";
 }
 
-/** URL cho EventSource (không set được header nên auth qua query _t). */
+/** URL cho EventSource (không set được header nên auth qua query _t, phòng qua _m). */
 export function sseUrl(path) {
+  const tenant = getTenant();
   const sep = path.includes("?") ? "&" : "?";
-  return `/api/ow${path}${sep}_t=${encodeURIComponent(getToken())}`;
+  return `/api/ow${path}${sep}_t=${encodeURIComponent(getToken())}${tenant ? `&_m=${encodeURIComponent(tenant)}` : ""}`;
 }
 
 // ---- Helpers chuẩn hóa shape openwork/opencode (có / không có wrapper .data)

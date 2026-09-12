@@ -1,15 +1,20 @@
 import { useEffect, useState } from "preact/hooks";
-import { setToken, apiState, apiPair, pairingCodeFromHash } from "../api.js";
+import { setToken, apiState, apiPair, apiPairTenant, pairingCodeFromHash } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 import { OpenWorkMark } from "../components/logo.jsx";
 
-// 2 cách kết nối song song (lựa chọn của chủ dự án):
+// 3 cách kết nối song song:
+//  TAB "Đăng nhập" — multi-tenant: user+pass do chủ worker cấp, máy của BẠN
+//  phải đã chạy `openpocket edge join`. Nhập 1 lần: khóa vĩnh viễn owd_ được
+//  cấp + lưu luôn trên máy, mật khẩu KHÔNG lưu — lần sau mở app vào thẳng.
 //  TAB "Ghép thiết bị" — nhập mã one-time 8 ký tự (XXXX-XXXX) in trên terminal
 //  bridge (sống 30 phút, dùng 1 lần). Ghép xong thiết bị nhận khóa vĩnh viễn owd_.
 //  TAB "Nhập token" — dành cho token dài hạn đã có (master owm_ từ QR master,
 //  hoặc owd_ của thiết bị): nhập vào là vào thẳng, không cần qua mã.
 export function PairingScreen({ onPaired }) {
-  const [tab, setTab] = useState("pair");
+  const [tab, setTab] = useState("login");
+  const [user, setUser] = useState("");
+  const [pass, setPass] = useState("");
   const [code, setCode] = useState("");
   const [label, setLabel] = useState("");
   const [error, setError] = useState("");
@@ -23,6 +28,25 @@ export function PairingScreen({ onPaired }) {
     try {
       const { token } = await apiPair(codeValue, labelValue);
       setToken(token);
+      onPaired();
+    } catch (e) {
+      setStatus("");
+      setError(String(e.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Đăng nhập phòng (multi-tenant) — khóa + tên máy được api.js tự lưu
+  async function loginWithTenant(userValue, passValue, labelValue) {
+    setBusy(true);
+    setError("");
+    setStatus("Đang đăng nhập…");
+    try {
+      const { machineName } = await apiPairTenant(userValue, passValue, labelValue);
+      setStatus("");
+      setError("");
+      console.log(`[pairing] đã vào máy: ${machineName}`);
       onPaired();
     } catch (e) {
       setStatus("");
@@ -58,7 +82,12 @@ export function PairingScreen({ onPaired }) {
     pairWithCode(value, label);
   }
 
-  // Tự ghép khi mở từ QR/link .../#p=MÃ
+  function submitLogin() {
+    if (!user.trim() || !pass) return;
+    loginWithTenant(user, pass, label);
+  }
+
+  // Tự ghép khi mở từ QR/link .../#p=MÃ(&m=PHÒNG)
   useEffect(() => {
     const fromHash = pairingCodeFromHash();
     if (fromHash) pairWithCode(fromHash, "");
@@ -73,7 +102,16 @@ export function PairingScreen({ onPaired }) {
       </div>
 
       <div class="card">
-        <div style="display:flex;gap:8px;margin-bottom:14px">
+        <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+          <button
+            class={`btn small ${tab === "login" ? "" : "ghost"}`}
+            onClick={() => {
+              setTab("login");
+              setError("");
+            }}
+          >
+            Đăng nhập
+          </button>
           <button
             class={`btn small ${tab === "pair" ? "" : "ghost"}`}
             onClick={() => {
@@ -96,7 +134,52 @@ export function PairingScreen({ onPaired }) {
           </button>
         </div>
 
-        {tab === "pair" ? (
+        {tab === "login" ? (
+          <>
+            <label class="field" for="login-user">Tên đăng nhập</label>
+            <input
+              id="login-user"
+              type="text"
+              placeholder="vd: nam"
+              autocomplete="username"
+              autocapitalize="none"
+              spellcheck={false}
+              value={user}
+              onInput={(e) => setUser(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitLogin()}
+            />
+            <label class="field" for="login-pass">Mật khẩu</label>
+            <input
+              id="login-pass"
+              type="password"
+              placeholder="••••••••"
+              autocomplete="current-password"
+              value={pass}
+              onInput={(e) => setPass(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitLogin()}
+            />
+            <label class="field" for="login-label">Tên thiết bị này (tùy chọn)</label>
+            <input
+              id="login-label"
+              type="text"
+              placeholder="vd: iPhone của Nam"
+              value={label}
+              onInput={(e) => setLabel(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitLogin()}
+            />
+            <div class="sheet-actions">
+              <button class="btn" disabled={busy || !user.trim() || !pass} onClick={submitLogin}>
+                {busy ? status || "Đang đăng nhập…" : "Đăng nhập"}
+              </button>
+            </div>
+            {status && !error && busy && <p class="pair-hint">{status}</p>}
+            {error && <Banner kind="err">{error}</Banner>}
+            <p class="pair-hint">
+              Tài khoản do chủ máy cấp. Nhập một lần — khóa được lưu luôn trên máy này,
+              mật khẩu không giữ lại; lần sau mở app là vào thẳng.
+            </p>
+          </>
+        ) : tab === "pair" ? (
           <>
             <label class="field" for="pair-code">
               Mã ghép (in trên terminal bridge, sống 30 phút — hoặc quét QR trên đó)

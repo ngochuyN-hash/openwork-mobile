@@ -12,7 +12,8 @@ import { startQuickTunnel } from "./tunnel.js";
 import { startLookup } from "./lookup.js";
 import { PairingService, CODE_TTL_MINUTES } from "./pairing.js";
 import { findOpenWorkExe, launchOpenWork } from "./openwork-launch.js";
-import { listDirs, listRoots } from "./fslist.js";
+import { listDirs, listRoots, makeDir } from "./fslist.js";
+import { ScreenService, createRateLimiter } from "./screen.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -46,7 +47,15 @@ const state = {
 // ---------------------------------------------------------------------------
 const pairing = new PairingService();
 
-const currentBase = () => state.tunnelUrl || config.publicUrl || `http://127.0.0.1:${config.port}`;
+// Địa chỉ in vào QR pair: ƯU TIÊN worker (địa chỉ CỐ ĐỊNH) nếu đã cấu hình —
+// URL tunnel đổi mỗi lần cloudflared chạy lại, điện thoại giữ QR cũ sẽ hụt.
+const currentBase = () =>
+  (config.lookupUrl ? config.lookupUrl.replace(/\/+$/, "") : "") ||
+  state.tunnelUrl ||
+  config.publicUrl ||
+  `http://127.0.0.1:${config.port}`;
+// Gắn phòng vào link (#p=...&m=phòng / #t=...&m=phòng) để web tự điền.
+const tenantHashSuffix = () => (config.lookupTenant ? `&m=${encodeURIComponent(config.lookupTenant)}` : "");
 let printingPairing = false;
 pairing.onCode = () => {
   // Mã mới (thiết bị vừa ghép xong hoặc mã cũ hết hạn) -> in lại QR
@@ -80,6 +89,11 @@ function wakeRateLimited(ip) {
   wakeAttempts.set(ip, list);
   return false;
 }
+
+// Xem/điều khiển màn hình (v1.7, học cơ chế 9remote). Drag từ phone phát lệnh
+// move liên tục nên limiter theo GIÂY, không theo phút như các route khác.
+const screen = new ScreenService();
+const screenInputRateLimited = createRateLimiter(40, 1_000);
 
 async function readJsonBody(req, limit = 1_000_000) {
   const chunks = [];
@@ -214,6 +228,47 @@ async function handleRequest(req, res) {
       return;
     }
 
+    // Đăng nhập multi-tenant từ web: user+pass do chủ worker cấp (thay cho mã
+    // one-time). Chỉ hoạt động khi máy đã tham gia phòng: `openpocket edge join`.
+    if (req.method === "POST" && pathname === "/api/pair/tenant") {
+      const ip = req.socket.remoteAddress ?? "?";
+      if (pairRateLimited(ip)) return deny(res);
+      try {
+        const body = await readJsonBody(req);
+        if (!config.lookupTenant || !config.lookupSecret) {
+          res.writeHead(404, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              code: "not_joined",
+              message: "Máy này chưa tham gia phòng nào. Trên máy tính chạy: openpocket edge join",
+            })
+          );
+          return;
+        }
+        const userOk = String(body?.user ?? "").trim().toLowerCase() === config.lookupTenant;
+        const passOk = isTokenAuthorized(String(body?.secret ?? ""), config.lookupSecret);
+        if (!userOk || !passOk) {
+          res.writeHead(401, { "content-type": "application/json" });
+          res.end(JSON.stringify({ code: "invalid_credentials", message: "Sai tên đăng nhập hoặc mật khẩu." }));
+          return;
+        }
+        const result = pairing.mintDevice(body?.label);
+        console.log(`[pairing] đăng nhập phòng ${config.lookupTenant}: thiết bị mới "${result.device.label}" (${result.device.id})`);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ...result,
+            tenant: config.lookupTenant,
+            machineName: config.machineName || config.lookupTenant,
+          })
+        );
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: "invalid_body", message: "Body JSON không hợp lệ" }));
+      }
+      return;
+    }
+
     // Các route còn lại: master token (owm_) hoặc khóa thiết bị (owd_).
     // requestToken() lấy từ header HOẶC ?_t= (GET) — cả hai đều phải được
     // công nhận như nhau, vì <a>/<img>/EventSource không set được header.
@@ -249,6 +304,7 @@ async function handleRequest(req, res) {
           restartRequired: state.restartRequired,
           engine: engine ? { pid: engine.ownerPid, enginePort: engine.port } : null,
           publicUrl: state.tunnelUrl || config.publicUrl || null,
+          edge: { tenant: config.lookupTenant || null, machineName: config.machineName || null },
           devices: pairing.list().length,
           pairingCodeSecondsLeft: pairing.codeSecondsLeft(),
           openworkExeFound: Boolean(findOpenWorkExe(config.openworkExe)),
@@ -306,6 +362,71 @@ async function handleRequest(req, res) {
       return;
     }
 
+    // Tạo thư mục mới con cho nút "+ Thư mục mới" trong picker (cùng khu khóa thiết bị).
+    if (req.method === "POST" && pathname === "/api/fs/mkdir") {
+      try {
+        const body = await readJsonBody(req);
+        const result = await makeDir(body?.dir, body?.name);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(result));
+      } catch (error) {
+        res.writeHead(error?.code === "EEXIST" || error?.code === "EINVAL" ? 400 : 403, {
+          "content-type": "application/json",
+        });
+        res.end(JSON.stringify({ code: error?.code ?? "fs_error", message: String(error?.message ?? error) }));
+      }
+      return;
+    }
+
+    // Xem màn hình máy tính: bridge đẩy frame JPEG liên tục (binary stream).
+    // Ảnh KHÔNG ghi đĩa — RAM giữ đúng 1 khung gần nhất như 9remote.
+    if (req.method === "GET" && pathname === "/api/screen/stream") {
+      screen.addViewer(req, res, {
+        w: Number(url.searchParams.get("w")) || 880,
+        q: Number(url.searchParams.get("q")) || 55,
+      });
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/screen/info") {
+      if (!screen.available) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ available: false, message: screen.setupError ?? "Chỉ hỗ trợ Windows" }));
+        return;
+      }
+      try {
+        await screen.ensureMonitor();
+      } catch (error) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ available: false, message: String(error.message ?? error) }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ available: true, screen: screen.dims(), viewers: screen.viewers.size }));
+      return;
+    }
+
+    // Điều khiển chuột/bàn phím qua daemon C# (SendInput). Tọa độ client gửi
+    // chuẩn hóa 0..1, bridge nhân theo kích thước màn thật.
+    if (req.method === "POST" && pathname === "/api/screen/input") {
+      const ip = req.socket.remoteAddress ?? "?";
+      if (screenInputRateLimited(ip)) {
+        res.writeHead(429, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: "rate_limited", message: "Gửi lệnh quá nhanh" }));
+        return;
+      }
+      try {
+        const body = await readJsonBody(req, 64_000);
+        await screen.input(body);
+        res.writeHead(204);
+        res.end();
+      } catch (error) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: "input_error", message: String(error?.message ?? error) }));
+      }
+      return;
+    }
+
     if (pathname.startsWith("/api/ow/")) {
       if (!state.server || !state.tokenActive) {
         res.writeHead(503, { "content-type": "application/json" });
@@ -348,7 +469,7 @@ function printPairing(base, note, { withMaster = false } = {}) {
   printingPairing = true;
   const code = pairing.ensureCode();
   printingPairing = false;
-  const pairingUrl = `${base}/#p=${code}`;
+  const pairingUrl = `${base}/#p=${code}${tenantHashSuffix()}`;
   console.log("");
   if (note) console.log(note);
   console.log(`  QR ghép thiết bị (mã 1 lần, hết hạn sau ${CODE_TTL_MINUTES} phút):`);
@@ -357,7 +478,7 @@ function printPairing(base, note, { withMaster = false } = {}) {
   console.log("");
   qrcode.generate(pairingUrl, { small: true });
   if (withMaster) {
-    const masterUrl = `${base}/#t=${config.mobileToken}`;
+    const masterUrl = `${base}/#t=${config.mobileToken}${tenantHashSuffix()}`;
     console.log("  QR MASTER (token vĩnh viễn — chỉ dùng tại máy, TUYỆT ĐỐI không chia sẻ):");
     console.log(`  ${masterUrl}`);
     console.log("");
@@ -395,8 +516,15 @@ server.listen(config.port, "127.0.0.1", () => {
   // Heartbeat lên Cloudflare Worker (địa chỉ cố định) nếu đã cấu hình:
   // điện thoại mở đúng 1 URL duy nhất, tự tìm được bridge dù tunnel đổi.
   if (config.lookupUrl && config.lookupSecret) {
-    console.log(`[lookup] reporting tới ${config.lookupUrl}`);
-    startLookup({ getUrl: () => state.tunnelUrl, workerUrl: config.lookupUrl, secret: config.lookupSecret });
+    console.log(
+      `[lookup] reporting tới ${config.lookupUrl}${config.lookupTenant ? ` (phòng: ${config.lookupTenant})` : ""}`
+    );
+    startLookup({
+      getUrl: () => state.tunnelUrl,
+      workerUrl: config.lookupUrl,
+      secret: config.lookupSecret,
+      tenant: config.lookupTenant,
+    });
   }
 
   console.log(`Pairing token dự phòng (chỉ dùng tại máy, không đưa cho ai): ${config.mobileToken}`);

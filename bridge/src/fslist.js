@@ -101,3 +101,24 @@ function fsError(code, message) {
   error.code = code;
   return error;
 }
+
+/** Tạo thư mục mới con bên trong `dir` (cho nút "+ Thư mục mới" trên điện thoại —
+ * server OpenWork có ensureDir nhưng picker cần folder có sẵn để chọc vào). */
+export async function makeDir(dir, name) {
+  const clean = normalize(String(dir ?? "").trim());
+  const label = String(name ?? "").trim();
+  if (!clean) throw fsError("ENOENT", "Chưa chọn thư mục cha.");
+  if (!label) throw fsError("EINVAL", "Chưa nhập tên thư mục.");
+  if (/[\\/:*?\"<>|]/.test(label) || label === "." || label === "..") {
+    throw fsError("EINVAL", 'Tên thư mục không được chứa ký tự \\ / : * ? " < > |');
+  }
+  const target = join(clean, label);
+  try {
+    await fs.mkdir(target, { recursive: false });
+  } catch (error) {
+    if (error?.code === "EEXIST") throw fsError("EEXIST", "Đã có thư mục tên này rồi — hãy chạm vào nó trong danh sách.");
+    if (error?.code === "EACCES" || error?.code === "EPERM") throw fsError("EACCES", "Không có quyền tạo thư mục ở đây.");
+    throw error;
+  }
+  return { path: target, name: label, ok: true };
+}

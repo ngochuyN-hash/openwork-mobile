@@ -1,22 +1,22 @@
 # CODE_SUMMARY — OpenWork Mobile
 
 > Tài liệu tra nhanh "gặp lỗi thì sửa ở đâu". Cập nhật sau mỗi milestone.
-> Cập nhật lần cuối: 2026-09-13 (v1.6: chữ agent streaming từng nhịp trong chat + nút Gửi morph thành nút Dừng + worker web `openwork-mobile-web` qua vite-plugin, SW v5)
+> Cập nhật lần cuối: 2026-09-13 (v1.7: multi-tenant "tòa nhà nhiều phòng" — mỗi bạn một máy trên cùng 1 web, tài khoản user/pass do chủ worker cấp; heartbeat 15 phút; sửa relay gzip qua worker)
 >
 > 📌 **Quy tắc (yêu cầu của chủ dự án):** mỗi khi thay đổi code/cấu trúc/hành vi,
 > PHẢI cập nhật đồng thời file này VÀ `README.md` trong cùng commit.
 
 ## Kiến trúc tổng thể (1 dòng)
 
-Điện thoại mở **đúng 1 URL cố định** (`https://YOUR-WORKER.workers.dev`) → Worker trung chuyển sang địa chỉ tunnel HIỆN TẠI của bridge (bridge heartbeat mỗi 60s) → **openwork-bridge** (127.0.0.1:8788) → **openwork-server** (API có sẵn trong OpenWork, port động) → opencode engine.
+Điện thoại mở **đúng 1 URL cố định** (`https://YOUR-WORKER.workers.dev`) → Worker chọn "phòng" từ header `x-owm-tenant` (không có = `machine:main` của chủ worker) rồi trung chuyển sang địa chỉ tunnel HIỆN TẠI của phòng đó (bridge heartbeat mỗi 15 phút, đổi tunnel là báo ngay) → **openwork-bridge** (127.0.0.1:8788) → **openwork-server** (API có sẵn trong OpenWork, port động) → opencode engine.
 
 ```
-[Phone: PWA — 1 URL cố định duy nhất]
+[Phone: PWA — 1 URL cố định duy nhất, kèm phòng (header x-owm-tenant / ?_m=)]
         │  HTTPS qua CF edge
         ▼
-[Worker openpocket]  ←relay /api/* sang tunnel hiện tại (auth nguyên vẹn, key do bridge kiểm tra)
-        │  + serve web app static
-        ▼ (bridge heartbeat URL hiện tại mỗi 60s, stale >10 phút = offline)
+[Worker openpocket]  ←relay /api/* sang tunnel của PHÒNG (auth nguyên vẹn, key do bridge kiểm tra)
+        │  + serve web app static + quản lý phòng tenant:<id> trên KV
+        ▼ (bridge heartbeat URL hiện tại mỗi 15 phút, stale >20 phút = offline)
 [bridge :8788]  ←proxy whitelist, inject Bearer owt_ owner→  [openwork-server]*  →  [opencode engine]
                                                                     (*port động)
 ```
@@ -34,32 +34,34 @@
 
 | File | Trách nhiệm |
 |---|---|
-| `src/index.js` | Entry: bootstrap token → discovery loop (5s + fs.watch) → HTTP server (API + static). In QR pairing. Lưới an toàn uncaughtException. |
-| `src/config.js` | Config runtime (mobileToken `owm_`, ownerToken `owt_`, port, publicUrl, **lookupUrl + lookupSecret**). Nằm NGOÀI repo: `%APPDATA%\openwork-bridge\config.json`. |
+| `src/index.js` | Entry: bootstrap token → discovery loop (5s + fs.watch) → HTTP server (API + static). In QR pairing (**`currentBase()` ưu tiên `lookupUrl` — địa chỉ cố định — thay vì tunnel; link QR kèm `&m=<phòng>`**). Route **`POST /api/pair/tenant`** (đăng nhập multi-tenant: so user/pass với config, đúng thì `mintDevice` + trả `{token, device, tenant, machineName}`; chưa join → 404 `not_joined`; rate-limit chung với /api/pair). `/api/state` có thêm `edge: {tenant, machineName}`. Lưới an toàn uncaughtException. |
+| `src/config.js` | Config runtime (mobileToken `owm_`, ownerToken `owt_`, port, publicUrl, **lookupUrl + lookupSecret + lookupTenant + machineName**). Nằm NGOÀI repo: `%APPDATA%\openwork-bridge\config.json`. `lookupTenant` rỗng = luồng máy chính (machine:main). |
 | `src/bootstrap.js` | Mint/append token owner vào `%APPDATA%\openwork\tokens.json` (atomic + .bak). hash = sha256 hex thuần, id cố định `openwork-mobile-bridge`. |
 | `src/discovery.js` | Đọc `engine-instances.json` (ownerPid) → parse netstat → probe `/health` → check `/whoami` (token active). |
 | `src/proxy.js` | Reverse proxy `/api/ow/*` → openwork-server. Whitelist sau khi **normalize dot-segments**, method allowlist, inject Bearer owner, **body buffer (cap 64MB)**, stream response + SSE keepalive 20s. Forward thêm `content-length/content-range/accept-ranges` để tải file hiện tiến trình. |
 | `src/auth.js` | Phone → bridge: `owm_` token (header) + `?_t=` (chỉ GET, cho EventSource/img). timingSafeEqual. `requestToken()` trích từ cả 2 nguồn, `isTokenAuthorized()` công nhận như nhau. |
 | `src/static.js` | Serve `web/dist` (SPA fallback index.html). |
-| `src/pairing.js` | Pairing kiểu 9Remote: mã one-time 8 ký tự (30 phút, 1 lần, in trong QR), khóa thiết bị vĩnh viễn owd_ (lưu hash trong devices.json), thu hồi. |
+| `src/pairing.js` | Pairing kiểu 9Remote: mã one-time 8 ký tự (30 phút, 1 lần, in trong QR), khóa thiết bị vĩnh viễn owd_ (lưu hash trong devices.json), thu hồi. **`mintDevice(label)`** cấp khóa không cần mã — dùng chung cho pair-mã và đăng nhập phòng `/api/pair/tenant`. |
 | `src/tunnel.js` | Auto Cloudflare Quick Tunnel (học từ 9Remote): tự tải cloudflared về data dir, spawn `tunnel --url :8788`, dò URL trycloudflare.com từ log, tự chạy lại khi chết, gọi `onUrl` (index.js in QR mới). Tắt bằng `OPENWORK_BRIDGE_TUNNEL=0`. |
-| `src/lookup.js` | Heartbeat lên Worker (địa chỉ cố định): đăng ký URL tunnel hiện tại ngay khi đổi + giữ ấm mỗi 60s. |
+| `src/lookup.js` | Heartbeat lên Worker (địa chỉ cố định): đăng ký URL tunnel hiện tại ngay khi đổi + giữ ấm mỗi **15 phút** (tiết kiệm KV free ~96 ghi/ngày/phòng; worker coi >20 phút là offline). Có `tenant` thì gửi kèm trong body `{url, tenant}` (chữ thường). |
 | `src/openwork-launch.js` | Tìm file OpenWork.exe (env `OPENWORK_EXE` → config `openworkExe` → `%LOCALAPPDATA%\Programs\@openworkdesktop\`) + mở app detached ẩn. Dùng cho endpoint wake + tự mở lúc khởi động. |
 | `src/autostart.js` | Dựng câu lệnh schtasks cho `openpocket autostart` (task `OpenPocketBridge`, ONLOGON, quoting đường dẫn có dấu cách). |
-| `src/fslist.js` | Duyệt thư mục cho tính năng "Duyệt…" khi tạo workspace: `listRoots()` (ổ đĩa Windows dò A–Z + quick links (tên folder thật, vd user/Desktop/Documents/Downloads)) và `listDirs(path)` (CHỈ thư mục — không lộ file, bỏ ẩn `.`/rác hệ thống, symlink soi đích, sắp A→Z vi-locale). |
-| `bin/openpocket.js` | Lệnh toàn cục: start/stop/status/logs/code + `autostart --enable [--with-openwork]/--status/--disable` (Task Scheduler, chạy ẩn, log ra bridge.log). |
+| `src/fslist.js` | Duyệt thư mục cho tính năng "Duyệt…" khi tạo workspace: `listRoots()` (ổ đĩa Windows dò A–Z + quick links (tên folder thật, vd user/Desktop/Documents/Downloads)) và `listDirs(path)` (CHỈ thư mục — không lộ file, bỏ ẩn `.`/rác hệ thống, symlink soi đích, sắp A→Z vi-locale). `makeDir(dir, name)` tạo thư mục con (chặn ký tự cấm  / : * ? " < > |, báo rõ khi trùng tên). |
+| `bin/openpocket.js` | Lệnh toàn cục: start/stop/status/logs/code + **`edge join <worker>` (hỏi user/pass — pass ẩn ký tự — lưu config, tự restart bridge nếu đang chạy) + `edge status`** + `autostart --enable [--with-openwork]/--status/--disable` (Task Scheduler, chạy ẩn, log ra bridge.log). `code` đọc link pair từ log (nhận cả link worker có `&m=`), master QR ưu tiên worker + kèm `&m=`. |
 | `src/paths.js` | Vị trí `%APPDATA%\openwork` (env `OPENWORK_DIR` override cho test). |
 | `test/bridge.test.js` | Unit: netstat parse, whitelist + traversal, auth, hash. `npm test` |
-| `test/pairing.test.js` | Unit pairing kiểu 9Remote: mã 1 lần, mã sai/hết hạn, khóa thiết bị + thu hồi, persist đĩa. |
+| `test/pairing.test.js` | Unit pairing kiểu 9Remote: mã 1 lần, mã sai/hết hạn, khóa thiết bị + thu hồi, persist đĩa, **mintDevice (khóa không cần mã, không tiêu mã one-time)**. |
+| `test/lookup.test.js` | Unit heartbeat: đăng ký NGAY khi khởi động (body kèm `tenant` chữ thường), không tenant giữ body cũ `{url}`, cùng URL trong nhịp giữ ấm không ghi lặp, đổi URL đăng ký lại ngay (server bắt gói thật, tick/heartbeat inject ngắn cho test). |
 | `scripts/e2e-live.mjs` | E2E: tạo session → prompt_async → poll reply → delete. `node scripts/e2e-live.mjs <wsId> <providerId> <modelId>` |
 | `scripts/dbg-prompt.mjs` | Debug prompt: dump status + parts mỗi 5s. |
 
-### worker/ (Cloudflare Worker `openpocket` — "địa chỉ cố định")
+### worker/ (Cloudflare Worker `openpocket` — "địa chỉ cố định" + multi-tenant)
 
 | File | Trách nhiệm |
 |---|---|
-| `src/index.js` | `POST /__register` (x-owm-secret) → lưu URL tunnel vào KV `OWM_STATE`; `/api/*` relay sang tunnel hiện tại (stream giữ nguyên cho SSE); còn lại serve web static từ assets. Offline khi không heartbeat >10 phút. |
+| `src/index.js` | KV có 2 loại key: `tenant:<id>` = `{secret, name, createdAt}` (tài khoản do script cấp) và `machine:<id>` = `{url, updatedAt}` (tunnel hiện tại của phòng; `machine:main` = máy chủ worker, secret env `BRIDGE_SECRET`, không cần tenant). `POST /__register`: có `tenant` trong body → so secret với `tenant:<id>` (timing-safe); không → luồng cũ. `/api/*`: chọn slot theo header `x-owm-tenant` / `?_m=` (EventSource) / rỗng = main; riêng `POST /api/pair/tenant` đọc phòng từ `body.user` (web chưa lưu phòng lúc đăng nhập) rồi relay (bridge vẫn là người so pass). Offline khi stale >**20 phút**. **Relay xin `accept-encoding: identity` + tự bóc `content-encoding: gzip/deflate` bằng `DecompressionStream`** — edge CF từng tự nén response tunnel làm client không xin gzip nhận body rác. Còn lại serve web static từ assets. |
 | `wrangler.jsonc` | name `openpocket` + assets `../web/dist` (SPA, run_worker_first `/api/*`) + KV binding. Lệnh: `npx wrangler kv namespace create` → `wrangler secret put BRIDGE_SECRET` → `wrangler deploy`. |
+| `scripts/tenant.mjs` | Quản lý phòng trên KV (chạy tại máy chủ worker, cần wrangler đã đăng nhập): `add <user> "Tên" [url]` sinh secret `owes_...` + ghi `tenant:<user>` + in "thẻ mời" 2 bước cho bạn; `list`; `revoke <user>` (xóa cả `tenant:` lẫn `machine:` — máy đó hết chỗ đăng ký). Đọc namespace id từ wrangler.jsonc. |
 
 ### web/ (Preact + Vite → dist ~44KB gzip 16KB, design v3 "OpenWork brand")
 
@@ -69,15 +71,15 @@
 | `src/components/ui.jsx` | Loading, SkeletonList, Empty (icon + CTA), Banner, ConfirmDialog (thay `confirm()` native), BackButton (dự phòng), `useConfirm()` hook. |
 | `src/components/logo.jsx` | OpenWorkMark (img SVG chính chủ, tự đổi -dark theo prefers-color-scheme). |
 | `src/components/icons.jsx` | SVG stroke set nội bộ (Folder/File/Image/Upload/Download/Refresh/Back/Plus/Ws/Gear/Clip/**Stop**) — không dùng emoji làm icon. |
-| `src/api.js` | Token localStorage + auto-pair từ `#t=`; `ow()` fetch qua `/api/ow`; `sseUrl()` thêm `?_t=`; unwrap `.data`. File hai chiều: `owUploadFile()` (giới hạn 40MB, FileReader base64), `bytesToBase64()` (chunk, không tràn stack), `formatBytes()` (Intl vi-VN), `MAX_UPLOAD_BYTES`. |
+| `src/api.js` | Token localStorage + auto-pair từ `#t=`; **multi-tenant: phòng (`owm_tenant`/`owm_tenant_name`) lưu kèm, `tenantHeaders()` gắn `x-owm-tenant` vào mọi request, `sseUrl()` thêm `?_m=`, hash mới `#p=CODE&m=PHÒNG` / `#t=TOKEN&m=PHÒNG` tự lưu phòng; `apiPairTenant(user, pass, label)` → `POST /api/pair/tenant`, xong tự lưu khóa + phòng (KHÔNG lưu mật khẩu)**; `ow()` fetch qua `/api/ow`; unwrap `.data`. File hai chiều: `owUploadFile()` (giới hạn 40MB, FileReader base64), `bytesToBase64()` (chunk, không tràn stack), `formatBytes()` (Intl vi-VN), `MAX_UPLOAD_BYTES`. |
 | `src/app.jsx` | Hash router (`#/`, `#/ws/:id`, `#/ws/:id/chat/:sid`, `#/ws/:id/files`, `#/settings`), topbar logo + version + **nút Trở lại ghim cố định** theo route (sessions -> #/workspaces, chat/files -> #/ws/:id; nhận event `owm:topback` từ FileViewer), StatusBanners, BottomNav nổi (`bottomnav-wrap`). |
 | `src/pages/home.jsx` | Home = session gần đây GỘP mọi workspace (pattern Happy/Omnara), poll 15s, chấm màu ws (`wsColor`), FAB tạo session trong ws mới nhất. Tạo session KHÔNG gửi title — để server tự sinh tên theo nội dung như desktop. |
-| `src/pages/pairing.jsx` | Nhập mã `owm_...` lần đầu; hero logo gradient. |
-| `src/pages/workspaces.jsx` | List card có tile + FAB thêm workspace; sheet tạo mới (POST /workspaces/local) có ô path **+ nút "Duyệt…" mở `FolderPickerSheet`**: duyệt thư mục máy tính qua `/api/fs/ls` (chip nhanh tên folder thật (user/Desktop/Documents/Downloads/ổ đĩa), lên cấp trên, chạm thư mục để đi vào, "Chọn thư mục này" điền vào ô path). |
+| `src/pages/pairing.jsx` | Màn kết nối **3 tab**: **Đăng nhập** (mặc định — user/pass do chủ worker cấp, `apiPairTenant`, nhập 1 lần lưu luôn) · Ghép thiết bị (mã 8 ký tự từ QR, auto-run khi mở link `#p=`) · Nhập token (owm_/owd_ dán trực tiếp). Hero logo gradient. |
+| `src/pages/workspaces.jsx` | List card có tile + FAB thêm workspace; sheet tạo mới (POST /workspaces/local) có ô path **+ nút "Duyệt…" mở `FolderPickerSheet`**: duyệt thư mục máy tính qua `/api/fs/ls` (chip nhanh tên folder thật (user/Desktop/Documents/Downloads/ổ đĩa), lên cấp trên, chạm thư mục để đi vào, **"+ Thư mục mới"** (POST `/api/fs/mkdir` rồi chọc thẳng vào), "Chọn thư mục này" điền vào ô path). **create() gửi `folderPath`** (trước đây gửi `path` → server chửi "folderPath is required" — tạo workspace từ điện thoại chưa từng chạy được; server tự mkdir folder chưa tồn tại). |
 | `src/pages/sessions.jsx` | Card session có dot busy/idle + FAB tạo session mới (KHÔNG gửi title — server tự sinh tên); nút back đã dọn lên topbar; SSE live. |
 | `src/pages/chat.jsx` | Transcript (text/tool/reasoning; markdown tối giản: code block/inline code/list — `MarkdownText`), composer nút send icon gradient + **model picker (bắt buộc)** + **nút kẹp giấy đính kèm file** (upload vào `mobile-uploads/` rồi gửi prompt kèm đường dẫn), offline queue, permission cards (Allow/Deny), SSE events. Nút back dọn lên topbar. **Nút Gửi morph thành nút Dừng** (`busy = running && !sending`, icon `StopIcon`, nền đỏ `.btn-send.stop`, chống double-tap bằng `aborting`, draft giữ nguyên, Ctrl+Enter khi busy = abort) — xóa hẳn nút "Dừng agent" cũ. **Realtime liên tục (v1.6)**: vá chữ streaming vào bong bóng đang chạy (`applyStreamingPatch` — nhận cả delta/snapshot từ `message.part.updated`/`message.updated`), lọc session nới lỏng (`sameSession`: nhận `sessionID/sessionId/properties/message/part` + prefix `ses_`), **poll dự phòng 2.5s chỉ khi `running`** + watchdog 30s chống chết kênh ngầm + `onerror`/mở lại app/có mạng lại đều hỏi lại ngay, chỉ bám đáy khi user đang đọc cuối. **File agent nhắc tới**: `findFileRefsInText()` quét text + tool input/output → `FileRefCard` (Mở/Tải về qua `/files/stat` + `/files/raw`, Xem trong Files) + `linkifyFiles()` biến đường dẫn trong text thành link tải. |
 | `src/pages/files.jsx` | Duyệt `/opencode/file` (icon tile, size qua `Intl.NumberFormat` vi-VN); xem/sửa+lưu + upload qua `/files/raw` (base64 chunk qua helper chung, báo tiến trình từng file); xem ảnh (png/jpg/gif/webp/bmp/ico/svg/avif) + **PDF inline (iframe)**; tải về qua `owDownload()` (fetch + Blob + thanh % + Hủy + nút Chia sẻ cho iOS Lưu về Files). Nút back dọn lên topbar, nút Đóng viewer phát event `owm:topback`. |
-| `src/pages/settings.jsx` | Trạng thái bridge, recheck, gỡ pairing (ConfirmDialog), hướng dẫn tailscale. |
+| `src/pages/settings.jsx` | Trạng thái bridge (hàng đầu: **Máy đang kết nối** = tên phòng trong `localStorage`), recheck, gỡ pairing (**xóa token + phòng**, ConfirmDialog), hướng dẫn tailscale. |
 | `public/sw.js` | App-shell precache v7 (`owm-shell-v7`) + navigate fallback (offline mở được shell); không cache `/api/*`. Bump version mỗi lần đổi UI để PWA xóa cache cũ. |
 | `wrangler.jsonc` (trong web/) | Worker phụ `openwork-mobile-web` qua `@cloudflare/vite-plugin` — deploy nhanh `cd web && npm run deploy` (build + wrangler). URL chính chủ vẫn là worker `openpocket` (deploy từ `worker/`). |
 | `public/icon*.png/svg` + manifest | Icon nền `#111113` + vạch xanh `#0090ff` đặc (đúng logo desktop) 192/512 + maskable (safe zone 80%); manifest có id/scope/lang/orientation/shortcuts. |
@@ -95,13 +97,18 @@
 | SSE không stream / đứt liên tục | `bridge/src/proxy.js` (isSSE + keepalive) + `index.js` (`server.requestTimeout = 0`) |
 | Phone không pair được | `bridge/src/auth.js` + token trong `%APPDATA%\openwork-bridge\config.json`; QR in lúc bridge khởi động |
 | Sai danh sách workspace | Do openwork-server; kiểm tra `%APPDATA%\openwork\server.json` |
-| Tạo workspace phải gõ tay đường dẫn / muốn sửa trình duyệt thư mục | `bridge/src/fslist.js` (liệt kê) + `bridge/src/index.js` (route `/api/fs/ls`) + `web/src/pages/workspaces.jsx` (`FolderPickerSheet`) |
+| Tạo workspace phải gõ tay đường dẫn / muốn sửa trình duyệt thư mục | `bridge/src/fslist.js` (liệt kê + mkdir) + `bridge/src/index.js` (route `/api/fs/ls`, `/api/fs/mkdir`) + `web/src/pages/workspaces.jsx` (`FolderPickerSheet`) |
+| Tạo workspace từ điện thoại báo "folderPath is required" | `web/src/pages/workspaces.jsx` `create()` phải gửi `{folderPath}` (đúng tên server đòi) — KHÔNG phải `{path}` |
 | Web trắng / không load | Build lại `web/` (`npm run build`) — bridge serve `web/dist` qua `bridge/src/static.js` |
 | Muốn đổi màu/tông giao diện | `web/src/styles.css` (`:root` tokens) + đồng bộ `.zcode/skills/pwa-workspace-ui/references/tokens.md` |
 | Nút bị che notch/home indicator | Safe-area: `--sat/--sab` trong `web/src/styles.css` (topbar, bottomnav-wrap, FAB, composer) |
 | Input bị iPhone tự zoom khi focus | Font-size field < 16px — kiểm tra `web/src/styles.css` (mọi input/textarea/select phải ≥16px) |
 | Tunnel không lên / URL public không mở được | `bridge/src/tunnel.js` (download cloudflared, parse URL từ log) |
-| Worker trả 503 "bridge_offline" / "bridge_unreachable" | Bridge không heartbeat >10 phút (máy tắt?) hoặc tunnel vừa đổi — đợi ~15-30s cho `src/lookup.js` đăng ký lại. Secret `BRIDGE_SECRET` của worker phải trùng `lookupSecret` trong bridge config |
+| Worker trả 503 "bridge_offline" / "bridge_unreachable" | Bridge không heartbeat >20 phút (máy tắt?) hoặc tunnel vừa đổi — đợi ~15-30s cho `src/lookup.js` đăng ký lại. Không tenant: secret `BRIDGE_SECRET` của worker phải trùng `lookupSecret` trong bridge config; có tenant: `lookupSecret` phải trùng secret trong KV `tenant:<user>` |
+| Đăng nhập web (tab Đăng nhập) báo "Máy này chưa tham gia phòng nào" | Bridge của người đó chưa join — chạy `openpocket edge join <worker-url>` trên máy của HỌ (route `/api/pair/tenant` trong `bridge/src/index.js` trả 404 `not_joined`) |
+| Đăng nhập web báo "Sai tên đăng nhập hoặc mật khẩu" | So 2 đầu: KV `tenant:<user>` (xem bằng `worker/scripts/tenant.mjs list` / cấp lại bằng `revoke` + `add`) và `lookupTenant`+`lookupSecret` trong config máy (nội dung nhập ở `edge join`). Worker chỉ relay, bridge là người so pass (`bridge/src/index.js`) |
+| Điện thoại bạn này thấy dữ liệu máy bạn kia (không được phép xảy ra) | Kiểm tra `x-owm-tenant` được gắn đủ chưa (`web/src/api.js` — `tenantHeaders()`/`sseUrl()`) và worker chọn slot đúng (`worker/src/index.js` — header `x-owm-tenant` / `?_m=` / `machine:main`); worker không giữ key nên sai phòng chỉ có thể là sai/gắn thiếu tenant |
+| Qua worker response thành ký tự lạ / body hỏng với curl | Edge CF tự nén tunnel response — đã sửa trong `worker/src/index.js` relay: subrequest xin `accept-encoding: identity` + bóc `content-encoding: gzip/deflate` bằng `DecompressionStream`; nếu tái diễn kiểm tra 2 chỗ này |
 | Điện thoại mất kết nối sau khi restart máy | **Không còn là vấn đề** (worker tự tìm lại bridge qua heartbeat). Nếu mất hẳn: quota Workers free (100k/ngày) hoặc bridge chưa chạy |
 | OpenWork update đổi format dữ liệu | Adapter cô lập: `discovery.js` (engine-instances.json), `bootstrap.js` (tokens.json) |
 | Session mới toàn tên "Mobile" | `web/src/pages/home.jsx` + `sessions.jsx` (`newSession()`) từng gửi cứng `title: "Mobile"` — đã bỏ, tạo session để trống body `{}` cho server tự sinh tên |
@@ -122,12 +129,14 @@
 
 | Route | Auth | Chức năng |
 |---|---|---|
-| `GET /api/state` | owm_/owd_ | Trạng thái bridge + server + token + engine + thiết bị hiện tại |
+| `GET /api/state` | owm_/owd_ | Trạng thái bridge + server + token + engine + thiết bị hiện tại + `edge: {tenant, machineName}` |
 | `POST /api/pair` | **không cần** (rate-limit 10/phút/IP) | Ghép thiết bị bằng mã 30 phút → trả khóa owd_ vĩnh viễn |
+| `POST /api/pair/tenant` | **không cần** (rate-limit chung, 10/phút/IP) | Đăng nhập multi-tenant: body `{user, secret, label}` — so với `lookupTenant`/`lookupSecret` trong config → trả `{token, device, tenant, machineName}`. Chưa join → 404 `not_joined`; sai → 401 `invalid_credentials` |
 | `GET /api/devices` · `DELETE /api/devices/:id` | owm_/owd_ | Danh sách thiết bị đã ghép + thu hồi |
 | `POST /api/recheck` | owm_ | Ép discovery lại |
 | `POST /api/openwork/wake` | owm_/owd_ (rate-limit 5/phút/IP) | Mở OpenWork desktop trên máy tính (đang chạy rồi → `alreadyRunning`; mới mở → `launched`) |
 | `GET /api/fs/ls?path=` | owm_/owd_ | Duyệt thư mục máy tính. Không `path` → `{isWindows, home, roots[], quick[]}`; có `path` → `{path, parent, name, dirs[]}` (chỉ thư mục). Lỗi: 404 ENOENT/ENOTDIR, 403 EACCES — message tiếng Việt |
+| `POST /api/fs/mkdir` | owm_/owd_ | Tạo thư mục mới `{dir, name}` → `{path, name}`. 400 EEXIST/EINVAL (trùng tên/ký tự cấm), 403 EACCES |
 | `/api/ow/<path>` | owm_ (header hoặc `?_t=` cho GET) | Proxy openwork-server. Whitelist: `/workspaces*`, `/workspace/:id/(events|session-groups|files|opencode/*|engine/reload|artifacts|inbox)`, `/approvals*`, `/files/sessions/*`, `/experimental/(ui-control|extensions)`, `/status`, `/capabilities`, `/whoami`, `/health` |
 
 ## Endpoint openwork-server hay dùng (gọi qua `/api/ow/`)
@@ -165,6 +174,9 @@
 - opencode engine trong OpenWork spawn bằng `OPENCODE_SERVER_USERNAME/PASSWORD` random mỗi lần — credential thật chỉ nằm trong memory openwork-server, **registry authProbe là giá trị stale** → đừng cố gọi thẳng engine.
 - Đã E2E full 2026-09-12: tạo session → prompt (model `opencode/nemotron-3-ultra-free`) → reply "OK" sau ~35s → delete; ghi/đọc file `bridge-test.txt` OK.
 - **Quick Tunnel (v1.1):** học từ [9Remote](https://github.com/decolua/9remote) — họ cũng dùng quick tunnel, nhưng thêm: tự động hóa cloudflared + QR lại khi URL đổi + (họ có) edge lookup Workers map machineId→URL. Mình đã làm 2 cái đầu; cái thứ 3 (Workers) để sau nếu cần auto-rediscovery hoàn toàn. Đã test public URL qua CF edge: /api/state + web + workspaces đều 200.
+- **Multi-tenant "tòa nhà nhiều phòng" (v1.7):** một web chung cho nhiều máy — mỗi bridge một phòng (KV `machine:<id>`), tài khoản `tenant:<id>` do chủ worker cấp bằng `worker/scripts/tenant.mjs` (cùng 1 cặp user/pass dùng ở bridge `edge join` lẫn web tab Đăng nhập). Web lưu khóa vĩnh viễn + tên phòng, KHÔNG lưu mật khẩu; worker không giữ khóa nào — sai phòng = không có gì để đánh cắp. E2E chuỗi thật 2026-09-13: worker → tunnel → bridge cấp khóa, `/api/state` xuyên chuỗi OK, máy không phòng vẫn 503 tách bạch. Máy nhà giữ luồng `machine:main` không đổi gì.
+- **KV free là giới hạn cứng ~1000 ghi/ngày** → heartbeat giãn 60s → 15 phút (stale 20 phút), ~96 ghi/ngày/phòng → đủ ~10 phòng. Bridge chết vẫn báo lỗi ngay qua `bridge_unreachable` (fetch hụt), nên stale lâu chỉ làm chậm thông báo "offline", không ảnh hưởng trải nghiệm chính.
+- **EventSource không set được header** → phòng đi kèm `?_m=` trên URL SSE (song song `?_t=` của token) — `web/src/api.js` `sseUrl()` + worker `url.searchParams.get("_m")`.
 
 ## Chạy
 
@@ -178,4 +190,6 @@ cd bridge && npm test
 # E2E live (cần OpenWork đang chạy + đã qua bước restart 1 lần)
 node bridge/scripts/e2e-live.mjs ws_3d8246222830 opencode nemotron-3-ultra-free
 # remote: tailscale serve --bg 8788 + set OPENWORK_PUBLIC_URL rồi chạy lại bridge
+# multi-tenant: cấp/xóa phòng trên KV thật (cần wrangler đã đăng nhập)
+cd worker && node scripts/tenant.mjs add nam "Máy của Nam"   # hoặc: list / revoke nam
 ```

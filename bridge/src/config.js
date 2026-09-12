@@ -44,6 +44,12 @@ export function loadConfig() {
     // địa chỉ tunnel hiện tại lên đó để điện thoại luôn tìm được máy.
     lookupUrl: typeof parsed.lookupUrl === "string" ? parsed.lookupUrl : "",
     lookupSecret: typeof parsed.lookupSecret === "string" ? parsed.lookupSecret : "",
+    // "Phòng" trên worker chung (multi-tenant): cặp lookupTenant/lookupSecret do
+    // chủ worker cấp, nhập 1 lần bằng `openpocket edge join`. Rỗng = luồng cũ
+    // (máy chủ worker: secret môi trường -> machine:main).
+    lookupTenant: typeof parsed.lookupTenant === "string" ? parsed.lookupTenant : "",
+    // Tên máy hiển thị trên web khi đăng nhập phòng (tùy chọn).
+    machineName: typeof parsed.machineName === "string" ? parsed.machineName : "",
     // Đường dẫn file .exe OpenWork desktop (trống = tự tìm ở chỗ hay gặp).
     // Override bằng env OPENWORK_EXE. Dùng cho "bật OpenWork từ điện thoại".
     openworkExe: typeof parsed.openworkExe === "string" ? parsed.openworkExe : "",

@@ -6,11 +6,11 @@ import { isAuthorized, isTokenAuthorized, requestToken } from "../src/auth.js";
 import { hashToken } from "../src/bootstrap.js";
 import { candidateExePaths, findOpenWorkExe } from "../src/openwork-launch.js";
 import { AUTOSTART_TASK_NAME, buildAutostartAction, bridgeEntryPath } from "../src/autostart.js";
-import { listDirs } from "../src/fslist.js";
+import { listDirs, makeDir } from "../src/fslist.js";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 
 test("parseListeningPorts filters by pid and extracts ports", () => {
   const netstat = [
@@ -159,4 +159,17 @@ test("listDirs: chỉ trả thư mục, bỏ ẩn/rác hệ thống, sắp A→Z
 
 test("listDirs: lỗi rõ ràng khi thư mục không tồn tại", async () => {
   await assert.rejects(() => listDirs(join(tmpdir(), "ow-khong-ton-tai-xyz-123")), /không tồn tại/);
+});
+
+test("makeDir: tạo thư mục con, chặn ký tự cấm, báo rõ khi trùng tên", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ow-mkdir-"));
+  try {
+    const made = await makeDir(root, "Project Moi 2026");
+    assert.equal(existsSync(join(root, "Project Moi 2026")), true);
+    assert.match(made.path, /Project Moi 2026$/);
+    await assert.rejects(() => makeDir(root, "a/b"), /ký tự/);
+    await assert.rejects(() => makeDir(root, "Project Moi 2026"), /Đã có thư mục/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

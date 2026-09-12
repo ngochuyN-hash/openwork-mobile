@@ -98,6 +98,17 @@ export class PairingService {
       return null;
     }
     this.used = true;
+    const result = this.mintDevice(label);
+    this.ensureCode(); // mã vừa dùng -> làm mới mã mới cho thiết bị tiếp theo
+    return result;
+  }
+
+  /**
+   * Cấp khóa vĩnh viễn cho một thiết bị mới (dùng chung: pair bằng mã one-time
+   * HOẶC đăng nhập phòng multi-tenant qua /api/pair/tenant).
+   * @param {string} label tên thiết bị (tùy chọn)
+   */
+  mintDevice(label) {
     const token = `owd_${randomBytes(24).toString("hex")}`;
     const device = {
       id: `d_${randomUUID().slice(0, 8)}`,
@@ -108,7 +119,6 @@ export class PairingService {
     };
     this.devices.unshift(device);
     saveDevices(this.devices);
-    this.ensureCode(); // mã vừa dùng -> làm mới mã mới cho thiết bị tiếp theo
     return { token, device: this.publicDevice(device) };
   }
 

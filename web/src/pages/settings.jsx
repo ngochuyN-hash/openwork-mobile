@@ -1,5 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import { clearToken, apiRecheck, apiDevices, apiRevokeDevice, apiWakeOpenWork } from "../api.js";
+import { clearToken, clearTenant, getTenantName, apiRecheck, apiDevices, apiRevokeDevice, apiWakeOpenWork } from "../api.js";
 import { useConfirm } from "../components/ui.jsx";
 
 export function SettingsPage({ state, onRecheck, onUnpaired }) {
@@ -62,16 +62,18 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
   function unpair() {
     askConfirm({
       title: "Gỡ pairing?",
-      body: "Điện thoại này sẽ quên token và quay về màn nhập mã pairing.",
+      body: "Điện thoại này sẽ quên token và phòng đang kết nối, quay về màn đăng nhập/ghép thiết bị.",
       confirmLabel: "Gỡ pairing",
       onConfirm: () => {
         clearToken();
+        clearTenant();
         onUnpaired();
       },
     });
   }
 
   const rows = [
+    ["Máy đang kết nối", getTenantName() || "máy chính (không phòng)"],
     ["openwork-server", state?.server ? `${state.server.baseUrl} (v${state.server.version})` : "chưa tìm thấy"],
     ["opencode", state?.server?.opencodeVersion ?? "—"],
     ["Token", state?.tokenActive ? "đang hoạt động" : state?.restartRequired ? "chờ restart OpenWork" : "đang kiểm tra…"],

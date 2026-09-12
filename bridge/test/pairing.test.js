@@ -74,3 +74,24 @@ test("token rác không xác thực được; thiết bị persist qua instance 
     restore();
   }
 });
+
+test("mintDevice: cấp khóa vĩnh viễn không cần mã (dùng cho đăng nhập phòng)", () => {
+  const { service, restore } = freshService();
+  try {
+    const { token, device } = service.mintDevice("Web của Nam");
+    assert.ok(token.startsWith("owd_"));
+    assert.equal(device.label, "Web của Nam");
+    assert.equal(service.authenticate(token)?.id, device.id);
+
+    // không tên -> nhãn mặc định theo thời gian, vẫn dùng được
+    const anon = service.mintDevice("");
+    assert.ok(anon.device.label.length > 0);
+    assert.ok(service.authenticate(anon.token));
+
+    // khóa của mintDevice KHÔNG tiêu tốn mã one-time (mã cũ vẫn còn giá trị)
+    const code = service.ensureCode();
+    assert.ok(service.pair(code, "iPhone"));
+  } finally {
+    restore();
+  }
+});

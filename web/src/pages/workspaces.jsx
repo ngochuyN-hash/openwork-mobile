@@ -104,7 +104,9 @@ function CreateWorkspaceDialog({ onClose, onCreated }) {
     setBusy(true);
     setError("");
     try {
-      await ow("/workspaces/local", { method: "POST", body: { path: path.trim(), name: name.trim() || undefined } });
+      // Server đòi tên trường `folderPath` (gửi `path` sẽ bị chửi "folderPath is required");
+      // folder chưa tồn tại cũng được — server tự mkdir (ensureDir).
+      await ow("/workspaces/local", { method: "POST", body: { folderPath: path.trim(), name: name.trim() || undefined } });
       onCreated();
       onClose();
     } catch (e) {
@@ -160,12 +162,15 @@ function CreateWorkspaceDialog({ onClose, onCreated }) {
 }
 
 /** Sheet duyệt thư mục máy tính: chọc ổ đĩa → thư mục → bấm chọn.
- * Mở lần đầu rơi vào thư mục Nhà cho nhanh; vẫn còn nút lên cấp trên. */
+ * Mở lần đầu rơi vào thư mục Nhà cho nhanh; có nút tạo thư mục mới cho project chưa có chỗ ở. */
 function FolderPickerSheet({ onPick, onClose }) {
   const [quick, setQuick] = useState(null); // {roots, quick, home} từ bridge
   const [view, setView] = useState(null); // {kind:"dir", path, parent, dirs} hoặc {kind:"roots"}
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [newDirOpen, setNewDirOpen] = useState(false);
+  const [newDirName, setNewDirName] = useState("");
+  const [creating, setCreating] = useState(false);
 
   async function goTo(target) {
     setLoading(true);
@@ -177,6 +182,22 @@ function FolderPickerSheet({ onPick, onClose }) {
       setError(String(e.message || e));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function createDir() {
+    if (!view?.path || !newDirName.trim()) return;
+    setCreating(true);
+    setError("");
+    try {
+      const made = await apiFsMkdir(view.path, newDirName.trim());
+      setNewDirOpen(false);
+      setNewDirName("");
+      await goTo(made.path); // tạo xong chọc thẳng vào thư mục mới
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setCreating(false);
     }
   }
 
@@ -240,6 +261,37 @@ function FolderPickerSheet({ onPick, onClose }) {
         {view?.kind === "dir" && (
           <div class="fs-path mono" title={view.path}>
             {view.path}
+          </div>
+        )}
+
+        {view?.kind === "dir" && (
+          <div style="margin-bottom:8px">
+            {newDirOpen ? (
+              <div style="display:flex;gap:8px">
+                <input
+                  type="text"
+                  style="flex:1;min-width:0"
+                  value={newDirName}
+                  autocomplete="off"
+                  spellcheck={false}
+                  placeholder="Tên thư mục mới…"
+                  onInput={(e) => setNewDirName(e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") createDir();
+                  }}
+                />
+                <button class="btn" style="flex:none" disabled={creating || !newDirName.trim()} onClick={createDir}>
+                  Tạo
+                </button>
+                <button class="btn ghost" style="flex:none" onClick={() => { setNewDirOpen(false); setNewDirName(""); }}>
+                  Hủy
+                </button>
+              </div>
+            ) : (
+              <button class="btn small ghost" disabled={loading} onClick={() => setNewDirOpen(true)}>
+                + Thư mục mới
+              </button>
+            )}
           </div>
         )}
 

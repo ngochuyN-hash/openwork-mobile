@@ -169,6 +169,90 @@ if (cmd === "autostart") {
   process.exit(0);
 }
 
+if (cmd === "edge") {
+  // Tham gia "phòng" trên worker chung (multi-tenant): cặp user/pass do chủ
+  // worker cấp, nhập 1 lần — bridge heartbeat lên phòng đó mãi về sau.
+  const sub = (args[1] || "status").toLowerCase();
+  const config = loadConfig();
+  const TENANT_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
+
+  if (sub === "join") {
+    const workerUrl = (args[2] || config.lookupUrl || "").replace(/\/+$/, "");
+    if (!/^https:\/\//i.test(workerUrl)) {
+      console.log("Dùng: openpocket edge join <địa-chỉ-worker>");
+      console.log("vd:   openpocket edge join https://YOUR-WORKER.workers.dev");
+      process.exit(1);
+    }
+    const { createInterface } = await import("node:readline/promises");
+    const ask = async (text) => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        return (await rl.question(text)).trim();
+      } finally {
+        rl.close();
+      }
+    };
+    // Nhập mật khẩu ẩn ký tự (ghi prompt tay vì output bị nuốt hết)
+    const askHidden = async (text) => {
+      const { Writable } = await import("node:stream");
+      const sink = new Writable({ write (_c, _e, cb) { cb(); } });
+      const rl = createInterface({ input: process.stdin, output: sink, terminal: true });
+      process.stdout.write(text);
+      try {
+        return (await rl.question("")).trim();
+      } finally {
+        rl.close();
+      }
+    };
+
+    console.log(`Tham gia phòng trên worker: ${workerUrl}`);
+    const user = (await ask("Tên đăng nhập (mã phòng): ")).toLowerCase();
+    const pass = await askHidden("Mật khẩu: ");
+    const name = await ask("Tên máy hiển thị trên web (Enter để bỏ qua): ");
+    if (!TENANT_RE.test(user)) {
+      console.log("❌ Tên đăng nhập chỉ gồm a-z, 0-9 và dấu gạch ngang, 2-32 ký tự (vd: nam).");
+      process.exit(1);
+    }
+    if (!pass) {
+      console.log("❌ Chưa nhập mật khẩu.");
+      process.exit(1);
+    }
+    config.lookupUrl = workerUrl;
+    config.lookupTenant = user;
+    config.lookupSecret = pass;
+    if (name) config.machineName = name;
+    saveConfig(config);
+    console.log(`✅ Đã ghi phòng "${user}" vào config.`);
+    if (readPid()) {
+      console.log("🔁 Bridge đang chạy — khởi động lại để nhận phòng mới…");
+      const self = fileURLToPath(import.meta.url);
+      spawnSync(process.execPath, [self, "stop"], { stdio: "inherit" });
+      spawnSync(process.execPath, [self, "start"], { stdio: "inherit" });
+      console.log("   Xong! Đợi ~15s để bridge đăng ký tunnel lên worker.");
+    } else {
+      console.log("   Bridge chưa chạy — mở bằng: openpocket start");
+    }
+    process.exit(0);
+  }
+
+  if (sub === "status") {
+    const pid = readPid();
+    console.log(`Bridge     : ${pid ? `đang chạy (pid ${pid})` : "không chạy (openpocket start)"}`);
+    if (config.lookupTenant) {
+      console.log(`Phòng      : ${config.lookupTenant}${config.machineName ? ` (${config.machineName})` : ""}`);
+      console.log(`Worker     : ${config.lookupUrl}`);
+      console.log("Web        : mở worker ở trên → tab Đăng nhập, dùng cùng cặp user/pass.");
+    } else {
+      console.log("Phòng      : (không tham gia — chạy luồng máy chính machine:main)");
+      console.log("Muốn tham gia phòng: openpocket edge join <địa-chỉ-worker>");
+    }
+    process.exit(0);
+  }
+
+  console.log("Dùng: openpocket edge join <địa-chỉ-worker> | openpocket edge status");
+  process.exit(1);
+}
+
 if (cmd === "code") {
   if (!existsSync(logFile())) {
     console.log("Bridge chưa chạy. Chạy: openpocket start");
@@ -183,8 +267,8 @@ if (cmd === "code") {
   }
   const latest = blocks[blocks.length - 1];
   const codeMatch = latest.match(/([A-Z2-9]{4}-[A-Z2-9]{4})/);
-  // Tìm URL tunnel tương ứng (khối tunnel mới nhất chứa #p=)
-  const urls = [...text.matchAll(/https:\/\/[a-z0-9-]+\.trycloudflare\.com\/#p=([A-Z2-9]+)/gi)];
+  // Tìm URL pair tương ứng (worker hoặc tunnel mới nhất, có thể kèm &m=phòng)
+  const urls = [...text.matchAll(/https:\/\/[^\s]+\/#p=[A-Z2-9]+/gi)];
   const lastUrl = urls.length ? urls[urls.length - 1][0] : null;
   console.log("");
   console.log(`📱 Mã ghép hiện tại: ${codeMatch ? codeMatch[1] : "(không đọc được)"}`);
@@ -200,7 +284,10 @@ if (cmd === "code") {
   // Mã vĩnh viễn: đọc thẳng từ config (file local, an toàn vì lệnh chạy tại máy)
   try {
     const config = loadConfig();
-    const masterUrl = `http://127.0.0.1:${config.port || 8788}/#t=${config.mobileToken}`;
+    // Ưu tiên worker (địa chỉ cố định) nếu máy đã join phòng; kèm &m= để web tự điền
+    const base = (config.lookupUrl || `http://127.0.0.1:${config.port || 8788}`).replace(/\/+$/, "");
+    const mSuffix = config.lookupTenant ? `&m=${encodeURIComponent(config.lookupTenant)}` : "";
+    const masterUrl = `${base}/#t=${config.mobileToken}${mSuffix}`;
     console.log("⭐ Mã VĨNH VIỄN (có hiệu lực mãi, chỉ dùng tại máy — đừng chia sẻ):");
     console.log(`   ${config.mobileToken}`);
     console.log("");
@@ -223,6 +310,8 @@ Dùng:
   openpocket status   Xem bridge có chạy không
   openpocket logs     Xem log (tail 50 dòng, Ctrl+C để thoát)
   openpocket code     Xem mã ghép + link mở trên điện thoại
+  openpocket edge join <địa-chỉ-worker>   Tham gia "phòng" trên worker chung (nhập user/pass do chủ worker cấp, 1 lần)
+  openpocket edge status                  Xem phòng đang tham gia
   openpocket autostart --enable [--with-openwork]   Tự chạy bridge khi đăng nhập Windows
   openpocket autostart --status                     Xem tự chạy đang bật hay tắt
   openpocket autostart --disable                    Tắt tự chạy`);

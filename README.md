@@ -31,7 +31,7 @@ opencode engine  →  sessions · models · files
 
 ## Tính năng (v1)
 
-- 📁 **Workspaces**: danh sách live, tạo workspace mới (FAB gradient); khi tạo **bấm nút "Duyệt…" để chọn thư mục trên máy tính** (chip nhanh tên folder thật (user/Desktop/Downloads), chọc ổ đĩa → thư mục từng cấp) — không cần gõ tay đường dẫn
+- 📁 **Workspaces**: danh sách live, tạo workspace mới (FAB gradient); khi tạo **bấm nút "Duyệt…" để chọn thư mục trên máy tính** (chip nhanh tên folder thật, chọc ổ đĩa → thư mục từng cấp, **"+ Thư mục mới"** tạo luôn chỗ ở cho project chưa có) — không cần gõ tay đường dẫn; folder chưa tồn tại cũng được, server tự tạo
 - 💬 **Sessions**: danh sách (busy/idle realtime), tạo mới, xem transcript đầy đủ (text/tool/reasoning, markdown + code block), gửi prompt (chọn model); **chữ agent chảy dần từng đoạn ngay khi đang trả lời**, mất mạng/khóa màn hình/đổi Wifi mở lại tự bắt kịp không cần thoát ra vào lại; khi agent đang chạy, **nút Gửi biến thành nút Dừng đỏ (■)** — bấm lại để ngắt như ChatGPT/Gemini, draft đang gõ được giữ nguyên
 - 🔐 **Permissions**: duyệt Allow/Deny ngay trên điện thoại khi agent xin phép
 - 🗂 **Files**: duyệt cây thư mục, xem/sửa + lưu file text, xem ảnh **+ PDF**, upload từ điện thoại, tải file về (hiện % + Hủy + nút Chia sẻ để iOS Lưu về Files)
@@ -83,10 +83,12 @@ Bridge khởi động xong sẽ **tự mở Cloudflare Quick Tunnel** (tự tả
 - Không SLA (dùng cá nhân: giữ bridge chạy là ổn). Bridge cũng tự revive cloudflared nếu nó chết.
 - Tắt tunnel: chạy bridge với `OPENWORK_BRIDGE_TUNNEL=0`.
 
-**Muốn URL cố định vĩnh viễn + không cần quét lại QR** — 2 lựa chọn nâng cấp:
+**URL cố định vĩnh viễn — đã có sẵn, 0đ:** web chính thức chạy tại [`https://YOUR-WORKER.workers.dev`](https://YOUR-WORKER.workers.dev) (Cloudflare Worker `worker/` trong dự án). Bridge tự "báo địa chỉ" lên worker mỗi 15 phút (đổi tunnel là báo ngay), nên điện thoại chỉ cần nhớ đúng 1 URL này — tunnel đổi bao nhiêu cũng tự tìm lại. QR ghép thiết bị cũng tự trỏ về URL này. Hai lựa chọn dưới đây chỉ cần khi muốn thêm lớp riêng tư:
+
 | Cách | Chi phí | Ghi chú |
 |---|---|---|
-| Cloudflare **Named Tunnel** + domain | ~200k/năm (tiền domain) | URL cố định; thêm được Cloudflare Access (OTP email) — bảo mật đẹp nhất khi lộ công khai |
+| **Worker openpocket (mặc định)** | 0đ | URL cố định + multi-tenant (mục dưới); đã deploy sẵn |
+| Cloudflare **Named Tunnel** + domain | ~200k/năm (tiền domain) | URL cố định; thêm được Cloudflare Access (OTP email) |
 | **Tailscale** (`tailscale serve --bg 8788`) | 0đ | URL cố định `https://<pc>.<tailnet>.ts.net`, riêng tư nhất — nhưng điện thoại phải cài app Tailscale |
 
 **Tự chạy bridge khi bật máy (khuyên dùng):**
@@ -99,6 +101,25 @@ Không kèm `--with-openwork` thì chỉ bridge tự chạy (OpenWork bạn tự
 
 **Bật OpenWork từ điện thoại:** máy tính đang bật + bridge đang chạy mà app OpenWork chưa mở → mở app trên điện thoại sẽ thấy nút **"Bật OpenWork trên máy tính"** (ngay banner đỏ + trong Cài đặt → Trạng thái bridge). Bấm → đợi ~20s → bấm Kiểm tra lại. Lưu ý: máy tính tắt hẳn/ngủ sâu thì chịu — phải bật máy lên trước.
 
+## Nhiều máy trên cùng một web (multi-tenant)
+
+Web `YOUR-WORKER.workers.dev` là "tòa nhà nhiều phòng": ai cũng mở được, nhưng mỗi người chỉ đụng được OpenWork **máy nhà mình**. Chủ worker cấp cho mỗi người bạn một cặp **tên đăng nhập + mật khẩu** — dùng được cho cả 2 đầu:
+
+| Đầu | Cách nhập |
+|---|---|
+| Máy PC của bạn ấy | `openpocket edge join https://YOUR-WORKER.workers.dev` → nhập user/pass (1 lần, lưu config) — bridge tự heartbeat lên "phòng" của họ |
+| Điện thoại của bạn ấy | Mở web → tab **Đăng nhập** → nhập cùng cặp user/pass (1 lần — nhận khóa vĩnh viễn như pair thường, mật khẩu không lưu trên web) |
+
+Lệnh phía chủ worker (chạy trong `worker/`, cần `wrangler` đã đăng nhập):
+
+```bash
+node scripts/tenant.mjs add nam "Máy của Nam"   # cấp phòng + in "thẻ mời" gửi bạn
+node scripts/tenant.mjs list                    # xem các phòng đang có
+node scripts/tenant.mjs revoke nam              # xóa phòng (máy đó hết chỗ báo địa chỉ)
+```
+
+Máy của chủ worker không phải đổi gì — không join phòng thì tiếp tục chạy luồng `machine:main` như cũ. Giới hạn đáng nhớ: bridge heartbeat mỗi 15 phút nên KV free (~1000 ghi/ngày) đủ cho **~10 phòng**; mỗi điện thoại ghép 1 máy (đổi máy = Cài đặt → Gỡ pairing → đăng nhập lại).
+
 ## Cấu trúc dự án
 
 ```
@@ -106,8 +127,11 @@ bridge/          # Node.js — discovery, token bootstrap, proxy, static, QR
   src/           # index.js (entry) · proxy.js · discovery.js · bootstrap.js · auth.js …
   test/          # unit test (npm test)
   scripts/       # e2e-live.mjs, dbg-prompt.mjs (test live với OpenWork thật)
+worker/          # Cloudflare Worker "openpocket" — URL cố định + multi-tenant
+  src/index.js   # /__register (đăng ký phòng) · /api/* (relay theo phòng) · serve web
+  scripts/tenant.mjs # cấp/xóa phòng (tài khoản user/pass) trên KV
 web/             # PWA Preact + Vite → build ra web/dist do bridge serve
-  src/pages/     # pairing · workspaces · sessions · chat · files · settings
+  src/pages/     # pairing (Đăng nhập/Ghép/Nhập token) · workspaces · sessions · chat · files · settings
   src/components/# ui.jsx (Loading/Skeleton/Empty/Banner/Sheet/Confirm) · icons.jsx (SVG set)
   .zcode/skills/ # pwa-workspace-ui: skill thiết kế nội bộ (tokens · ui-rules · pwa-checklist)
 README.md        # file này
@@ -119,6 +143,7 @@ CODE_SUMMARY.md  # bản đồ code + bảng "triệu chứng → chỗ sửa"
 - **Mã ghép một lần, sống 30 phút**: nằm trong QR/terminal của bridge — dùng đúng 1 lần rồi chết. QR bị lộ cũng chỉ nguy hiểm trong 30 phút.
 - **Khóa thiết bị vĩnh viễn (`owd_...`)**: sau khi ghép, mỗi điện thoại nhận khóa riêng (lưu trong điện thoại, bridge chỉ lưu hash). Mở lại app bao giờ cũng vào thẳng.
 - **Thu hồi từng thiết bị**: trong app → Cài đặt → *Thiết bị đã ghép*. Mất điện thoại? Bấm thu hồi là nó mất quyền truy cập ngay lập tức.
+- **Phòng (multi-tenant)**: secret của mỗi phòng nằm trên worker KV và bridge của người đó; worker KHÔNG giữ khóa điện thoại của ai — mọi khóa vẫn do bridge tự kiểm tra. Web chỉ lưu khóa vĩnh viễn, không lưu mật khẩu. Xóa phòng (`tenant.mjs revoke`) là máy đó không tự báo địa chỉ được nữa.
 - Token master `owm_...` chỉ là đường dự phòng in trên terminal (dùng tại máy, không đưa cho ai).
 - Bridge chỉ nghe `127.0.0.1` — bên ngoài chỉ thấy qua tunnel/tailnet; mọi request phải có token hợp lệ (deny-by-default); `/api/pair` được rate-limit chống dò mã.
 - Token owner `owt_...` của OpenWork không bao giờ gửi ra browser; proxy whitelist chỉ cho phép path quản trị (`bridge/src/proxy.js`).
@@ -140,6 +165,7 @@ node bridge/scripts/e2e-live.mjs <wsId> <provider> <model>   # E2E live
 cd web && npm run dev                                   # dev server (proxy /api qua bridge)
 cd web && npm run build && cd ../worker && npx wrangler deploy # build + deploy worker "địa chỉ cố định" (openpocket)
 cd web && npm run deploy                                # build + deploy worker phụ openwork-mobile-web (vite-plugin, URL dự phòng)
+cd worker && node scripts/tenant.mjs add <user> "Tên"   # cấp phòng multi-tenant (list / revoke để quản)
 ```
 
 ## Quy tắc dự án
