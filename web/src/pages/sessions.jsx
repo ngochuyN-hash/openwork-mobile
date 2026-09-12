@@ -74,7 +74,7 @@ export function SessionsPage({ route }) {
   return (
     <>
       <div class="page-head">
-        <BackButton label="Workspace" onBack={() => navigate("#/")} />
+        <BackButton label="Workspace" onBack={() => navigate("#/workspaces")} />
       </div>
 
       {error && <Banner kind="err" actionLabel="Thử lại" onAction={load}>{error}</Banner>}

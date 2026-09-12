@@ -1,21 +1,24 @@
 # CODE_SUMMARY — OpenWork Mobile
 
 > Tài liệu tra nhanh "gặp lỗi thì sửa ở đâu". Cập nhật sau mỗi milestone.
-> Cập nhật lần cuối: 2026-09-12 (v3 redesign UI "OpenWork brand" — bám bảng màu desktop chính chủ)
+> Cập nhật lần cuối: 2026-09-12 (v1.3: worker "địa chỉ cố định" openpocket + lookup heartbeat — đã E2E qua internet)
 >
 > 📌 **Quy tắc (yêu cầu của chủ dự án):** mỗi khi thay đổi code/cấu trúc/hành vi,
 > PHẢI cập nhật đồng thời file này VÀ `README.md` trong cùng commit.
 
 ## Kiến trúc tổng thể (1 dòng)
 
-Điện thoại mở PWA qua **Cloudflare Quick Tunnel** (public, 0đ, không cần app) → **openwork-bridge** (Node, 127.0.0.1:8788) → **openwork-server** (API có sẵn trong OpenWork desktop, port động) → opencode engine sidecar.
+Điện thoại mở **đúng 1 URL cố định** (`https://YOUR-WORKER.workers.dev`) → Worker trung chuyển sang địa chỉ tunnel HIỆN TẠI của bridge (bridge heartbeat mỗi 60s) → **openwork-bridge** (127.0.0.1:8788) → **openwork-server** (API có sẵn trong OpenWork, port động) → opencode engine.
 
 ```
-[Phone: PWA qua trycloudflare.com]  ←HTTPS qua CF edge←  cloudflared (bridge tự spawn)
-        │  REST + SSE (Bearer owm_)
+[Phone: PWA — 1 URL cố định duy nhất]
+        │  HTTPS qua CF edge
         ▼
-[bridge :8788]  ←proxy whitelist, inject Bearer owt_ owner→  [openwork-server :62222*]  →  [opencode engine]
-                                                                    (*port ĐỔI mỗi lần chạy OpenWork)
+[Worker openpocket]  ←relay /api/* sang tunnel hiện tại (auth nguyên vẹn, key do bridge kiểm tra)
+        │  + serve web app static
+        ▼ (bridge heartbeat URL hiện tại mỗi 60s, stale >10 phút = offline)
+[bridge :8788]  ←proxy whitelist, inject Bearer owt_ owner→  [openwork-server]*  →  [opencode engine]
+                                                                    (*port động)
 ```
 
 ## Vì sao kiến trúc này
@@ -32,7 +35,7 @@
 | File | Trách nhiệm |
 |---|---|
 | `src/index.js` | Entry: bootstrap token → discovery loop (5s + fs.watch) → HTTP server (API + static). In QR pairing. Lưới an toàn uncaughtException. |
-| `src/config.js` | Config runtime (mobileToken `owm_`, ownerToken `owt_`, port, publicUrl). Nằm NGOÀI repo: `%APPDATA%\openwork-bridge\config.json`. |
+| `src/config.js` | Config runtime (mobileToken `owm_`, ownerToken `owt_`, port, publicUrl, **lookupUrl + lookupSecret**). Nằm NGOÀI repo: `%APPDATA%\openwork-bridge\config.json`. |
 | `src/bootstrap.js` | Mint/append token owner vào `%APPDATA%\openwork\tokens.json` (atomic + .bak). hash = sha256 hex thuần, id cố định `openwork-mobile-bridge`. |
 | `src/discovery.js` | Đọc `engine-instances.json` (ownerPid) → parse netstat → probe `/health` → check `/whoami` (token active). |
 | `src/proxy.js` | Reverse proxy `/api/ow/*` → openwork-server. Whitelist sau khi **normalize dot-segments**, method allowlist, inject Bearer owner, **body buffer (cap 64MB)**, stream response + SSE keepalive 20s. |
@@ -40,20 +43,31 @@
 | `src/static.js` | Serve `web/dist` (SPA fallback index.html). |
 | `src/pairing.js` | Pairing kiểu 9Remote: mã one-time 8 ký tự (30 phút, 1 lần, in trong QR), khóa thiết bị vĩnh viễn owd_ (lưu hash trong devices.json), thu hồi. |
 | `src/tunnel.js` | Auto Cloudflare Quick Tunnel (học từ 9Remote): tự tải cloudflared về data dir, spawn `tunnel --url :8788`, dò URL trycloudflare.com từ log, tự chạy lại khi chết, gọi `onUrl` (index.js in QR mới). Tắt bằng `OPENWORK_BRIDGE_TUNNEL=0`. |
+| `src/lookup.js` | Heartbeat lên Worker (địa chỉ cố định): đăng ký URL tunnel hiện tại ngay khi đổi + giữ ấm mỗi 60s. |
 | `src/paths.js` | Vị trí `%APPDATA%\openwork` (env `OPENWORK_DIR` override cho test). |
 | `test/bridge.test.js` | Unit: netstat parse, whitelist + traversal, auth, hash. `npm test` |
+| `test/pairing.test.js` | Unit pairing kiểu 9Remote: mã 1 lần, mã sai/hết hạn, khóa thiết bị + thu hồi, persist đĩa. |
 | `scripts/e2e-live.mjs` | E2E: tạo session → prompt_async → poll reply → delete. `node scripts/e2e-live.mjs <wsId> <providerId> <modelId>` |
 | `scripts/dbg-prompt.mjs` | Debug prompt: dump status + parts mỗi 5s. |
+
+### worker/ (Cloudflare Worker `openpocket` — "địa chỉ cố định")
+
+| File | Trách nhiệm |
+|---|---|
+| `src/index.js` | `POST /__register` (x-owm-secret) → lưu URL tunnel vào KV `OWM_STATE`; `/api/*` relay sang tunnel hiện tại (stream giữ nguyên cho SSE); còn lại serve web static từ assets. Offline khi không heartbeat >10 phút. |
+| `wrangler.jsonc` | name `openpocket` + assets `../web/dist` (SPA, run_worker_first `/api/*`) + KV binding. Lệnh: `npx wrangler kv namespace create` → `wrangler secret put BRIDGE_SECRET` → `wrangler deploy`. |
 
 ### web/ (Preact + Vite → dist ~44KB gzip 16KB, design v3 "OpenWork brand")
 
 | File | Trách nhiệm |
 |---|---|
-| `src/styles.css` | Design tokens v3 (skill `.zcode/skills/pwa-workspace-ui/references/tokens.md`): Radix slate dark `#111113/#18191b/#212225` + blue đặc `#0090ff/#0588f0` (soi từ app-dist desktop — KHÔNG gradient), nav nổi pill, FAB 54px, tile, dot, skeleton, safe-area `--sat/--sab`, input 16px, touch 44px, focus-visible, reduced-motion. **Đổi giao diện = sửa file này + tokens.md.** |
+| `src/styles.css` | Design tokens v4 (skill `.zcode/skills/pwa-workspace-ui/references/tokens.md`): light/dark tự theo hệ thống (nền `#f8fafc`/`#111113`), nút chính ĐEN/TRẮNG biến `--primary`, chấm màu workspace `WS_COLORS`, logo lục giác chính chủ `openwork-mark.svg` (SVG thật, bản `-dark` cho dark mode), nav nổi 3 tab, FAB, skeleton, safe-area, input 16px, touch 44px. **Đổi giao diện = sửa file này + tokens.md.** |
 | `src/components/ui.jsx` | Loading, SkeletonList, Empty (icon + CTA), Banner, ConfirmDialog (thay `confirm()` native), BackButton, `useConfirm()` hook. |
+| `src/components/logo.jsx` | OpenWorkMark (img SVG chính chủ, tự đổi -dark theo prefers-color-scheme). |
 | `src/components/icons.jsx` | SVG stroke set nội bộ (Folder/File/Image/Upload/Download/Refresh/Back/Plus/Ws/Gear) — không dùng emoji làm icon. |
 | `src/api.js` | Token localStorage + auto-pair từ `#t=`; `ow()` fetch qua `/api/ow`; `sseUrl()` thêm `?_t=`; unwrap `.data`. |
 | `src/app.jsx` | Hash router (`#/`, `#/ws/:id`, `#/ws/:id/chat/:sid`, `#/ws/:id/files`, `#/settings`), topbar logo gradient + chip version, StatusBanners, BottomNav nổi (`bottomnav-wrap`). |
+| `src/pages/home.jsx` | Home = session gần đây GỘP mọi workspace (pattern Happy/Omnara), poll 15s, chấm màu ws (`wsColor`), FAB tạo session trong ws mới nhất. |
 | `src/pages/pairing.jsx` | Nhập mã `owm_...` lần đầu; hero logo gradient. |
 | `src/pages/workspaces.jsx` | List card có tile + FAB thêm workspace; sheet tạo mới (POST /workspaces/local). |
 | `src/pages/sessions.jsx` | Card session có dot busy/idle + FAB tạo session mới; SSE live. |
@@ -80,8 +94,9 @@
 | Muốn đổi màu/tông giao diện | `web/src/styles.css` (`:root` tokens) + đồng bộ `.zcode/skills/pwa-workspace-ui/references/tokens.md` |
 | Nút bị che notch/home indicator | Safe-area: `--sat/--sab` trong `web/src/styles.css` (topbar, bottomnav-wrap, FAB, composer) |
 | Input bị iPhone tự zoom khi focus | Font-size field < 16px — kiểm tra `web/src/styles.css` (mọi input/textarea/select phải ≥16px) |
-| Tunnel không lên / URL public không mở được | `bridge/src/tunnel.js` (download cloudflared, parse URL từ log). Lưu ý: URL ĐỔI mỗi lần cloudflared chạy lại — terminal bridge in QR mới |
-| Điện thoại mất kết nối sau khi restart máy | URL tunnel đã đổi — quét lại QR trong terminal bridge (hoặc nâng cấp named tunnel/Tailscale cho URL cố định, xem README) |
+| Tunnel không lên / URL public không mở được | `bridge/src/tunnel.js` (download cloudflared, parse URL từ log) |
+| Worker trả 503 "bridge_offline" / "bridge_unreachable" | Bridge không heartbeat >10 phút (máy tắt?) hoặc tunnel vừa đổi — đợi ~15-30s cho `src/lookup.js` đăng ký lại. Secret `BRIDGE_SECRET` của worker phải trùng `lookupSecret` trong bridge config |
+| Điện thoại mất kết nối sau khi restart máy | **Không còn là vấn đề** (worker tự tìm lại bridge qua heartbeat). Nếu mất hẳn: quota Workers free (100k/ngày) hoặc bridge chưa chạy |
 | OpenWork update đổi format dữ liệu | Adapter cô lập: `discovery.js` (engine-instances.json), `bootstrap.js` (tokens.json) |
 
 ## Route API của bridge (phone gọi)

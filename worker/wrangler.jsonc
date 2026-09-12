@@ -1,0 +1,22 @@
+{
+  // Worker "địa chỉ cố định" cho OpenWork Mobile — deploy bằng:
+  //   npx wrangler kv namespace create OWM_STATE   (lấy id điền dưới đây, 1 lần)
+  //   npx wrangler secret put BRIDGE_SECRET         (secret trùng bridge config)
+  //   npx wrangler deploy
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "openpocket",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-01",
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/__register"]
+  },
+  "kv_namespaces": [
+    {
+      "binding": "OWM_STATE",
+      "id": "00000000000000000000000000000000"
+    }
+  ]
+}

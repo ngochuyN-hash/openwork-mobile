@@ -37,17 +37,16 @@ opencode engine  →  sessions · models · files
 - 🗂 **Files**: duyệt cây thư mục, xem/sửa + lưu file text, xem ảnh, upload từ điện thoại, tải file về
 - 📴 **Offline queue** + auto-reconnect; PWA cài màn hình chính iOS/Android
 
-## Giao diện (v3 "OpenWork brand")
+## Giao diện (v4 "desktop-first")
 
-Bám đúng bảng màu của **OpenWork desktop chính chủ** (soi từ
-`resources/app-dist/assets/index-*.css` — Radix Colors): nền slate dark
-`#111113`, card `#18191b`, accent **xanh dương đặc `#0090ff`** (không gradient),
-radius nhỏ nét. Mobile-first theo skill nội bộ `pwa-workspace-ui`
-(`.zcode/skills/`, tổng hợp từ mobile-hybrid-audit + pwa-review + Vercel
-web-interface-guidelines + Anthropic frontend-design): bottom nav nổi pill blur,
-FAB xanh, card có icon tile, chấm trạng thái session, empty-state có icon + nút
-hành động, icon SVG toàn bộ (không emoji), input 16px chống iOS zoom, nút ≥44px,
-safe-area (notch/home indicator), skeleton loading, `prefers-reduced-motion`.
+Nhân bản giao diện **OpenWork desktop thật** (soi trực tiếp app đang chạy + CSS
+`app-dist`): **light/dark tự theo hệ thống**, nền sáng `#f8fafc` / tối `#111113`,
+**nút chính đen (light) / trắng (dark)** như nút "Add skill" trên desktop,
+**chấm màu nhận diện workspace** (mỗi ws một màu cố định), **logo lục giác chính chủ** `openwork-mark.svg` (SVG gốc, có bản dark). Cấu trúc học từ các app điều khiển agent
+(Happy, Omnara): mở app là thấy **Phiên gần đây gộp mọi workspace**, nav nổi
+3 tab (Phiên · Workspace · Cài đặt), FAB tạo session. Theo skill nội bộ
+`pwa-workspace-ui` (`.zcode/skills/`): input 16px chống iOS zoom, nút ≥44px,
+safe-area, skeleton loading, `prefers-reduced-motion`, icon SVG toàn bộ.
 
 ## Yêu cầu
 

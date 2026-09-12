@@ -40,6 +40,10 @@ export function loadConfig() {
     lastServerPort: Number.isInteger(parsed.lastServerPort) && parsed.lastServerPort > 0 ? parsed.lastServerPort : 0,
     // Optional public URL (tailscale serve) — used for the pairing QR.
     publicUrl: typeof parsed.publicUrl === "string" ? parsed.publicUrl : "",
+    // Cloudflare Worker "địa chỉ cố định" (worker/ trong dự án) — bridge heartbeat
+    // địa chỉ tunnel hiện tại lên đó để điện thoại luôn tìm được máy.
+    lookupUrl: typeof parsed.lookupUrl === "string" ? parsed.lookupUrl : "",
+    lookupSecret: typeof parsed.lookupSecret === "string" ? parsed.lookupSecret : "",
     ...parsed,
   };
   return config;

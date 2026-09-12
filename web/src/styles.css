@@ -1,37 +1,62 @@
-/* OpenWork Mobile — design tokens v3 "OpenWork brand" (skill pwa-workspace-ui).
-   Bảng màu lấy từ app desktop chính chủ (resources/app-dist/assets/index-*.css):
-   Radix slate dark + blue-9/10 đặc, radius nhỏ nét. Không gradient trang trí.
-   Quy tắc cứng giữ nguyên: input 16px, touch 44px, focus-visible, reduced-motion. */
+/* OpenWork Mobile — design tokens v4 (skill pwa-workspace-ui).
+   Nhân bản giao diện OpenWork desktop chính chủ (đã soi màn hình thật + CSS
+   app-dist): light/dark tự theo hệ thống, trung tính slate + nút chính ĐEN
+   (light) / TRẮNG (dark), chấm màu nhận diện workspace, logo lục giác chính chủ.
+   Quy tắc cứng: input 16px, touch 44px, focus-visible, reduced-motion. */
 :root {
-  color-scheme: dark;
+  color-scheme: light dark;
 
-  /* Radix slate (dark) — đúng bảng desktop OpenWork */
-  --bg: #111113;          /* slate-1 */
-  --bg-raised: #18191b;   /* slate-2: card, sheet, nav, sidebar */
-  --bg-hover: #212225;    /* slate-3 */
-  --border: #212225;      /* slate-3 */
-  --border-strong: #2e3135; /* slate-5 */
-  --text: #edeef0;        /* slate-12 */
-  --text-dim: #b0b4ba;    /* slate-11 */
-  --text-faint: #8b8d98;  /* slate-9 */
+  /* ===== LIGHT (mặc định, như desktop) ===== */
+  --bg: #f8fafc;
+  --bg-raised: #ffffff;
+  --bg-hover: #eef1f4;
+  --border: #e4e7ec;
+  --border-strong: #d3d8de;
+  --text: #1c2024;
+  --text-dim: #60646c;
+  --text-faint: #8b8d98;
+  /* Nút chính: near-black (shadcn primary như desktop "Add skill") */
+  --primary: #1c2024;
+  --primary-fg: #ffffff;
+  --accent-soft: rgba(28, 32, 36, 0.07);
+  --danger: #d64545;
+  --ok: #30a46c;
+  --warn: #e88a1a;
+  --overlay: rgba(15, 18, 22, 0.45);
+  --shadow-float: 0 8px 28px rgba(15, 18, 22, 0.14);
+  --shadow-sheet: 0 -8px 32px rgba(15, 18, 22, 0.18);
+  --shadow-accent: 0 2px 8px rgba(15, 18, 22, 0.16);
+}
 
-  /* Radix blue — accent đặc của OpenWork */
-  --accent: #0090ff;        /* blue-9: link, active, focus */
-  --accent-strong: #0588f0; /* blue-10: nút chính (dark) */
-  --accent-soft: rgba(0, 144, 255, 0.13); /* nav pill, tile, empty icon */
-  --danger: #e5484d;        /* Radix red-9 */
-  --ok: #30a46c;            /* Radix green-9 */
-  --warn: #ffc53d;          /* Radix amber-9 */
-  --overlay: rgba(0, 0, 0, 0.65);
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111113;
+    --bg-raised: #18191b;
+    --bg-hover: #212225;
+    --border: #26282c;
+    --border-strong: #2e3135;
+    --text: #edeef0;
+    --text-dim: #b0b4ba;
+    --text-faint: #8b8d98;
+    --primary: #edeef0;
+    --primary-fg: #111113;
+    --accent-soft: rgba(237, 238, 240, 0.1);
+    --danger: #ff6369;
+    --ok: #3ddc84;
+    --warn: #ffc53d;
+    --overlay: rgba(0, 0, 0, 0.65);
+    --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.45);
+    --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.5);
+    --shadow-accent: 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+}
 
+:root {
   --radius: 12px;
   --radius-btn: 8px;
   --radius-bubble: 12px;
   --radius-sheet: 16px 16px 0 0;
   --radius-nav: 20px;
-  --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.5);
-  --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.4);
-  --shadow-accent: 0 2px 10px rgba(0, 144, 255, 0.25);
 
   --sp-1: 4px;
   --sp-2: 8px;
@@ -70,7 +95,7 @@ h3 {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--text);
   outline-offset: 2px;
 }
 
@@ -93,7 +118,7 @@ h3 {
   padding-bottom: var(--sp-6);
 }
 
-/* ---------- Top bar: logo mark xanh + title lớn ---------- */
+/* ---------- Top bar: logo lục giác chính chủ + title ---------- */
 .topbar {
   position: sticky;
   top: 0;
@@ -103,19 +128,15 @@ h3 {
   gap: var(--sp-3);
   min-height: 60px;
   padding: calc(var(--sp-4) + var(--sat)) var(--sp-4) var(--sp-2);
-  background: rgba(17, 17, 19, 0.94);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border);
 }
 .topbar .logo-mark {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  background: var(--accent-strong);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 26px;
+  height: 26px;
   flex: none;
+  object-fit: contain;
 }
 .topbar .title {
   font-weight: 650;
@@ -149,7 +170,7 @@ h3 {
   display: flex;
   max-width: 420px;
   margin: 0 auto;
-  background: rgba(24, 25, 27, 0.92);
+  background: color-mix(in srgb, var(--bg-raised) 92%, transparent);
   backdrop-filter: blur(14px);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-nav);
@@ -176,24 +197,24 @@ h3 {
   border-radius: 14px;
 }
 .bottomnav button.active {
-  color: var(--accent);
+  color: var(--primary-fg);
 }
 .bottomnav button.active .nav-pill {
-  background: var(--accent-soft);
+  background: var(--primary);
 }
 .nav-pill {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 3px 16px;
+  padding: 4px 16px;
   border-radius: 999px;
 }
 .bottomnav svg {
-  width: 21px;
-  height: 21px;
+  width: 20px;
+  height: 20px;
 }
 
-/* ---------- FAB: xanh đặc, không gradient ---------- */
+/* ---------- FAB ---------- */
 .fab {
   position: fixed;
   right: calc(var(--sp-4) + var(--sar));
@@ -202,9 +223,9 @@ h3 {
   width: 54px;
   height: 54px;
   border: none;
-  border-radius: 14px;
-  background: var(--accent-strong);
-  color: #fff;
+  border-radius: 16px;
+  background: var(--primary);
+  color: var(--primary-fg);
   box-shadow: var(--shadow-accent);
   display: flex;
   align-items: center;
@@ -214,7 +235,7 @@ h3 {
   -webkit-tap-highlight-color: transparent;
 }
 .fab:active {
-  filter: brightness(0.92);
+  filter: brightness(0.9);
 }
 
 /* ---------- Cards & lists ---------- */
@@ -251,20 +272,50 @@ h3 {
   gap: var(--sp-3);
 }
 
-/* Icon tile: ô trung tính, icon xanh */
+/* Chấm màu nhận diện workspace (đúng kiểu desktop: mỗi workspace 1 màu) */
+.ws-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: none;
+}
+.ws-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px 2px 6px;
+  max-width: 160px;
+  min-width: 0;
+}
+.ws-chip .ws-dot {
+  width: 8px;
+  height: 8px;
+}
+.ws-chip .ws-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Icon tile: ô trung tính */
 .tile {
   width: 42px;
   height: 42px;
   border-radius: 10px;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--text);
   display: flex;
   align-items: center;
   justify-content: center;
   flex: none;
 }
 
-/* Chấm trạng thái */
+/* Chấm trạng thái session */
 .dot {
   width: 8px;
   height: 8px;
@@ -274,10 +325,20 @@ h3 {
 }
 .dot.busy {
   background: var(--warn);
-  box-shadow: 0 0 8px rgba(255, 197, 61, 0.6);
+  animation: dot-pulse 1.6s ease-in-out infinite;
 }
 .dot.ok {
   background: var(--ok);
+}
+@keyframes dot-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dot.busy {
+    animation: none;
+  }
 }
 
 .badge {
@@ -320,7 +381,7 @@ h3 {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--accent);
+  color: var(--text-dim);
 }
 
 /* Skeleton loading */
@@ -355,8 +416,8 @@ h3 {
 
 /* ---------- Buttons & inputs ---------- */
 button.btn {
-  background: var(--accent-strong);
-  color: #fff;
+  background: var(--primary);
+  color: var(--primary-fg);
   border: none;
   border-radius: var(--radius-btn);
   padding: var(--sp-3) var(--sp-4);
@@ -368,10 +429,11 @@ button.btn {
   -webkit-tap-highlight-color: transparent;
 }
 button.btn.primary {
-  background: var(--accent-strong);
+  background: var(--primary);
+  color: var(--primary-fg);
 }
 button.btn:hover {
-  filter: brightness(1.1);
+  filter: brightness(1.08);
 }
 button.btn:active {
   filter: brightness(0.93);
@@ -414,7 +476,7 @@ input[type="url"],
 textarea,
 select {
   width: 100%;
-  background: var(--bg);
+  background: var(--bg-raised);
   border: 1px solid var(--border-strong);
   color: var(--text);
   border-radius: var(--radius-btn);
@@ -426,7 +488,7 @@ textarea {
   resize: vertical;
 }
 select {
-  background-color: var(--bg);
+  background-color: var(--bg-raised);
   color: var(--text);
 }
 label.field {
@@ -457,12 +519,12 @@ label.field {
 .banner.warn {
   border-color: var(--warn);
   color: var(--warn);
-  background: rgba(255, 197, 61, 0.08);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
 }
 .banner.err {
   border-color: var(--danger);
   color: var(--danger);
-  background: rgba(229, 72, 77, 0.08);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
 }
 
 /* ---------- Bottom sheet ---------- */
@@ -482,6 +544,13 @@ label.field {
   box-shadow: var(--shadow-sheet);
   padding-bottom: calc(18px + var(--sab));
   border-color: var(--border-strong);
+}
+.sheet-grabber {
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-strong);
+  margin: 0 auto var(--sp-3);
 }
 .sheet-body {
   color: var(--text-dim);
@@ -530,8 +599,8 @@ label.field {
 }
 .msg.user {
   align-self: flex-end;
-  background: var(--accent-strong);
-  color: #fff;
+  background: var(--primary);
+  color: var(--primary-fg);
   white-space: pre-wrap;
   border-bottom-right-radius: 4px;
 }
@@ -558,6 +627,10 @@ label.field {
   border-radius: 5px;
   padding: 1px 5px;
   word-break: break-all;
+}
+.msg.user .msg-md code {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--primary-fg) 30%, transparent);
 }
 .msg-md pre {
   background: var(--bg);
@@ -605,8 +678,9 @@ label.field {
   height: 46px;
   min-height: 46px;
   padding: 0;
-  border-radius: 10px;
-  background: var(--accent-strong);
+  border-radius: 12px;
+  background: var(--primary);
+  color: var(--primary-fg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -619,7 +693,7 @@ label.field {
 }
 .permission-card {
   border: 1px solid var(--warn);
-  background: rgba(255, 197, 61, 0.08);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
   border-radius: var(--radius);
   padding: var(--sp-3);
   margin: var(--sp-3) 0;
@@ -657,7 +731,7 @@ label.field {
   height: 34px;
   border-radius: 8px;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--text-dim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -692,13 +766,8 @@ label.field {
 .pair-logo {
   width: 68px;
   height: 68px;
-  border-radius: 18px;
-  background: var(--accent-strong);
-  box-shadow: var(--shadow-accent);
   margin: 0 auto var(--sp-4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  object-fit: contain;
 }
 .pair-sub {
   color: var(--text-dim);
@@ -720,7 +789,7 @@ label.field {
   width: 16px;
   height: 16px;
   border: 2px solid var(--border-strong);
-  border-top-color: var(--accent);
+  border-top-color: var(--text);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -734,5 +803,8 @@ label.field {
   font-size: 12px;
 }
 a {
-  color: var(--accent);
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
 }

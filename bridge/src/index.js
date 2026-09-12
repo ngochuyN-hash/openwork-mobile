@@ -9,6 +9,7 @@ import { proxyToOpenWork } from "./proxy.js";
 import { createStaticHandler } from "./static.js";
 import { openworkFilePath } from "./paths.js";
 import { startQuickTunnel } from "./tunnel.js";
+import { startLookup } from "./lookup.js";
 import { PairingService, CODE_TTL_MINUTES } from "./pairing.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -301,9 +302,16 @@ server.listen(config.port, "127.0.0.1", () => {
     startQuickTunnel(config.port, {
       onUrl: (url) => {
         state.tunnelUrl = url;
-        printPairing(url, `[tunnel] URL public MỚI (dùng được từ 4G, không cần app nào trên điện thoại):`);
+        printPairing(currentBase(), "[tunnel] URL public MỚI (dùng được từ 4G, không cần app nào trên điện thoại):");
       },
     }).catch((error) => console.error(`[tunnel] lỗi: ${error.message}`));
+  }
+
+  // Heartbeat lên Cloudflare Worker (địa chỉ cố định) nếu đã cấu hình:
+  // điện thoại mở đúng 1 URL duy nhất, tự tìm được bridge dù tunnel đổi.
+  if (config.lookupUrl && config.lookupSecret) {
+    console.log(`[lookup] reporting tới ${config.lookupUrl}`);
+    startLookup({ getUrl: () => state.tunnelUrl, workerUrl: config.lookupUrl, secret: config.lookupSecret });
   }
 
   console.log(`Pairing token dự phòng (chỉ dùng tại máy, không đưa cho ai): ${config.mobileToken}`);

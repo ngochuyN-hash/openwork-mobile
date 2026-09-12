@@ -1,8 +1,10 @@
 import { useEffect, useState, useCallback } from "preact/hooks";
 import { getToken, apiState } from "./api.js";
-import { WsIcon, GearIcon } from "./components/icons.jsx";
+import { WsIcon, GearIcon, MessageIcon } from "./components/icons.jsx";
 import { Banner } from "./components/ui.jsx";
 import { PairingScreen } from "./pages/pairing.jsx";
+import { HomePage } from "./pages/home.jsx";
+import { OpenWorkMark } from "./components/logo.jsx";
 import { WorkspacesPage } from "./pages/workspaces.jsx";
 import { SessionsPage } from "./pages/sessions.jsx";
 import { ChatPage } from "./pages/chat.jsx";
@@ -10,7 +12,8 @@ import { FilesPage } from "./pages/files.jsx";
 import { SettingsPage } from "./pages/settings.jsx";
 
 // Hash router:
-//   #/                     -> workspaces
+//   #/                     -> home (session gần đây gộp mọi workspace)
+//   #/workspaces           -> danh sách workspace
 //   #/ws/:id               -> sessions (workspace)
 //   #/ws/:id/chat/:sid     -> chat
 //   #/ws/:id/files         -> files
@@ -21,12 +24,13 @@ function parseHash() {
   const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
   const params = new URLSearchParams(query ?? "");
   if (parts[0] === "settings") return { view: "settings" };
+  if (parts[0] === "workspaces") return { view: "workspaces" };
   if (parts[0] === "ws" && parts[1]) {
     if (parts[2] === "chat" && parts[3]) return { view: "chat", wsId: parts[1], sessionId: parts[3] };
     if (parts[2] === "files") return { view: "files", wsId: parts[1], path: params.get("path") ?? "" };
     return { view: "sessions", wsId: parts[1] };
   }
-  return { view: "workspaces" };
+  return { view: "home" };
 }
 
 export function navigate(hash) {
@@ -67,7 +71,7 @@ export function App() {
 
   let view;
   let showNav = true;
-  let title = "OpenWork";
+  let title = "Phiên";
   switch (route.view) {
     case "sessions":
       view = <SessionsPage route={route} />;
@@ -84,23 +88,23 @@ export function App() {
       title = "Files";
       showNav = false;
       break;
+    case "workspaces":
+      view = <WorkspacesPage />;
+      title = "Workspace";
+      break;
     case "settings":
       view = <SettingsPage state={state} onRecheck={refreshState} onUnpaired={() => setPaired(false)} />;
       title = "Cài đặt";
       break;
     default:
-      view = <WorkspacesPage />;
-      title = "OpenWork Mobile";
+      view = <HomePage />;
+      title = "Phiên";
   }
 
   return (
     <>
       <div class="topbar">
-        <span class="logo-mark" aria-hidden="true">
-          <svg width="16" height="16" viewBox="0 0 64 64" fill="none">
-            <path d="M18 44V26m14 18V18m14 26V32" stroke="#fff" stroke-width="8" stroke-linecap="round" />
-          </svg>
-        </span>
+        <OpenWorkMark className="logo-mark" />
         <span class="title">{title}</span>
         {state?.server ? <span class="sub">v{state.server.version}</span> : null}
       </div>
@@ -137,8 +141,18 @@ function StatusBanners({ state, onRecheck }) {
 }
 
 function BottomNav({ current }) {
+  // Session-related views (home/sessions/chat) highlight tab Phiên; files -> Workspace.
+  const activeOf = {
+    home: "home",
+    sessions: "home",
+    chat: "home",
+    files: "workspaces",
+    workspaces: "workspaces",
+    settings: "settings",
+  };
+  const active = activeOf[current] ?? "home";
   const tab = (name, label, path, icon) => (
-    <button class={current === name ? "active" : ""} onClick={() => navigate(path)} aria-current={current === name ? "page" : undefined}>
+    <button class={active === name ? "active" : ""} onClick={() => navigate(path)} aria-current={active === name ? "page" : undefined}>
       <span class="nav-pill">{icon}</span>
       <span>{label}</span>
     </button>
@@ -146,7 +160,8 @@ function BottomNav({ current }) {
   return (
     <div class="bottomnav-wrap">
       <nav class="bottomnav">
-        {tab("workspaces", "Workspace", "#/", <WsIcon />)}
+        {tab("home", "Phiên", "#/", <MessageIcon />)}
+        {tab("workspaces", "Workspace", "#/workspaces", <WsIcon />)}
         {tab("settings", "Cài đặt", "#/settings", <GearIcon />)}
       </nav>
     </div>

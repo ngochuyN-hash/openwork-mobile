@@ -1,8 +1,9 @@
 import { useEffect, useState } from "preact/hooks";
 import { ow, unwrap } from "../api.js";
 import { navigate } from "../app.jsx";
-import { PlusIcon, WsIcon } from "../components/icons.jsx";
+import { WsIcon } from "../components/icons.jsx";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
+import { wsColor } from "./home.jsx";
 
 export function WorkspacesPage() {
   const [workspaces, setWorkspaces] = useState(null);
@@ -49,7 +50,10 @@ export function WorkspacesPage() {
             <span class="tile" aria-hidden="true"><WsIcon /></span>
             <div style="flex:1;min-width:0">
               <div class="row-between">
-                <h3 style="margin:0">{ws.name || ws.displayName || ws.id}</h3>
+                <h3 style="margin:0;display:flex;align-items:center;gap:8px;min-width:0">
+                  <span class="ws-dot" style={`background:${wsColor(ws.id)}`} aria-hidden="true" />
+                  <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{ws.name || ws.displayName || ws.id}</span>
+                </h3>
                 <span class="badge">{ws.workspaceType === "remote" ? "remote" : "local"}</span>
               </div>
               <div class="meta mono">{ws.path ?? ""}</div>
@@ -79,7 +83,9 @@ export function WorkspacesPage() {
       ))}
 
       <button class="fab" aria-label="Thêm workspace" onClick={() => setShowCreate(true)}>
-        <PlusIcon size={24} />
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M12 5v14M5 12h14" />
+        </svg>
       </button>
 
       {showCreate && <CreateWorkspaceDialog onClose={() => setShowCreate(false)} onCreated={load} />}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { setToken, apiState, apiPair, pairingCodeFromHash } from "../api.js";
 import { Banner } from "../components/ui.jsx";
+import { OpenWorkMark } from "../components/logo.jsx";
 
 // Ghép thiết bị kiểu 9Remote:
 //  - Mở link/QR từ terminal bridge (#p=MÃ) → tự ghép, nhận khóa vĩnh viễn owd_
@@ -65,12 +66,8 @@ export function PairingScreen({ onPaired }) {
   return (
     <div class="view no-nav pair-view">
       <div class="pair-hero">
-        <span class="pair-logo" aria-hidden="true">
-          <svg width="34" height="34" viewBox="0 0 64 64" fill="none">
-            <path d="M18 44V26m14 18V18m14 26V32" stroke="#fff" stroke-width="7" stroke-linecap="round" />
-          </svg>
-        </span>
-        <h2 style="margin:0;letter-spacing:-0.02em">OpenWork Mobile</h2>
+        <OpenWorkMark className="pair-logo" />
+        <h2 style="margin:0;letter-spacing:-0.01em">OpenWork Mobile</h2>
         <p class="pair-sub">Quản lý session, workspace và file của OpenWork từ điện thoại</p>
       </div>
 
