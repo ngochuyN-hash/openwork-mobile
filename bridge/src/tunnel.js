@@ -54,10 +54,12 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
   const bin = await ensureCloudflared(log);
   let stopped = false;
   let currentUrl = "";
-  let attempt = 0;
+  let attempt = 0; // số lần chạy lại liên tục (reset khi có URL mới)
+  let rateLimitStreak = 0; // số lần dính 429 liên tiếp
 
   const runOnce = async () => {
     attempt += 1;
+    let sawRateLimit = false;
     const child = spawn(bin, ["tunnel", "--url", `http://127.0.0.1:${targetPort}`, "--no-autoupdate"], {
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -69,8 +71,11 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
       if (match && match[0] !== currentUrl) {
         currentUrl = match[0];
         announced = true;
+        attempt = 0;
+        rateLimitStreak = 0;
         onUrl(currentUrl);
       }
+      if (/status 429|error code: 1015/i.test(text)) sawRateLimit = true;
       // log ngắn gọn lỗi đáng chú ý (ignore INFO ồn ào)
       for (const line of text.split(/\r?\n/)) {
         if (/\bERR\b/.test(line)) log(`[tunnel] ${line.trim().slice(0, 160)}`);
@@ -81,8 +86,19 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
 
     child.on("exit", async (code) => {
       if (stopped) return;
-      log(`[tunnel] cloudflared thoát (code ${code}) - chạy lại sau 5s...`);
-      await new Promise((r) => setTimeout(r, 5000));
+      // 429/1015 = Cloudflare rate-limit quick tunnel theo IP: chờ lâu dần
+      // (2ph → 4ph → ... tối đa 10ph) thay vì dội 5s/lần làm limit kéo dài thêm.
+      if (sawRateLimit || code === 1) {
+        rateLimitStreak = sawRateLimit ? rateLimitStreak + 1 : 0;
+      }
+      let delay = Math.min(5000 * 2 ** Math.max(0, attempt - 1), 60_000);
+      if (rateLimitStreak > 0) {
+        delay = Math.min(120_000 * 2 ** (rateLimitStreak - 1), 600_000);
+        log(`[tunnel] Cloudflare đang giới hạn tạo tunnel (429) - chờ ${Math.round(delay / 1000)}s...`);
+      } else {
+        log(`[tunnel] cloudflared thoát (code ${code}) - chạy lại sau ${Math.round(delay / 1000)}s...`);
+      }
+      await new Promise((r) => setTimeout(r, delay));
       if (!stopped) runOnce().catch((e) => log(`[tunnel] lỗi: ${e.message}`));
     });
   };
