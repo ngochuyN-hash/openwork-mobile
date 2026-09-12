@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "preact/hooks";
 import { getToken, apiState } from "./api.js";
-import { WsIcon, GearIcon, MessageIcon } from "./components/icons.jsx";
+import { BackIcon, WsIcon, GearIcon, MessageIcon } from "./components/icons.jsx";
 import { Banner } from "./components/ui.jsx";
 import { PairingScreen } from "./pages/pairing.jsx";
 import { HomePage } from "./pages/home.jsx";
@@ -72,21 +72,26 @@ export function App() {
   let view;
   let showNav = true;
   let title = "Phiên";
+  // Nút Trở lại ghim trên topbar (vốn đã sticky) để cuộn đâu vẫn bấm được.
+  let back = null;
   switch (route.view) {
     case "sessions":
       view = <SessionsPage route={route} />;
       title = "Sessions";
       showNav = false;
+      back = { label: "Workspace", href: "#/workspaces" };
       break;
     case "chat":
       view = <ChatPage route={route} />;
       title = "Chat";
       showNav = false;
+      back = { label: "Sessions", href: `#/ws/${encodeURIComponent(route.wsId)}` };
       break;
     case "files":
       view = <FilesPage route={route} />;
       title = "Files";
       showNav = false;
+      back = { label: "Sessions", href: `#/ws/${encodeURIComponent(route.wsId)}` };
       break;
     case "workspaces":
       view = <WorkspacesPage />;
@@ -104,6 +109,16 @@ export function App() {
   return (
     <>
       <div class="topbar">
+        {back && (
+          <button
+            class="topbar-back"
+            onClick={() => navigate(back.href)}
+            aria-label={`Quay lại ${back.label}`}
+          >
+            <BackIcon size={18} />
+            <span>{back.label}</span>
+          </button>
+        )}
         <OpenWorkMark className="logo-mark" />
         <span class="title">{title}</span>
         {state?.server ? <span class="sub">v{state.server.version}</span> : null}
