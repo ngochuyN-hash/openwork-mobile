@@ -74,7 +74,8 @@ export function HomePage() {
     try {
       const payload = await ow(`/workspace/${encodeURIComponent(target.id)}/opencode/session`, {
         method: "POST",
-        body: { title: "Mobile" },
+        // Không gửi title — để server tự sinh tên theo nội dung như desktop.
+        body: {},
       });
       const created = unwrap(payload);
       if (created?.id) navigate(`#/ws/${encodeURIComponent(target.id)}/chat/${encodeURIComponent(created.id)}`);

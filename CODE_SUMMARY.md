@@ -67,10 +67,10 @@
 | `src/components/icons.jsx` | SVG stroke set nội bộ (Folder/File/Image/Upload/Download/Refresh/Back/Plus/Ws/Gear) — không dùng emoji làm icon. |
 | `src/api.js` | Token localStorage + auto-pair từ `#t=`; `ow()` fetch qua `/api/ow`; `sseUrl()` thêm `?_t=`; unwrap `.data`. |
 | `src/app.jsx` | Hash router (`#/`, `#/ws/:id`, `#/ws/:id/chat/:sid`, `#/ws/:id/files`, `#/settings`), topbar logo gradient + chip version, StatusBanners, BottomNav nổi (`bottomnav-wrap`). |
-| `src/pages/home.jsx` | Home = session gần đây GỘP mọi workspace (pattern Happy/Omnara), poll 15s, chấm màu ws (`wsColor`), FAB tạo session trong ws mới nhất. |
+| `src/pages/home.jsx` | Home = session gần đây GỘP mọi workspace (pattern Happy/Omnara), poll 15s, chấm màu ws (`wsColor`), FAB tạo session trong ws mới nhất. Tạo session KHÔNG gửi title — để server tự sinh tên theo nội dung như desktop. |
 | `src/pages/pairing.jsx` | Nhập mã `owm_...` lần đầu; hero logo gradient. |
 | `src/pages/workspaces.jsx` | List card có tile + FAB thêm workspace; sheet tạo mới (POST /workspaces/local). |
-| `src/pages/sessions.jsx` | Card session có dot busy/idle + FAB tạo session mới; SSE live. |
+| `src/pages/sessions.jsx` | Card session có dot busy/idle + FAB tạo session mới (KHÔNG gửi title — server tự sinh tên); SSE live. |
 | `src/pages/chat.jsx` | Transcript (text/tool/reasoning; markdown tối giản: code block/inline code/list — `MarkdownText`), composer nút send icon gradient + **model picker (bắt buộc)**, abort, offline queue, permission cards (Allow/Deny), SSE events. |
 | `src/pages/files.jsx` | Duyệt `/opencode/file` (icon tile, size qua `Intl.NumberFormat` vi-VN); xem/sửa+lưu + upload qua `/files/raw` (base64); tải file về. |
 | `src/pages/settings.jsx` | Trạng thái bridge, recheck, gỡ pairing (ConfirmDialog), hướng dẫn tailscale. |
@@ -98,6 +98,7 @@
 | Worker trả 503 "bridge_offline" / "bridge_unreachable" | Bridge không heartbeat >10 phút (máy tắt?) hoặc tunnel vừa đổi — đợi ~15-30s cho `src/lookup.js` đăng ký lại. Secret `BRIDGE_SECRET` của worker phải trùng `lookupSecret` trong bridge config |
 | Điện thoại mất kết nối sau khi restart máy | **Không còn là vấn đề** (worker tự tìm lại bridge qua heartbeat). Nếu mất hẳn: quota Workers free (100k/ngày) hoặc bridge chưa chạy |
 | OpenWork update đổi format dữ liệu | Adapter cô lập: `discovery.js` (engine-instances.json), `bootstrap.js` (tokens.json) |
+| Session mới toàn tên "Mobile" | `web/src/pages/home.jsx` + `sessions.jsx` (`newSession()`) từng gửi cứng `title: "Mobile"` — đã bỏ, tạo session để trống body `{}` cho server tự sinh tên |
 
 ## Route API của bridge (phone gọi)
 
