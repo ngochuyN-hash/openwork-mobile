@@ -9,7 +9,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { bridgeDataDir, loadConfig } from "../src/config.js";
+import { bridgeDataDir, loadConfig, saveConfig } from "../src/config.js";
+import { AUTOSTART_TASK_NAME, buildAutostartAction } from "../src/autostart.js";
 
 const BIN_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -110,6 +111,64 @@ if (cmd === "logs") {
   process.exit(0);
 }
 
+if (cmd === "autostart") {
+  // Tự chạy bridge khi đăng nhập Windows — qua Task Scheduler (schtasks),
+  // không cần file .ps1/.cmd lẻ. Task chạy ẩn (bridge tự windowsHide),
+  // log vẫn ra bridge.log như openpocket start.
+  if (process.platform !== "win32") {
+    console.log("autostart hiện chỉ hỗ trợ Windows (Task Scheduler).");
+    process.exit(1);
+  }
+  const sub = (args[1] || "--status").toLowerCase();
+  const withOpenwork = args.includes("--with-openwork");
+  if (sub === "--enable") {
+    const created = spawnSync(
+      "schtasks",
+      ["/Create", "/TN", AUTOSTART_TASK_NAME, "/SC", "ONLOGON", "/TR", buildAutostartAction(), "/F"],
+      { stdio: "inherit" }
+    );
+    if (created.status !== 0) {
+      console.log("");
+      console.log("Không tạo được task — hãy mở terminal bằng Run as Administrator rồi chạy lại:");
+      console.log("  openpocket autostart --enable" + (withOpenwork ? " --with-openwork" : ""));
+      process.exit(1);
+    }
+    const config = loadConfig();
+    config.autoLaunchOpenWork = withOpenwork ? true : config.autoLaunchOpenWork === true;
+    saveConfig(config);
+    console.log(`✅ Đã bật tự chạy khi đăng nhập Windows (task "${AUTOSTART_TASK_NAME}").`);
+    console.log(withOpenwork
+      ? "   Đăng nhập là mở luôn OpenWork desktop (--with-openwork đã lưu)."
+      : "   Muốn mở luôn OpenWork desktop thì chạy lại kèm --with-openwork.");
+    console.log("   Tắt bằng: openpocket autostart --disable");
+    process.exit(0);
+  }
+  if (sub === "--disable") {
+    spawnSync("schtasks", ["/Delete", "/TN", AUTOSTART_TASK_NAME, "/F"], { stdio: "inherit" });
+    const config = loadConfig();
+    if (config.autoLaunchOpenWork) {
+      config.autoLaunchOpenWork = false;
+      saveConfig(config);
+    }
+    console.log("🛑 Đã tắt tự chạy.");
+    process.exit(0);
+  }
+  // --status (mặc định): task còn trong Scheduler không?
+  const queried = spawnSync("schtasks", ["/Query", "/TN", AUTOSTART_TASK_NAME], { stdio: "pipe", encoding: "utf8" });
+  if (queried.status === 0) {
+    console.log(`✅ Tự chạy đang BẬT (task "${AUTOSTART_TASK_NAME}" trong Task Scheduler).`);
+    try {
+      const config = loadConfig();
+      console.log(config.autoLaunchOpenWork
+        ? "   Đăng nhập là mở luôn OpenWork desktop."
+        : "   Chỉ chạy bridge (muốn mở luôn OpenWork: --enable --with-openwork).");
+    } catch {}
+  } else {
+    console.log(`❌ Tự chạy đang TẮT. Bật bằng: openpocket autostart --enable`);
+  }
+  process.exit(0);
+}
+
 if (cmd === "code") {
   if (!existsSync(logFile())) {
     console.log("Bridge chưa chạy. Chạy: openpocket start");
@@ -132,9 +191,27 @@ if (cmd === "code") {
   if (lastUrl) {
     console.log(`🔗 Link mở trên điện thoại:`);
     console.log(`   ${lastUrl}`);
+    console.log("");
+    console.log("QR quét trực tiếp:");
+    const { default: qrcode } = await import("qrcode-terminal");
+    qrcode.generate(lastUrl, { small: true });
   }
   console.log("");
-  console.log("Mở link trên điện thoại (hoặc gõ mã) để ghép — mã sống 30 phút, dùng 1 lần.");
+  // Mã vĩnh viễn: đọc thẳng từ config (file local, an toàn vì lệnh chạy tại máy)
+  try {
+    const config = loadConfig();
+    const masterUrl = `http://127.0.0.1:${config.port || 8788}/#t=${config.mobileToken}`;
+    console.log("⭐ Mã VĨNH VIỄN (có hiệu lực mãi, chỉ dùng tại máy — đừng chia sẻ):");
+    console.log(`   ${config.mobileToken}`);
+    console.log("");
+    console.log("QR master (quét 1 lần, dùng mãi — mở bằng camera, hoặc gõ mã trên):");
+    const { default: qrcode } = await import("qrcode-terminal");
+    qrcode.generate(masterUrl, { small: true });
+  } catch {
+    console.log("(không đọc được master token từ config)");
+  }
+  console.log("");
+  console.log("Mã ghép sống 30 phút, dùng 1 lần. Master vĩnh viễn.");
   console.log("Địa chỉ cố định (bookmark 1 lần, dùng mãi): https://YOUR-WORKER.workers.dev");
   process.exit(0);
 }
@@ -145,5 +222,8 @@ Dùng:
   openpocket stop     Dừng bridge
   openpocket status   Xem bridge có chạy không
   openpocket logs     Xem log (tail 50 dòng, Ctrl+C để thoát)
-  openpocket code     Xem mã ghép + link mở trên điện thoại`);
+  openpocket code     Xem mã ghép + link mở trên điện thoại
+  openpocket autostart --enable [--with-openwork]   Tự chạy bridge khi đăng nhập Windows
+  openpocket autostart --status                     Xem tự chạy đang bật hay tắt
+  openpocket autostart --disable                    Tắt tự chạy`);
 process.exit(0);

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { ow, unwrap, timeAgo, sseUrl } from "../api.js";
 import { navigate } from "../app.jsx";
 import { PlusIcon } from "../components/icons.jsx";
-import { BackButton, Banner, Empty, SkeletonList } from "../components/ui.jsx";
+import { Banner, Empty, SkeletonList } from "../components/ui.jsx";
 
 export function SessionsPage({ route }) {
   const { wsId } = route;
@@ -74,10 +74,6 @@ export function SessionsPage({ route }) {
 
   return (
     <>
-      <div class="page-head">
-        <BackButton label="Workspace" onBack={() => navigate("#/workspaces")} />
-      </div>
-
       {error && <Banner kind="err" actionLabel="Thử lại" onAction={load}>{error}</Banner>}
 
       {sessions === null && !error && <SkeletonList rows={3} />}

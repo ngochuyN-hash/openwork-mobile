@@ -1,7 +1,7 @@
 # CODE_SUMMARY — OpenWork Mobile
 
 > Tài liệu tra nhanh "gặp lỗi thì sửa ở đâu". Cập nhật sau mỗi milestone.
-> Cập nhật lần cuối: 2026-09-12 (v1.3: worker "địa chỉ cố định" openpocket + lookup heartbeat — đã E2E qua internet)
+> Cập nhật lần cuối: 2026-09-12 (v1.5: nút Trở lại ghim cố định trên topbar + deploy Worker openpocket + file 2 chiều trong chat)
 >
 > 📌 **Quy tắc (yêu cầu của chủ dự án):** mỗi khi thay đổi code/cấu trúc/hành vi,
 > PHẢI cập nhật đồng thời file này VÀ `README.md` trong cùng commit.
@@ -38,12 +38,15 @@
 | `src/config.js` | Config runtime (mobileToken `owm_`, ownerToken `owt_`, port, publicUrl, **lookupUrl + lookupSecret**). Nằm NGOÀI repo: `%APPDATA%\openwork-bridge\config.json`. |
 | `src/bootstrap.js` | Mint/append token owner vào `%APPDATA%\openwork\tokens.json` (atomic + .bak). hash = sha256 hex thuần, id cố định `openwork-mobile-bridge`. |
 | `src/discovery.js` | Đọc `engine-instances.json` (ownerPid) → parse netstat → probe `/health` → check `/whoami` (token active). |
-| `src/proxy.js` | Reverse proxy `/api/ow/*` → openwork-server. Whitelist sau khi **normalize dot-segments**, method allowlist, inject Bearer owner, **body buffer (cap 64MB)**, stream response + SSE keepalive 20s. |
-| `src/auth.js` | Phone → bridge: `owm_` token (header) + `?_t=` (chỉ GET, cho EventSource/img). timingSafeEqual. |
+| `src/proxy.js` | Reverse proxy `/api/ow/*` → openwork-server. Whitelist sau khi **normalize dot-segments**, method allowlist, inject Bearer owner, **body buffer (cap 64MB)**, stream response + SSE keepalive 20s. Forward thêm `content-length/content-range/accept-ranges` để tải file hiện tiến trình. |
+| `src/auth.js` | Phone → bridge: `owm_` token (header) + `?_t=` (chỉ GET, cho EventSource/img). timingSafeEqual. `requestToken()` trích từ cả 2 nguồn, `isTokenAuthorized()` công nhận như nhau. |
 | `src/static.js` | Serve `web/dist` (SPA fallback index.html). |
 | `src/pairing.js` | Pairing kiểu 9Remote: mã one-time 8 ký tự (30 phút, 1 lần, in trong QR), khóa thiết bị vĩnh viễn owd_ (lưu hash trong devices.json), thu hồi. |
 | `src/tunnel.js` | Auto Cloudflare Quick Tunnel (học từ 9Remote): tự tải cloudflared về data dir, spawn `tunnel --url :8788`, dò URL trycloudflare.com từ log, tự chạy lại khi chết, gọi `onUrl` (index.js in QR mới). Tắt bằng `OPENWORK_BRIDGE_TUNNEL=0`. |
 | `src/lookup.js` | Heartbeat lên Worker (địa chỉ cố định): đăng ký URL tunnel hiện tại ngay khi đổi + giữ ấm mỗi 60s. |
+| `src/openwork-launch.js` | Tìm file OpenWork.exe (env `OPENWORK_EXE` → config `openworkExe` → `%LOCALAPPDATA%\Programs\@openworkdesktop\`) + mở app detached ẩn. Dùng cho endpoint wake + tự mở lúc khởi động. |
+| `src/autostart.js` | Dựng câu lệnh schtasks cho `openpocket autostart` (task `OpenPocketBridge`, ONLOGON, quoting đường dẫn có dấu cách). |
+| `bin/openpocket.js` | Lệnh toàn cục: start/stop/status/logs/code + `autostart --enable [--with-openwork]/--status/--disable` (Task Scheduler, chạy ẩn, log ra bridge.log). |
 | `src/paths.js` | Vị trí `%APPDATA%\openwork` (env `OPENWORK_DIR` override cho test). |
 | `test/bridge.test.js` | Unit: netstat parse, whitelist + traversal, auth, hash. `npm test` |
 | `test/pairing.test.js` | Unit pairing kiểu 9Remote: mã 1 lần, mã sai/hết hạn, khóa thiết bị + thu hồi, persist đĩa. |
@@ -61,20 +64,20 @@
 
 | File | Trách nhiệm |
 |---|---|
-| `src/styles.css` | Design tokens v4 (skill `.zcode/skills/pwa-workspace-ui/references/tokens.md`): light/dark tự theo hệ thống (nền `#f8fafc`/`#111113`), nút chính ĐEN/TRẮNG biến `--primary`, chấm màu workspace `WS_COLORS`, logo lục giác chính chủ `openwork-mark.svg` (SVG thật, bản `-dark` cho dark mode), nav nổi 3 tab, FAB, skeleton, safe-area, input 16px, touch 44px. **Đổi giao diện = sửa file này + tokens.md.** |
-| `src/components/ui.jsx` | Loading, SkeletonList, Empty (icon + CTA), Banner, ConfirmDialog (thay `confirm()` native), BackButton, `useConfirm()` hook. |
+| `src/styles.css` | Design tokens v4 (skill `.zcode/skills/pwa-workspace-ui/references/tokens.md`): light/dark tự theo hệ thống (nền `#f8fafc`/`#111113`), nút chính ĐEN/TRẮNG biến `--primary`, chấm màu workspace `WS_COLORS`, logo lục giác chính chủ `openwork-mark.svg` (SVG thật, bản `-dark` cho dark mode), nav nổi 3 tab, FAB, skeleton, safe-area, input 16px, touch 44px. **Nút Trở lại `.topbar-back`** ghim trên topbar sticky (min 44px touch, cuộn không trôi). **Đổi giao diện = sửa file này + tokens.md.** |
+| `src/components/ui.jsx` | Loading, SkeletonList, Empty (icon + CTA), Banner, ConfirmDialog (thay `confirm()` native), BackButton (dự phòng), `useConfirm()` hook. |
 | `src/components/logo.jsx` | OpenWorkMark (img SVG chính chủ, tự đổi -dark theo prefers-color-scheme). |
-| `src/components/icons.jsx` | SVG stroke set nội bộ (Folder/File/Image/Upload/Download/Refresh/Back/Plus/Ws/Gear) — không dùng emoji làm icon. |
-| `src/api.js` | Token localStorage + auto-pair từ `#t=`; `ow()` fetch qua `/api/ow`; `sseUrl()` thêm `?_t=`; unwrap `.data`. |
-| `src/app.jsx` | Hash router (`#/`, `#/ws/:id`, `#/ws/:id/chat/:sid`, `#/ws/:id/files`, `#/settings`), topbar logo gradient + chip version, StatusBanners, BottomNav nổi (`bottomnav-wrap`). |
+| `src/components/icons.jsx` | SVG stroke set nội bộ (Folder/File/Image/Upload/Download/Refresh/Back/Plus/Ws/Gear/Clip) — không dùng emoji làm icon. |
+| `src/api.js` | Token localStorage + auto-pair từ `#t=`; `ow()` fetch qua `/api/ow`; `sseUrl()` thêm `?_t=`; unwrap `.data`. File hai chiều: `owUploadFile()` (giới hạn 40MB, FileReader base64), `bytesToBase64()` (chunk, không tràn stack), `formatBytes()` (Intl vi-VN), `MAX_UPLOAD_BYTES`. |
+| `src/app.jsx` | Hash router (`#/`, `#/ws/:id`, `#/ws/:id/chat/:sid`, `#/ws/:id/files`, `#/settings`), topbar logo + version + **nút Trở lại ghim cố định** theo route (sessions -> #/workspaces, chat/files -> #/ws/:id; nhận event `owm:topback` từ FileViewer), StatusBanners, BottomNav nổi (`bottomnav-wrap`). |
 | `src/pages/home.jsx` | Home = session gần đây GỘP mọi workspace (pattern Happy/Omnara), poll 15s, chấm màu ws (`wsColor`), FAB tạo session trong ws mới nhất. Tạo session KHÔNG gửi title — để server tự sinh tên theo nội dung như desktop. |
 | `src/pages/pairing.jsx` | Nhập mã `owm_...` lần đầu; hero logo gradient. |
 | `src/pages/workspaces.jsx` | List card có tile + FAB thêm workspace; sheet tạo mới (POST /workspaces/local). |
-| `src/pages/sessions.jsx` | Card session có dot busy/idle + FAB tạo session mới (KHÔNG gửi title — server tự sinh tên); SSE live. |
-| `src/pages/chat.jsx` | Transcript (text/tool/reasoning; markdown tối giản: code block/inline code/list — `MarkdownText`), composer nút send icon gradient + **model picker (bắt buộc)**, abort, offline queue, permission cards (Allow/Deny), SSE events. |
-| `src/pages/files.jsx` | Duyệt `/opencode/file` (icon tile, size qua `Intl.NumberFormat` vi-VN); xem/sửa+lưu + upload qua `/files/raw` (base64); tải file về. |
+| `src/pages/sessions.jsx` | Card session có dot busy/idle + FAB tạo session mới (KHÔNG gửi title — server tự sinh tên); nút back đã dọn lên topbar; SSE live. |
+| `src/pages/chat.jsx` | Transcript (text/tool/reasoning; markdown tối giản: code block/inline code/list — `MarkdownText`), composer nút send icon gradient + **model picker (bắt buộc)** + **nút kẹp giấy đính kèm file** (upload vào `mobile-uploads/` rồi gửi prompt kèm đường dẫn), abort, offline queue, permission cards (Allow/Deny), SSE events. Nút back dọn lên topbar, nút "Dừng agent" căn phải. **File agent nhắc tới**: `findFileRefsInText()` quét text + tool input/output → `FileRefCard` (Mở/Tải về qua `/files/stat` + `/files/raw`, Xem trong Files) + `linkifyFiles()` biến đường dẫn trong text thành link tải. |
+| `src/pages/files.jsx` | Duyệt `/opencode/file` (icon tile, size qua `Intl.NumberFormat` vi-VN); xem/sửa+lưu + upload qua `/files/raw` (base64 chunk qua helper chung, báo tiến trình từng file); xem ảnh (png/jpg/gif/webp/bmp/ico/svg/avif) + **PDF inline (iframe)**; tải về qua `owDownload()` (fetch + Blob + thanh % + Hủy + nút Chia sẻ cho iOS Lưu về Files). Nút back dọn lên topbar, nút Đóng viewer phát event `owm:topback`. |
 | `src/pages/settings.jsx` | Trạng thái bridge, recheck, gỡ pairing (ConfirmDialog), hướng dẫn tailscale. |
-| `public/sw.js` | App-shell precache v2 + navigate fallback (offline mở được shell); không cache `/api/*`. |
+| `public/sw.js` | App-shell precache v4 (`owm-shell-v4`) + navigate fallback (offline mở được shell); không cache `/api/*`. |
 | `public/icon*.png/svg` + manifest | Icon nền `#111113` + vạch xanh `#0090ff` đặc (đúng logo desktop) 192/512 + maskable (safe zone 80%); manifest có id/scope/lang/orientation/shortcuts. |
 
 ## Bảng "triệu chứng → chỗ sửa"
@@ -99,6 +102,16 @@
 | Điện thoại mất kết nối sau khi restart máy | **Không còn là vấn đề** (worker tự tìm lại bridge qua heartbeat). Nếu mất hẳn: quota Workers free (100k/ngày) hoặc bridge chưa chạy |
 | OpenWork update đổi format dữ liệu | Adapter cô lập: `discovery.js` (engine-instances.json), `bootstrap.js` (tokens.json) |
 | Session mới toàn tên "Mobile" | `web/src/pages/home.jsx` + `sessions.jsx` (`newSession()`) từng gửi cứng `title: "Mobile"` — đã bỏ, tạo session để trống body `{}` cho server tự sinh tên |
+| Nút Tải về / ảnh trong app báo 401 với token master | `bridge/src/index.js` từng gọi `isAuthorized()` (chỉ nhìn header) dù `requestToken()` đã trích `?_t=` — đã sửa sang `isTokenAuthorized(token, ...)` công nhận cả hai; test `?_t= query token counts as master token` trong `bridge/test/bridge.test.js` |
+| Upload file lớn treo / văng app | `files.jsx` từng `btoa(String.fromCharCode(...spread))` tràn stack — đã thay bằng `fileToBase64()` (FileReader) + `bytesToBase64()` chunk trong `web/src/api.js`; giới hạn rõ `MAX_UPLOAD_BYTES` 40MB (base64 phồng ~37%, proxy chặn 64MB) |
+| Muốn nhận file agent tạo mà không mò sang tab Files | Engine không có part file riêng — agent ghi file qua tool `write` rồi nhắc đường dẫn trong text. `chat.jsx` (`findFileRefsInText` + `FileRefCard` + `linkifyFiles`) tự hiện thẻ Mở/Tải về ngay trong tin nhắn |
+| Muốn gửi file/ảnh từ điện thoại cho agent | Nút kẹp giấy trong composer `chat.jsx`: upload vào `mobile-uploads/` qua `owUploadFile()` rồi gửi prompt kèm đường dẫn (engine không nhận part file riêng) |
+| Tải file không hiện % / không resume | `bridge/src/proxy.js` từng chỉ forward 5 header — đã thêm `content-length/content-range/accept-ranges` |
+| Bấm Tải về trên iOS mở file trong tab thay vì lưu / file lớn không biết tiến trình | `web/src/api.js` (`owDownload()`: fetch header auth + đọc stream hiện % + AbortController) + `files.jsx` (nút Tải về Blob + thanh progress + Hủy + nút Chia sẻ qua `navigator.share` để iOS Lưu về Files) + `bridge/src/proxy.js` (tự gắn `content-disposition: attachment` fallback từ `?path=` khi upstream quên); test `filenameFromQuery` trong `bridge/test/bridge.test.js` |
+| Nút Trở lại Sessions / Workspace bị trôi theo nội dung khi cuộn | `web/src/app.jsx` + `web/src/styles.css` — chuyển nút Trở lại lên `topbar` (vốn đã sticky ở đỉnh, kèm blur và safe-area), gỡ `BackButton` trôi trong `page-head` ở chat, sessions, files. FileViewer mượn topbar qua event `owm:topback` |
+| Sửa code web nhưng điện thoại vẫn hiện bản cũ | Phải build `npm run build` trong `web/` rồi deploy worker: `cd worker && npx wrangler deploy`. Đã bump `CACHE = "owm-shell-v4"` trong `web/public/sw.js` để PWA kích hoạt xóa cache cũ |
+| Bridge không tự chạy khi đăng nhập Windows | `openpocket autostart --enable [--with-openwork]` tạo task `OpenPocketBridge` (ONLOGON) trong Task Scheduler — xem `bridge/src/autostart.js` + `bridge/bin/openpocket.js`. Cần quyền admin lần đầu; xem trạng thái bằng `--status` |
+| Điện thoại báo mất server mà OpenWork chưa mở | Bấm nút "Bật OpenWork trên máy tính" (banner đỏ + Cài đặt) → `POST /api/openwork/wake` → `bridge/src/openwork-launch.js` tự tìm exe và mở app. Tìm không thấy exe thì set `openworkExe` trong config hoặc env `OPENWORK_EXE`. Máy tắt hẳn/ngủ sâu thì chịu, phải bật máy trước |
 
 ## Route API của bridge (phone gọi)
 
@@ -108,6 +121,7 @@
 | `POST /api/pair` | **không cần** (rate-limit 10/phút/IP) | Ghép thiết bị bằng mã 30 phút → trả khóa owd_ vĩnh viễn |
 | `GET /api/devices` · `DELETE /api/devices/:id` | owm_/owd_ | Danh sách thiết bị đã ghép + thu hồi |
 | `POST /api/recheck` | owm_ | Ép discovery lại |
+| `POST /api/openwork/wake` | owm_/owd_ (rate-limit 5/phút/IP) | Mở OpenWork desktop trên máy tính (đang chạy rồi → `alreadyRunning`; mới mở → `launched`) |
 | `/api/ow/<path>` | owm_ (header hoặc `?_t=` cho GET) | Proxy openwork-server. Whitelist: `/workspaces*`, `/workspace/:id/(events|session-groups|files|opencode/*|engine/reload|artifacts|inbox)`, `/approvals*`, `/files/sessions/*`, `/experimental/(ui-control|extensions)`, `/status`, `/capabilities`, `/whoami`, `/health` |
 
 ## Endpoint openwork-server hay dùng (gọi qua `/api/ow/`)

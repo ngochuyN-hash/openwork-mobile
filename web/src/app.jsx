@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "preact/hooks";
-import { getToken, apiState } from "./api.js";
+import { getToken, apiState, apiWakeOpenWork, apiRecheck } from "./api.js";
 import { BackIcon, WsIcon, GearIcon, MessageIcon } from "./components/icons.jsx";
 import { Banner } from "./components/ui.jsx";
 import { PairingScreen } from "./pages/pairing.jsx";
@@ -41,11 +41,21 @@ export function App() {
   const [paired, setPaired] = useState(Boolean(getToken()));
   const [route, setRoute] = useState(parseHash());
   const [state, setState] = useState(null); // bridge state (poll nhẹ)
+  // Trang con mượn topbar cho nút Trở lại/Đóng của nó (vd FileViewer).
+  const [topBackOverride, setTopBackOverride] = useState(null);
 
   useEffect(() => {
-    const onHash = () => setRoute(parseHash());
+    const onHash = () => {
+      setRoute(parseHash());
+      setTopBackOverride(null);
+    };
+    const onTopBack = (e) => setTopBackOverride(e.detail);
     window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
+    window.addEventListener("owm:topback", onTopBack);
+    return () => {
+      window.removeEventListener("hashchange", onHash);
+      window.removeEventListener("owm:topback", onTopBack);
+    };
   }, []);
 
   // Poll bridge state mỗi 15s: phát hiện OpenWork restart / mất server.
@@ -109,14 +119,18 @@ export function App() {
   return (
     <>
       <div class="topbar">
-        {back && (
+        {(topBackOverride ?? back) && (
           <button
             class="topbar-back"
-            onClick={() => navigate(back.href)}
-            aria-label={`Quay lại ${back.label}`}
+            onClick={() => {
+              const target = topBackOverride ?? back;
+              if (target.onBack) target.onBack();
+              else navigate(target.href);
+            }}
+            aria-label={`Quay lại ${(topBackOverride ?? back).label}`}
           >
             <BackIcon size={18} />
-            <span>{back.label}</span>
+            <span>{(topBackOverride ?? back).label}</span>
           </button>
         )}
         <OpenWorkMark className="logo-mark" />
@@ -133,6 +147,8 @@ export function App() {
 }
 
 function StatusBanners({ state, onRecheck }) {
+  const [waking, setWaking] = useState(false);
+  const [wakeMsg, setWakeMsg] = useState("");
   if (!state) return null;
   if (state.restartRequired && !state.tokenActive) {
     return (
@@ -146,10 +162,35 @@ function StatusBanners({ state, onRecheck }) {
     );
   }
   if (!state.server) {
+    const wake = async () => {
+      setWaking(true);
+      setWakeMsg("");
+      try {
+        const result = await apiWakeOpenWork();
+        if (result?.alreadyRunning) {
+          await apiRecheck();
+          onRecheck();
+        } else {
+          setWakeMsg("Đã gửi lệnh mở OpenWork — đợi ~20s rồi bấm Kiểm tra lại.");
+        }
+      } catch (e) {
+        setWakeMsg(String(e.message || e));
+      } finally {
+        setWaking(false);
+      }
+    };
     return (
-      <Banner kind="err" actionLabel="Thử lại" onAction={onRecheck}>
-        Không tìm thấy openwork-server — OpenWork desktop có đang chạy không?
-      </Banner>
+      <div>
+        <Banner kind="err" actionLabel="Thử lại" onAction={onRecheck}>
+          Không tìm thấy openwork-server — OpenWork desktop có đang chạy không?
+        </Banner>
+        <div class="page-actions" style="margin:8px 0 0">
+          <button class="btn small" disabled={waking} onClick={wake}>
+            {waking ? "Đang bật…" : "Bật OpenWork trên máy tính"}
+          </button>
+        </div>
+        {wakeMsg && <p class="sheet-body" style="margin:6px 0 0">{wakeMsg}</p>}
+      </div>
     );
   }
   return null;

@@ -157,6 +157,29 @@ h3 {
   padding: 3px 9px;
   white-space: nowrap;
 }
+/* Nút Trở lại ghim trên topbar (sticky sẵn): cuộn đâu vẫn bấm được. */
+.topbar-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 6px 10px 6px 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-btn);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.topbar-back:active {
+  background: var(--bg-hover);
+}
 
 /* ---------- Bottom nav nổi ---------- */
 .bottomnav-wrap {
@@ -659,6 +682,76 @@ label.field {
   color: var(--text-faint);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+/* Thẻ file agent nhắc tới trong chat: tên + nút Mở/Tải về + Xem trong Files. */
+.file-ref {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 13px;
+}
+.file-ref-ico {
+  display: inline-flex;
+  color: var(--text-dim);
+}
+.file-ref-name {
+  flex: 1 1 100px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+.file-ref-miss {
+  flex-basis: 100%;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+/* File đính kèm chờ gửi trong khung chat. */
+.attach-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-raised);
+  font-size: 12.5px;
+}
+.attach-chip .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.attach-chip .size {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.attach-chip button {
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px;
+  min-width: 32px;
+  min-height: 32px;
+}
 .composer {
   position: sticky;
   bottom: 0;
@@ -690,6 +783,11 @@ label.field {
   margin-bottom: 6px;
   font-size: 12px;
   padding: 6px 8px;
+}
+/* Nút gửi morph thành nút dừng khi agent đang chạy (như ChatGPT/Gemini). */
+.composer .btn-send.stop {
+  background: var(--danger);
+  color: #fff;
 }
 .permission-card {
   border: 1px solid var(--warn);

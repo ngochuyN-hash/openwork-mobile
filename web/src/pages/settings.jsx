@@ -1,9 +1,11 @@
 import { useEffect, useState } from "preact/hooks";
-import { clearToken, apiRecheck, apiDevices, apiRevokeDevice } from "../api.js";
+import { clearToken, apiRecheck, apiDevices, apiRevokeDevice, apiWakeOpenWork } from "../api.js";
 import { useConfirm } from "../components/ui.jsx";
 
 export function SettingsPage({ state, onRecheck, onUnpaired }) {
   const [busy, setBusy] = useState(false);
+  const [waking, setWaking] = useState(false);
+  const [wakeMsg, setWakeMsg] = useState("");
   const [confirmDialog, askConfirm] = useConfirm();
   const [devices, setDevices] = useState(null);
   const [thisDeviceLabel, setThisDeviceLabel] = useState("");
@@ -39,6 +41,24 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     }
   }
 
+  async function wake() {
+    setWaking(true);
+    setWakeMsg("");
+    try {
+      const result = await apiWakeOpenWork();
+      if (result?.alreadyRunning) {
+        await apiRecheck();
+        onRecheck();
+      } else {
+        setWakeMsg("Đã gửi lệnh mở OpenWork — đợi ~20s rồi bấm Kiểm tra lại.");
+      }
+    } catch (e) {
+      setWakeMsg(String(e.message || e));
+    } finally {
+      setWaking(false);
+    }
+  }
+
   function unpair() {
     askConfirm({
       title: "Gỡ pairing?",
@@ -57,6 +77,8 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     ["Token", state?.tokenActive ? "đang hoạt động" : state?.restartRequired ? "chờ restart OpenWork" : "đang kiểm tra…"],
     ["Engine", state?.engine ? `pid ${state.engine.pid} (port ${state.engine.enginePort})` : "—"],
     ["URL từ xa", state?.publicUrl ?? "—"],
+    ["OpenWork .exe", state?.openworkExeFound ? "tìm thấy trên máy" : state?.openworkExeFound === false ? "chưa tìm thấy (bật từ xa có thể lỗi)" : "—"],
+    ["Tự mở OpenWork", state?.autoLaunchOpenWork ? "bật (bridge khởi động là mở)" : "tắt"],
     ["Bridge", `v${state?.bridgeVersion ?? "?"} · ${state?.dataDir ?? ""}`],
   ];
 
@@ -79,10 +101,14 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
           <button class="btn small" disabled={busy} onClick={recheck}>
             {busy ? "Đang kiểm tra…" : "Kiểm tra lại"}
           </button>
+          <button class="btn small" disabled={waking} onClick={wake}>
+            {waking ? "Đang bật…" : "Bật OpenWork trên máy tính"}
+          </button>
           <button class="btn small danger" onClick={unpair}>
             Gỡ pairing
           </button>
         </div>
+        {wakeMsg && <p class="sheet-body" style="margin:8px 0 0">{wakeMsg}</p>}
       </div>
 
       <div class="card">

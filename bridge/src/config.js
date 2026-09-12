@@ -44,6 +44,12 @@ export function loadConfig() {
     // địa chỉ tunnel hiện tại lên đó để điện thoại luôn tìm được máy.
     lookupUrl: typeof parsed.lookupUrl === "string" ? parsed.lookupUrl : "",
     lookupSecret: typeof parsed.lookupSecret === "string" ? parsed.lookupSecret : "",
+    // Đường dẫn file .exe OpenWork desktop (trống = tự tìm ở chỗ hay gặp).
+    // Override bằng env OPENWORK_EXE. Dùng cho "bật OpenWork từ điện thoại".
+    openworkExe: typeof parsed.openworkExe === "string" ? parsed.openworkExe : "",
+    // true = mỗi lần bridge khởi động mà chưa thấy server thì tự mở OpenWork.
+    // Bật bằng: openpocket autostart --enable --with-openwork
+    autoLaunchOpenWork: parsed.autoLaunchOpenWork === true,
     ...parsed,
   };
   return config;

@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { ow, unwrap, sseUrl } from "../api.js";
-import { navigate } from "../app.jsx";
+import { ow, unwrap, sseUrl, owDownload, owUploadFile, formatBytes, bytesToBase64 } from "../api.js";
 import { DownloadIcon, FileIcon, FolderIcon, ImageIcon, RefreshIcon, UploadIcon } from "../components/icons.jsx";
-import { BackButton, Banner, Empty, Loading } from "../components/ui.jsx";
+import { Banner, Empty, Loading } from "../components/ui.jsx";
 
 const TEXT_EXT = new Set([
   "txt", "md", "markdown", "json", "jsonc", "js", "jsx", "mjs", "cjs", "ts", "tsx", "css", "scss", "html", "htm",
   "xml", "yml", "yaml", "toml", "ini", "cfg", "conf", "env", "gitignore", "py", "rb", "go", "rs", "java", "kt",
-  "c", "h", "cpp", "hpp", "cs", "php", "sh", "bash", "ps1", "bat", "cmd", "sql", "csv", "tsv", "log", "svg",
+  "c", "h", "cpp", "hpp", "cs", "php", "sh", "bash", "ps1", "bat", "cmd", "sql", "csv", "tsv", "log",
   "lock", "editorconfig", "prettierrc", "eslintrc", "gitattributes", "dockerfile", "properties", "gradle",
 ]);
-const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
+const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "avif"]);
+const PDF_EXT = new Set(["pdf"]);
 
 function extOf(name) {
   const dot = name.lastIndexOf(".");
@@ -24,14 +24,8 @@ function isText(name) {
 function isImage(name) {
   return IMAGE_EXT.has(extOf(name));
 }
-
-/** Định dạng dung lượng theo Intl + đơn vị phù hợp (skill ui-rules: dùng Intl). */
-function formatSize(bytes) {
-  if (bytes == null) return "";
-  const nf = new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 1 });
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${nf.format(bytes / 1024)} KB`;
-  return `${nf.format(bytes / (1024 * 1024))} MB`;
+function isPdf(name) {
+  return PDF_EXT.has(extOf(name));
 }
 
 export function FilesPage({ route }) {
@@ -40,7 +34,8 @@ export function FilesPage({ route }) {
   const [entries, setEntries] = useState(null);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
-  const [opened, setOpened] = useState(null); // {name, path, kind: 'text'|'image'}
+  const [uploadNote, setUploadNote] = useState("");
+  const [opened, setOpened] = useState(null); // {name, path, kind: 'text'|'image'|'pdf'|'binary'}
   const uploadRef = useRef(null);
   const wsEnc = encodeURIComponent(wsId);
 
@@ -73,26 +68,26 @@ export function FilesPage({ route }) {
 
   function openFile(node) {
     if (isImage(node.name)) setOpened({ name: node.name, path: node.path ?? node.absolutePath, kind: "image" });
+    else if (isPdf(node.name)) setOpened({ name: node.name, path: node.path ?? node.absolutePath, kind: "pdf" });
     else if (isText(node.name)) setOpened({ name: node.name, path: node.path ?? node.absolutePath, kind: "text" });
     else setOpened({ name: node.name, path: node.path ?? node.absolutePath, kind: "binary" });
   }
 
   async function uploadPicked(fileList) {
     setUploading(true);
+    setUploadNote("");
+    let done = 0;
     for (const file of fileList) {
-      const buffer = await file.arrayBuffer();
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-      const target = path ? `${path.replace(/\/+$/, "")}/${file.name}` : file.name;
+      setUploadNote(`Đang tải lên ${done + 1}/${fileList.length}: ${file.name}…`);
       try {
-        await ow(`/workspace/${wsEnc}/files/raw`, {
-          method: "POST",
-          body: { path: target, dataBase64: base64 },
-        });
+        await owUploadFile(wsId, path, file);
+        done += 1;
       } catch (e) {
         setError(`Upload ${file.name} lỗi: ${e.message}`);
       }
     }
     setUploading(false);
+    setUploadNote(done ? `Đã tải lên ${done}/${fileList.length} file.` : "");
     load(path);
   }
 
@@ -114,8 +109,7 @@ export function FilesPage({ route }) {
   return (
     <>
       <div class="page-head">
-        <BackButton label="Sessions" onBack={() => navigate(`#/ws/${wsEnc}`)} />
-        <div class="page-actions">
+        <div class="page-actions" style="margin-left:auto">
           <button class="btn small ghost btn-icon" disabled={uploading} onClick={() => uploadRef.current?.click()}>
             <UploadIcon size={16} /> {uploading ? "Đang tải lên…" : "Tải lên"}
           </button>
@@ -156,6 +150,7 @@ export function FilesPage({ route }) {
       </nav>
 
       {error && <Banner kind="err" actionLabel="Thử lại" onAction={() => load(path)}>{error}</Banner>}
+      {uploadNote && !error && <Banner kind="warn" actionLabel="Đã rõ" onAction={() => setUploadNote("")}>{uploadNote}</Banner>}
       {entries === null && <Loading />}
 
       {path && (
@@ -172,7 +167,7 @@ export function FilesPage({ route }) {
           </span>
           <span class="name">{node.name}</span>
           {node.type !== "directory" && node.size != null && (
-            <span class="size">{formatSize(node.size)}</span>
+            <span class="size">{formatBytes(node.size)}</span>
           )}
         </div>
       ))}
@@ -190,6 +185,17 @@ function FileViewer({ wsEnc, file, onClose }) {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [dl, setDl] = useState(null); // {loaded, total} khi đang tải | {done, filename, url, blob} khi xong
+  const [dlError, setDlError] = useState("");
+  const abortRef = useRef(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  // Nút Đóng mượn topbar (ghim cố định): báo lên App qua event nội bộ, gửi 1 lần lúc mở.
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("owm:topback", { detail: { label: "Đóng", onBack: () => closeRef.current() } }));
+    return () => window.dispatchEvent(new CustomEvent("owm:topback", { detail: null }));
+  }, []);
 
   useEffect(() => {
     if (file.kind !== "text") return;
@@ -209,11 +215,12 @@ function FileViewer({ wsEnc, file, onClose }) {
     setSaving(true);
     setError("");
     try {
-      const base64 = btoa(unescape(encodeURIComponent(edited)));
+      const base64 = bytesToBase64(new TextEncoder().encode(edited));
       await ow(`/workspace/${wsEnc}/files/raw`, {
         method: "POST",
         body: { path: file.path, dataBase64: base64 },
       });
+      setContent(edited);
       setDirty(false);
     } catch (e) {
       setError(`Lưu lỗi: ${e.message}`);
@@ -224,14 +231,96 @@ function FileViewer({ wsEnc, file, onClose }) {
 
   const downloadUrl = sseUrl(`/workspace/${wsEnc}/files/raw?path=${encodeURIComponent(file.path)}`);
 
+  // Tải qua fetch + Blob: <a download> gốc hay bị Safari/PWA bỏ qua (mở file
+  // trong tab thay vì lưu). Bản này hiện % + hủy được, xong mới kích <a download>.
+  async function downloadFile() {
+    if (abortRef.current) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setDl({ loaded: 0, total: 0 });
+    setDlError("");
+    try {
+      const { blob, filename } = await owDownload(decodeURIComponent(wsEnc), file.path, {
+        signal: controller.signal,
+        fallbackName: file.name,
+        onProgress: ({ loaded, total }) => setDl({ loaded, total }),
+      });
+      setDl((prev) => {
+        if (prev?.url) URL.revokeObjectURL(prev.url);
+        return prev;
+      });
+      const url = URL.createObjectURL(blob);
+      setDl({ done: true, filename, url, blob });
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (e) {
+      if (e?.name !== "AbortError") setDlError(`Tải lỗi: ${e.message}`);
+      setDl(null);
+    } finally {
+      abortRef.current = null;
+    }
+  }
+
+  function cancelDownload() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setDl(null);
+  }
+
+  // iOS chỉ cho "Lưu về Files" qua Share sheet — hiện nút này khi hỗ trợ.
+  async function shareFile() {
+    try {
+      const ready = dl?.done ? dl : await (async () => {
+        const r = await owDownload(decodeURIComponent(wsEnc), file.path, { fallbackName: file.name });
+        return { done: true, ...r };
+      })();
+      const nav = navigator;
+      const f = new File([ready.blob], ready.filename, { type: ready.blob.type || undefined });
+      if (nav.canShare?.({ files: [f] })) {
+        await nav.share({ files: [f], title: ready.filename });
+        return;
+      }
+      const url = ready.url ?? URL.createObjectURL(ready.blob);
+      window.open(url, "_blank", "noopener");
+    } catch (e) {
+      if (e?.name !== "AbortError") setDlError(`Chia sẻ lỗi: ${e.message}`);
+    }
+  }
+
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    if (dl?.url) URL.revokeObjectURL(dl.url);
+  }, []);
+
+  const dlBusy = !!dl && !dl.done;
+  const dlLabel = !dl
+    ? "Tải về"
+    : dl.done
+      ? "Tải lại"
+      : dl.total
+        ? `Đang tải ${Math.round((dl.loaded / dl.total) * 100)}% (${formatBytes(dl.loaded)}/${formatBytes(dl.total)})`
+        : `Đang tải ${formatBytes(dl.loaded)}…`;
+
   return (
     <>
       <div class="page-head">
-        <BackButton label="Đóng" onBack={onClose} />
-        <div class="page-actions">
-          <a class="btn small ghost btn-icon" style="text-decoration:none" href={downloadUrl} download={file.name}>
-            <DownloadIcon size={16} /> Tải về
-          </a>
+        <div class="page-actions" style="margin-left:auto">
+          {dlBusy ? (
+            <button class="btn small ghost btn-icon" onClick={cancelDownload}>
+              Hủy
+            </button>
+          ) : (
+            <button class="btn small ghost btn-icon" onClick={downloadFile}>
+              <DownloadIcon size={16} /> {dlLabel}
+            </button>
+          )}
+          <button class="btn small ghost btn-icon" onClick={shareFile}>
+            Chia sẻ
+          </button>
           {file.kind === "text" && (
             <button class="btn small" disabled={!dirty || saving} onClick={save}>
               {saving ? "Đang lưu…" : dirty ? "Lưu" : "Đã lưu"}
@@ -242,6 +331,10 @@ function FileViewer({ wsEnc, file, onClose }) {
 
       <div class="crumbs mono">{file.path}</div>
       {error && <Banner kind="err">{error}</Banner>}
+      {dlError && <Banner kind="err" actionLabel="Thử lại" onAction={downloadFile}>{dlError}</Banner>}
+      {dlBusy && dl.total > 0 && (
+        <progress value={dl.loaded} max={dl.total} style="width:100%;height:6px" aria-label="Tiến trình tải file" />
+      )}
 
       {file.kind === "text" && content === null && !error && <Loading />}
 
@@ -265,12 +358,20 @@ function FileViewer({ wsEnc, file, onClose }) {
         </div>
       )}
 
+      {file.kind === "pdf" && (
+        <iframe
+          title={`Xem trước ${file.name}`}
+          src={downloadUrl}
+          style="width:100%;height:70vh;border-radius:12px;border:1px solid var(--border);background:var(--bg-raised)"
+        />
+      )}
+
       {file.kind === "binary" && (
         <Empty
           title="File nhị phân"
           hint={`Bấm "Tải về" để tải ${file.name} về điện thoại.`}
           actionLabel="Tải về"
-          onAction={() => { window.location.href = downloadUrl; }}
+          onAction={downloadFile}
         />
       )}
     </>

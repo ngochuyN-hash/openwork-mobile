@@ -115,3 +115,19 @@ export function MessageIcon({ size }) {
     </Icon>
   );
 }
+
+export function ClipIcon({ size }) {
+  return (
+    <Icon size={size ?? 22}>
+      <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </Icon>
+  );
+}
+
+export function StopIcon({ size }) {
+  return (
+    <Icon size={size ?? 20}>
+      <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none" />
+    </Icon>
+  );
+}

@@ -4,3 +4,10 @@ web/dist/
 .DS_Store
 Thumbs.db
 .zcode/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example

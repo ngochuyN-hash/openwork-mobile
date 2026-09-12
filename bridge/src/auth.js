@@ -19,6 +19,12 @@ export function deny(res) {
   res.end(JSON.stringify({ code: "unauthorized", message: "Invalid bridge token" }));
 }
 
+/** So sánh token đã trích (header hoặc ?_t=) với master token. */
+export function isTokenAuthorized(presented, mobileToken) {
+  if (!presented || !mobileToken) return false;
+  return sameToken(presented, mobileToken);
+}
+
 function sameToken(presented, expected) {
   const a = Buffer.from(String(presented));
   const b = Buffer.from(String(expected));

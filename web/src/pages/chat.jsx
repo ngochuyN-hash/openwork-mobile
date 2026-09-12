@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
-import { ow, unwrap, sseUrl, getToken } from "../api.js";
-import { navigate } from "../app.jsx";
-import { BackButton, Banner, Empty, Loading } from "../components/ui.jsx";
+import { ow, unwrap, sseUrl, owUploadFile, formatBytes } from "../api.js";
+import { Banner, Empty, Loading } from "../components/ui.jsx";
+import { ClipIcon, FileIcon, StopIcon } from "../components/icons.jsx";
 
 const SSE_EVENTS = [
   "session.updated",
@@ -22,8 +22,11 @@ export function ChatPage({ route }) {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
+  const [aborting, setAborting] = useState(false);
   const [models, setModels] = useState([]); // [{value:'provider/model', label}]
   const [model, setModel] = useState(() => localStorage.getItem("owm_model") ?? "");
+  const [attached, setAttached] = useState([]); // [{file, path?, status:'ready'|'uploading'|'done'|'error', error?}]
+  const attachRef = useRef(null);
   const queueRef = useRef([]);
   const bottomRef = useRef(null);
   const draftRef = useRef("");
@@ -154,38 +157,77 @@ export function ChatPage({ route }) {
     return { providerID, modelID };
   }
 
+  // Nút gửi morph thành nút dừng khi agent đang chạy (như ChatGPT/Gemini):
+  // ưu tiên phase upload (sending) để tránh bấm nhầm giữa chừng tải file.
+  const busy = running && !sending;
+
   async function send() {
     const text = draft.trim();
-    if (!text || sending) return;
+    if ((!text && !attached.length) || sending || running) return;
+    // Upload file đính kèm trước (vào mobile-uploads/), rồi gửi prompt kèm
+    // đường dẫn để agent đọc — engine không có part file riêng.
+    setSending(true);
+    const uploaded = [];
+    let failed = false;
+    if (attached.length) {
+      setAttached((prev) => prev.map((a) => ({ ...a, status: "uploading", error: "" })));
+      for (const item of attached) {
+        try {
+          const path = await owUploadFile(wsId, "mobile-uploads", item.file);
+          uploaded.push(path);
+          setAttached((prev) => prev.map((a) => (a === item ? { ...a, path, status: "done" } : a)));
+        } catch (e) {
+          failed = true;
+          setAttached((prev) => prev.map((a) => (a === item ? { ...a, status: "error", error: String(e.message || e) } : a)));
+        }
+      }
+    }
+    const fileBlock = uploaded.length
+      ? `File đính kèm từ điện thoại (đã lưu trong workspace):\n${uploaded.map((p) => `- ${p}`).join("\n")}\n`
+      : "";
+    const fullText = fileBlock + (text ? `\n${text}` : "\nHãy đọc các file đính kèm trên và xử lý.");
+    const optimisticText = uploaded.length && !text
+      ? `Đã gửi ${uploaded.length} file đính kèm.`
+      : fullText;
     setDraft("");
+    setAttached([]);
     // hiển thị ngay tin user (optimistic)
     setMessages((prev) => [
       ...(prev ?? []),
-      { info: { id: `local-${Date.now()}`, role: "user", time: { created: Date.now() } }, parts: [{ type: "text", text }] },
+      { info: { id: `local-${Date.now()}`, role: "user", time: { created: Date.now() } }, parts: [{ type: "text", text: optimisticText }] },
     ]);
-    setSending(true);
     try {
       await ow(`${base}/session/${encodeURIComponent(sessionId)}/prompt_async`, {
         method: "POST",
-        body: { parts: [{ type: "text", text }], ...(modelBody() ? { model: modelBody() } : {}) },
+        body: { parts: [{ type: "text", text: fullText }], ...(modelBody() ? { model: modelBody() } : {}) },
       });
       loadMessages();
       loadStatus();
     } catch {
-      queueRef.current.push(text); // offline queue
+      queueRef.current.push(fullText); // offline queue
       setError("Mất kết nối - tin nhắn sẽ tự gửi lại khi có mạng.");
     } finally {
       setSending(false);
     }
+    if (failed) setError("Có file tải lên lỗi — agent chỉ thấy các file đã tải xong.");
+  }
+
+  function pickFiles(fileList) {
+    const fresh = [...fileList].map((file) => ({ file, path: "", status: "ready", error: "" }));
+    setAttached((prev) => [...prev, ...fresh].slice(0, 5));
   }
 
   async function abort() {
+    if (aborting) return; // chống double-tap
+    setAborting(true);
     try {
       await ow(`${base}/session/${encodeURIComponent(sessionId)}/abort`, { method: "POST" });
       loadStatus();
       loadMessages();
     } catch (e) {
       setError(String(e.message || e));
+    } finally {
+      setAborting(false);
     }
   }
 
@@ -211,15 +253,6 @@ export function ChatPage({ route }) {
 
   return (
     <>
-      <div class="page-head">
-        <BackButton label="Sessions" onBack={() => navigate(`#/ws/${encodeURIComponent(wsId)}`)} />
-        {running && (
-          <button class="btn small danger" onClick={abort}>
-            Dừng agent
-          </button>
-        )}
-      </div>
-
       {error && <div class="banner err" role="alert" aria-live="polite"><span>{error}</span></div>}
 
       {permissions.map((p) => (
@@ -245,7 +278,7 @@ export function ChatPage({ route }) {
           <Empty title="Session trống" hint="Gửi prompt đầu tiên cho agent nhé." />
         )}
         {messages?.map((m) => (
-          <MessageBubble key={m.id} message={m} />
+          <MessageBubble key={m.id} message={m} wsId={wsId} />
         ))}
         {running && (
           <div class="msg assistant">
@@ -273,39 +306,91 @@ export function ChatPage({ route }) {
             </select>
           )}
           <div style="display:flex;gap:8px">
+            <button
+              class="btn btn-send"
+              style="background:var(--bg-raised);color:var(--text)"
+              aria-label="Đính kèm file từ điện thoại"
+              disabled={sending}
+              onClick={() => attachRef.current?.click()}
+            >
+              <ClipIcon size={20} />
+            </button>
+            <input
+              ref={attachRef}
+              type="file"
+              multiple
+              hidden
+              aria-hidden="true"
+              tabindex="-1"
+              onChange={(e) => {
+                pickFiles([...e.currentTarget.files]);
+                e.currentTarget.value = "";
+              }}
+            />
             <textarea
-              placeholder="Nhập prompt cho agent…"
+              placeholder={busy ? "Agent đang chạy… gõ tiếp câu mới, bấm ■ để dừng" : "Nhập prompt cho agent…"}
               value={draft}
               onInput={(e) => setDraft(e.currentTarget.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                   e.preventDefault();
-                  send();
+                  if (busy) abort();
+                  else send();
                 }
               }}
             />
-            <button class="btn btn-send" aria-label="Gửi prompt" disabled={!draft.trim() || sending} onClick={send}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="m22 2-7 20-4-9-9-4z" />
-                <path d="M22 2 11 13" />
-              </svg>
-            </button>
+            {busy ? (
+              <button
+                class="btn btn-send stop"
+                aria-label="Dừng agent"
+                title="Dừng agent"
+                disabled={aborting}
+                onClick={abort}
+              >
+                <StopIcon size={20} />
+              </button>
+            ) : (
+              <button class="btn btn-send" aria-label="Gửi prompt" disabled={(!draft.trim() && !attached.length) || sending} onClick={send}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="m22 2-7 20-4-9-9-4z" />
+                  <path d="M22 2 11 13" />
+                </svg>
+              </button>
+            )}
           </div>
+          {attached.length > 0 && (
+            <div class="attach-list">
+              {attached.map((a, i) => (
+                <span class="attach-chip" key={i}>
+                  <span class="name">{a.file.name}</span>
+                  <span class="size">
+                    {a.status === "uploading" ? "đang tải…" : a.status === "error" ? "lỗi" : formatBytes(a.file.size)}
+                  </span>
+                  <button aria-label={`Gỡ ${a.file.name}`} onClick={() => setAttached((prev) => prev.filter((x) => x !== a))}>
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </>
   );
 }
 
-function MessageBubble({ message }) {
+function MessageBubble({ message, wsId }) {
   // Shape engine: {info:{id,role,time,...}, parts:[...]} - fallback cho cả shape phẳng
   const role = message.info?.role ?? message.role;
   if (role !== "user" && role !== "assistant") return null;
   const parts = Array.isArray(message.parts) ? message.parts : [];
+  const files = role === "assistant" ? collectFileRefs(parts) : [];
   return (
     <div class={`msg ${role}`}>
       {parts.map((part, i) => {
-        if (part.type === "text") return <MarkdownText key={i} text={part.text} plain={role === "user"} />;
+        if (part.type === "text") {
+          return <MarkdownText key={i} text={part.text} plain={role === "user"} wsId={wsId} />;
+        }
         if (part.type === "tool") {
           const status = part.state?.status ?? "";
           return (
@@ -324,13 +409,144 @@ function MessageBubble({ message }) {
         }
         return null;
       })}
+      {files.map((f) => (
+        <FileRefCard key={f.path} refPath={f.path} name={f.name} wsId={wsId} />
+      ))}
     </div>
   );
 }
 
+// ---- File agent nhắc tới trong text (engine không có part file riêng) ----
+// Quét text + input/output của tool write/edit/bash để tìm đường dẫn file
+// agent vừa tạo/sửa, hiện thẻ bấm để tải/mở ngay trong chat.
+
+/** Hậu tố file hay gặp khi agent xuất báo cáo/tài liệu/ảnh. */
+const FILE_HINT_EXT =
+  /\.(txt|md|markdown|json|jsonc|csv|tsv|log|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|webp|bmp|ico|svg|avif|mp4|mp3|wav|zip)\b/i;
+
+function baseNameOf(p) {
+  return String(p).split(/[\\/]/).filter(Boolean).pop() ?? String(p);
+}
+
+/** Tìm các đường dẫn file trong text (code `...`, đường dẫn Windows, tương đối). */
+export function findFileRefsInText(text) {
+  const out = [];
+  const seen = new Set();
+  const push = (p) => {
+    const clean = String(p).replace(/^[<"'“”'(\[]+|[>"'“”'().,;:\]\)]+$/g, "").trim();
+    if (!clean || seen.has(clean)) return;
+    if (!FILE_HINT_EXT.test(clean)) return;
+    if (clean.length > 260) return;
+    seen.add(clean);
+    out.push({ path: clean, name: baseNameOf(clean) });
+  };
+  const src = String(text ?? "");
+  // 1. Đoạn code `duong/dan/file.ext`
+  for (const m of src.matchAll(/`([^`\n]{1,180})`/g)) push(m[1]);
+  // 2. Đường dẫn Windows C:\... hoặc C:/...
+  for (const m of src.matchAll(/[A-Za-z]:[\\/][^\s"'“”'()[\]<>]{1,180}/g)) push(m[0]);
+  // 3. Đường dẫn tương đối có thư mục: thu-muc/file.ext
+  for (const m of src.matchAll(/(?:^|[\s"'“”'(\[])([\w\-.À-ỹ]+(?:[\\/][\w\-.À-ỹ ]+)+\.\w{2,5})\b/g)) push(m[1]);
+  return out;
+}
+
+/** Gom mọi file agent nhắc tới trong 1 message (text + tool input/output). */
+function collectFileRefs(parts) {
+  const out = [];
+  const seen = new Set();
+  const add = (ref) => {
+    if (!ref || seen.has(ref.path)) return;
+    seen.add(ref.path);
+    out.push(ref);
+  };
+  for (const part of parts) {
+    if (part.type === "text" && part.text) {
+      for (const ref of findFileRefsInText(part.text)) add(ref);
+    }
+    if (part.type === "tool") {
+      const blob = JSON.stringify(part.state?.input ?? {});
+      for (const m of blob.matchAll(/"filePath"\s*:\s*"([^"]{1,200})"/g)) {
+        const p = m[1];
+        if (FILE_HINT_EXT.test(p)) add({ path: p, name: baseNameOf(p) });
+      }
+      const output = part.state?.output;
+      if (typeof output === "string") {
+        for (const ref of findFileRefsInText(output.slice(0, 4000))) add(ref);
+      }
+    }
+  }
+  return out.slice(0, 5);
+}
+
+/** Thẻ file trong chat: bấm để xem/tải ngay, không cần mò sang tab Files. */
+function FileRefCard({ refPath, name, wsId }) {
+  const [checking, setChecking] = useState(false);
+  const [missing, setMissing] = useState(false);
+  const base = `/workspace/${encodeURIComponent(wsId)}`;
+
+  // Agent hay nhắc đường dẫn tuyệt đối Windows (C:\...), còn API file hiểu
+  // đường dẫn tương đối trong workspace — thử cả hai, cái nào có thì dùng.
+  function candidates() {
+    const out = [refPath];
+    const m = /^[A-Za-z]:[\\/]/.exec(refPath);
+    if (m) out.push(refPath.slice(2).replace(/\\/g, "/").replace(/^\/+/, ""));
+    return out;
+  }
+
+  async function open() {
+    setChecking(true);
+    setMissing(false);
+    try {
+      let found = "";
+      for (const p of candidates()) {
+        try {
+          await ow(`${base}/files/stat?path=${encodeURIComponent(p)}`);
+          found = p;
+          break;
+        } catch {
+          /* thử ứng viên tiếp theo */
+        }
+      }
+      if (!found) {
+        setMissing(true);
+        return;
+      }
+      // Mở tab mới để giữ nguyên trang chat (PWA không bị mất chỗ).
+      window.open(sseUrl(`${base}/files/raw?path=${encodeURIComponent(found)}`), "_blank", "noopener");
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  return (
+    <div class="file-ref">
+      <span class="file-ref-ico" aria-hidden="true"><FileIcon size={16} /></span>
+      <span class="file-ref-name">{name}</span>
+      <button class="btn small ghost" disabled={checking} onClick={open}>
+        {checking ? "Đang mở…" : "Mở / Tải về"}
+      </button>
+      <a
+        class="btn small ghost"
+        style="text-decoration:none"
+        href={`#/ws/${encodeURIComponent(wsId)}/files?path=${encodeURIComponent(dirOf(refPath))}`}
+      >
+        Xem trong Files
+      </a>
+      {missing && <span class="file-ref-miss">Không thấy file này trong workspace (có thể agent ghi chỗ khác).</span>}
+    </div>
+  );
+}
+
+function dirOf(p) {
+  const clean = String(p).replace(/^[A-Za-z]:[\\/]/, "").replace(/\\/g, "/");
+  const i = clean.lastIndexOf("/");
+  return i <= 0 ? "" : clean.slice(0, i);
+}
+
 /** Markdown tối giản cho bubble assistant (không thêm dep): code block,
- *  inline code, list gạch đầu dòng, xuống dòng. Tin user giữ text thuần. */
-function MarkdownText({ text, plain }) {
+ *  inline code, list gạch đầu dòng, xuống dòng. Tin user giữ text thuần.
+ *  Đường dẫn file agent nhắc tới thành link bấm để tải/mở ngay. */
+function MarkdownText({ text, plain, wsId }) {
   if (plain || !text) return <span class="msg-text">{text}</span>;
   const blocks = String(text).split(/```/);
   return (
@@ -342,12 +558,12 @@ function MarkdownText({ text, plain }) {
             {block.split("\n").map((line, j) => {
               const trimmed = line.trim();
               if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
-                return <span key={j}>• {renderInline(trimmed.slice(2))}<br /></span>;
+                return <span key={j}>• {renderInline(trimmed.slice(2), wsId)}<br /></span>;
               }
               if (/^\d+[.)] /.test(trimmed)) {
-                return <span key={j}>{renderInline(line)}<br /></span>;
+                return <span key={j}>{renderInline(line, wsId)}<br /></span>;
               }
-              return line ? <span key={j}>{renderInline(line)}<br /></span> : <br key={j} />;
+              return line ? <span key={j}>{renderInline(line, wsId)}<br /></span> : <br key={j} />;
             })}
           </span>
         );
@@ -356,9 +572,39 @@ function MarkdownText({ text, plain }) {
   );
 }
 
-/** Inline code `...` trong một dòng (không thêm dep). */
-function renderInline(line) {
+/** Inline code `...` trong một dòng + link hóa đường dẫn file (không thêm dep). */
+function renderInline(line, wsId) {
   const chunks = String(line).split("`");
-  if (chunks.length === 1) return line;
-  return chunks.map((chunk, i) => (i % 2 === 1 ? <code key={i}>{chunk}</code> : <span key={i}>{chunk}</span>));
+  if (chunks.length === 1) return linkifyFiles(line, wsId);
+  return chunks.map((chunk, i) =>
+    i % 2 === 1 ? <code key={i}>{chunk}</code> : <span key={i}>{linkifyFiles(chunk, wsId)}</span>
+  );
+}
+
+/** Biến đường dẫn file trong text thường thành link Mở / Tải về. */
+function linkifyFiles(text, wsId) {
+  if (!wsId) return text;
+  const refs = findFileRefsInText(text);
+  if (!refs.length) return text;
+  const parts = [];
+  let rest = String(text);
+  let k = 0;
+  for (const ref of refs) {
+    const at = rest.indexOf(ref.path);
+    if (at < 0) continue;
+    if (at > 0) parts.push(<span key={k++}>{rest.slice(0, at)}</span>);
+    parts.push(
+      <a
+        key={k++}
+        href={sseUrl(`/workspace/${encodeURIComponent(wsId)}/files/raw?path=${encodeURIComponent(ref.path)}`)}
+        target="_blank"
+        rel="noreferrer"
+      >
+        {ref.path}
+      </a>
+    );
+    rest = rest.slice(at + ref.path.length);
+  }
+  if (rest) parts.push(<span key={k++}>{rest}</span>);
+  return parts;
 }

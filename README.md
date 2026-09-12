@@ -34,7 +34,8 @@ opencode engine  →  sessions · models · files
 - 📁 **Workspaces**: danh sách live, tạo workspace mới (FAB gradient)
 - 💬 **Sessions**: danh sách (busy/idle realtime), tạo mới, xem transcript đầy đủ (text/tool/reasoning, markdown + code block), gửi prompt (chọn model), abort
 - 🔐 **Permissions**: duyệt Allow/Deny ngay trên điện thoại khi agent xin phép
-- 🗂 **Files**: duyệt cây thư mục, xem/sửa + lưu file text, xem ảnh, upload từ điện thoại, tải file về
+- 🗂 **Files**: duyệt cây thư mục, xem/sửa + lưu file text, xem ảnh **+ PDF**, upload từ điện thoại, tải file về (hiện % + Hủy + nút Chia sẻ để iOS Lưu về Files)
+- 📎 **File trong chat (2 chiều)**: file agent nhắc tới hiện **thẻ Mở/Tải về + Xem trong Files** ngay trong tin nhắn; nút **kẹp giấy** trong khung chat để gửi file/ảnh từ điện thoại cho agent đọc
 - 📴 **Offline queue** + auto-reconnect; PWA cài màn hình chính iOS/Android
 
 ## Giao diện (v4 "desktop-first")
@@ -44,7 +45,7 @@ Nhân bản giao diện **OpenWork desktop thật** (soi trực tiếp app đang
 **nút chính đen (light) / trắng (dark)** như nút "Add skill" trên desktop,
 **chấm màu nhận diện workspace** (mỗi ws một màu cố định), **logo lục giác chính chủ** `openwork-mark.svg` (SVG gốc, có bản dark). Cấu trúc học từ các app điều khiển agent
 (Happy, Omnara): mở app là thấy **Phiên gần đây gộp mọi workspace**, nav nổi
-3 tab (Phiên · Workspace · Cài đặt), FAB tạo session. Theo skill nội bộ
+3 tab (Phiên · Workspace · Cài đặt), FAB tạo session. **Nút Trở lại (Sessions, Workspace, Đóng) luôn ghim cố định trên topbar** (vốn sticky trên đỉnh màn hình kèm blur và safe-area), cuộn nội dung dài đến đâu cũng không trôi mất. Theo skill nội bộ
 `pwa-workspace-ui` (`.zcode/skills/`): input 16px chống iOS zoom, nút ≥44px,
 safe-area, skeleton loading, `prefers-reduced-motion`, icon SVG toàn bộ.
 
@@ -88,7 +89,15 @@ Bridge khởi động xong sẽ **tự mở Cloudflare Quick Tunnel** (tự tả
 | Cloudflare **Named Tunnel** + domain | ~200k/năm (tiền domain) | URL cố định; thêm được Cloudflare Access (OTP email) — bảo mật đẹp nhất khi lộ công khai |
 | **Tailscale** (`tailscale serve --bg 8788`) | 0đ | URL cố định `https://<pc>.<tailnet>.ts.net`, riêng tư nhất — nhưng điện thoại phải cài app Tailscale |
 
-**Chạy bridge tự động khi bật máy (tùy chọn):** Task Scheduler → Action: `node "C:\Antigravity\Openwork Mobile App\bridge\src\index.js"`, Trigger: At log on.
+**Tự chạy bridge khi bật máy (khuyên dùng):**
+```bash
+openpocket autostart --enable --with-openwork   # đăng nhập Windows là bridge + OpenWork tự mở
+openpocket autostart --status                   # xem đang bật hay tắt
+openpocket autostart --disable                  # tắt tự chạy
+```
+Không kèm `--with-openwork` thì chỉ bridge tự chạy (OpenWork bạn tự mở tay — bridge tự dò lại server mỗi 5s nên thứ tự không quan trọng).
+
+**Bật OpenWork từ điện thoại:** máy tính đang bật + bridge đang chạy mà app OpenWork chưa mở → mở app trên điện thoại sẽ thấy nút **"Bật OpenWork trên máy tính"** (ngay banner đỏ + trong Cài đặt → Trạng thái bridge). Bấm → đợi ~20s → bấm Kiểm tra lại. Lưu ý: máy tính tắt hẳn/ngủ sâu thì chịu — phải bật máy lên trước.
 
 ## Cấu trúc dự án
 
@@ -129,6 +138,7 @@ CODE_SUMMARY.md  # bản đồ code + bảng "triệu chứng → chỗ sửa"
 cd bridge && npm test                                   # unit test
 node bridge/scripts/e2e-live.mjs <wsId> <provider> <model>   # E2E live
 cd web && npm run dev                                   # dev server (proxy /api qua bridge)
+cd web && npm run build && cd ../worker && npx wrangler deploy # build + deploy worker "địa chỉ cố định"
 ```
 
 ## Quy tắc dự án

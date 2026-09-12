@@ -17,6 +17,9 @@ const ALLOWED_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 const COPY_RESPONSE_HEADERS = [
   "content-type",
   "content-disposition",
+  "content-length",
+  "content-range",
+  "accept-ranges",
   "cache-control",
   "etag",
   "last-modified",
@@ -28,6 +31,19 @@ export function isProxyPathAllowed(path) {
 
 export function isMethodAllowed(method) {
   return ALLOWED_METHODS.has(method.toUpperCase());
+}
+
+/** Lấy tên file từ ?path= để gắn content-disposition fallback. */
+export function filenameFromQuery(rawUrl) {
+  try {
+    const query = String(rawUrl ?? "").split("?")[1] ?? "";
+    const path = new URLSearchParams(query).get("path") ?? "";
+    const clean = path.replace(/[\\/]+$/, "");
+    const cut = Math.max(clean.lastIndexOf("/"), clean.lastIndexOf("\\"));
+    return clean.slice(cut + 1);
+  } catch {
+    return "";
+  }
 }
 
 // Resolve "." and ".." segments textually so the whitelist always judges the
@@ -127,6 +143,17 @@ export async function proxyToOpenWork(req, res, upstreamPath, { baseUrl, ownerTo
   for (const name of COPY_RESPONSE_HEADERS) {
     const value = response.headers.get(name);
     if (value) outHeaders[name] = value;
+  }
+
+  // files/raw không phải SSE: nếu upstream quên gắn tên file, bridge tự gắn
+  // "attachment" để điện thoại hiểu là lưu về máy (kể cả tên có dấu/cách).
+  if (
+    req.method.toUpperCase() === "GET" &&
+    !outHeaders["content-disposition"] &&
+    /^\/workspace\/[^/]+\/files\/raw(\/|$)/.test(normalizeDotSegments(upstreamPath))
+  ) {
+    const name = filenameFromQuery(req.url);
+    if (name) outHeaders["content-disposition"] = `attachment; filename*=UTF-8''${encodeURIComponent(name)}`;
   }
 
   const isSSE = (response.headers.get("content-type") ?? "").includes("text/event-stream");

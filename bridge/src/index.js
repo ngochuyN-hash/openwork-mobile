@@ -4,13 +4,14 @@ import qrcode from "qrcode-terminal";
 import { loadConfig, saveConfig, bridgeDataDir } from "./config.js";
 import { ensureOwnerToken } from "./bootstrap.js";
 import { discoverServer, checkTokenActive, readEngineRegistry, probeServerUrl } from "./discovery.js";
-import { isAuthorized, requestToken, deny } from "./auth.js";
+import { isTokenAuthorized, requestToken, deny } from "./auth.js";
 import { proxyToOpenWork } from "./proxy.js";
 import { createStaticHandler } from "./static.js";
 import { openworkFilePath } from "./paths.js";
 import { startQuickTunnel } from "./tunnel.js";
 import { startLookup } from "./lookup.js";
 import { PairingService, CODE_TTL_MINUTES } from "./pairing.js";
+import { findOpenWorkExe, launchOpenWork } from "./openwork-launch.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -62,6 +63,20 @@ function pairRateLimited(ip) {
   }
   list.push(now);
   pairAttempts.set(ip, list);
+  return false;
+}
+
+// Rate limit cho /api/openwork/wake: 5 lần/phút/IP - chống bấm liên tục mở nhiều app
+const wakeAttempts = new Map();
+function wakeRateLimited(ip) {
+  const now = Date.now();
+  const list = (wakeAttempts.get(ip) ?? []).filter((t) => now - t < 60_000);
+  if (list.length >= 5) {
+    wakeAttempts.set(ip, list);
+    return true;
+  }
+  list.push(now);
+  wakeAttempts.set(ip, list);
   return false;
 }
 
@@ -135,6 +150,14 @@ function openworkDataDirForWatch() {
 
 await refreshDiscovery();
 
+// Tự mở OpenWork khi bridge khởi động (nếu user bật --with-openwork lúc cài
+// autostart). Discovery loop 5s có sẵn sẽ tự bắt server khi app mở xong.
+if (config.autoLaunchOpenWork && !state.server) {
+  launchOpenWork({ configOpenworkExe: config.openworkExe }).catch((error) =>
+    console.error(`[openwork] tự mở lúc khởi động lỗi: ${error.message}`)
+  );
+}
+
 if (state.restartRequired && !state.tokenActive) {
   console.log("");
   console.log("=================================================================");
@@ -190,10 +213,12 @@ async function handleRequest(req, res) {
       return;
     }
 
-    // Các route còn lại: master token (owm_) hoặc khóa thiết bị (owd_)
+    // Các route còn lại: master token (owm_) hoặc khóa thiết bị (owd_).
+    // requestToken() lấy từ header HOẶC ?_t= (GET) — cả hai đều phải được
+    // công nhận như nhau, vì <a>/<img>/EventSource không set được header.
     const token = requestToken(req, url);
     const device = token ? pairing.authenticate(token) : null;
-    if (!isAuthorized(req, config.mobileToken) && !device) return deny(res);
+    if (!isTokenAuthorized(token, config.mobileToken) && !device) return deny(res);
 
     if (req.method === "GET" && pathname === "/api/devices") {
       res.writeHead(200, { "content-type": "application/json" });
@@ -225,6 +250,8 @@ async function handleRequest(req, res) {
           publicUrl: state.tunnelUrl || config.publicUrl || null,
           devices: pairing.list().length,
           pairingCodeSecondsLeft: pairing.codeSecondsLeft(),
+          openworkExeFound: Boolean(findOpenWorkExe(config.openworkExe)),
+          autoLaunchOpenWork: config.autoLaunchOpenWork === true,
           thisDevice: device ? { id: device.id, label: device.label } : { id: "master", label: "Master token (owm_)" },
         })
       );
@@ -235,6 +262,29 @@ async function handleRequest(req, res) {
       await refreshDiscovery({ force: true });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, server: state.server, tokenActive: state.tokenActive, restartRequired: state.restartRequired }));
+      return;
+    }
+
+    // Bật OpenWork desktop từ điện thoại (khi máy tính đang bật + bridge chạy
+    // nhưng app OpenWork chưa mở). Chống bấm liên tục: 5 lần/phút/IP.
+    if (req.method === "POST" && pathname === "/api/openwork/wake") {
+      const ip = req.socket.remoteAddress ?? "?";
+      if (wakeRateLimited(ip)) return deny(res);
+      try {
+        const result = await launchOpenWork({ configOpenworkExe: config.openworkExe });
+        if (result.alreadyRunning) {
+          await refreshDiscovery({ force: true });
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ok: true, alreadyRunning: true, server: state.server }));
+        } else {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ok: true, launched: true, hint: "OpenWork đang mở — đợi ~20s rồi bấm Kiểm tra lại." }));
+        }
+      } catch (error) {
+        const code = error?.code === "openwork_exe_not_found" ? "openwork_exe_not_found" : "wake_failed";
+        res.writeHead(code === "wake_failed" ? 500 : 404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code, message: String(error?.message ?? error), candidates: error?.candidates ?? undefined }));
+      }
       return;
     }
 
