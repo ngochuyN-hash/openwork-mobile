@@ -184,8 +184,8 @@ if (state.restartRequired && !state.tokenActive) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. HTTP server: the only surface exposed (127.0.0.1). Put `tailscale serve`
-//    in front of it for remote HTTPS access from the phone.
+// 3. HTTP server: the only surface exposed (127.0.0.1). The Cloudflare tunnel +
+//    the openpocket worker front it for remote HTTPS access from the phone.
 // ---------------------------------------------------------------------------
 const handleStatic = createStaticHandler(join(__dirname, "..", "..", "web", "dist"));
 

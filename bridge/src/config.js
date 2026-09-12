@@ -38,7 +38,7 @@ export function loadConfig() {
     port: Number.isInteger(parsed.port) && parsed.port > 0 ? parsed.port : 8788,
     // Last known openwork-server port, to probe first on next start.
     lastServerPort: Number.isInteger(parsed.lastServerPort) && parsed.lastServerPort > 0 ? parsed.lastServerPort : 0,
-    // Optional public URL (tailscale serve) — used for the pairing QR.
+    // Optional public URL (when fronting the bridge yourself) — used for the pairing QR.
     publicUrl: typeof parsed.publicUrl === "string" ? parsed.publicUrl : "",
     // Cloudflare Worker "địa chỉ cố định" (worker/ trong dự án) — bridge heartbeat
     // địa chỉ tunnel hiện tại lên đó để điện thoại luôn tìm được máy.

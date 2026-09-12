@@ -141,17 +141,6 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       </div>
 
       <div class="card">
-        <h3>Truy cập từ xa (Tailscale)</h3>
-        <p class="sheet-body">
-          Bridge chỉ nghe trên 127.0.0.1 của máy tính. Để dùng từ bên ngoài, trên máy tính chạy:
-        </p>
-        <pre class="mono" style="background:var(--bg);padding:10px;border-radius:8px;overflow:auto">tailscale serve --bg 8788</pre>
-        <p class="sheet-body">
-          Rồi mở URL tailscale in ra trên terminal bridge (kèm QR) trên điện thoại.
-        </p>
-      </div>
-
-      <div class="card">
         <h3>Về dự án</h3>
         <p class="sheet-body">
           OpenWork Mobile — web app quản lý session/workspace/file của OpenWork desktop.

@@ -45,7 +45,12 @@ export function WorkspacesPage() {
       )}
 
       {workspaces?.map((ws) => (
-        <div key={ws.id} class="card tap" onClick={() => navigate(`#/ws/${encodeURIComponent(ws.id)}`)}>
+        <div
+          key={ws.id}
+          class="card tap ws-card"
+          style={`--ws-c:${wsColor(ws.id)}`}
+          onClick={() => navigate(`#/ws/${encodeURIComponent(ws.id)}`)}
+        >
           <div style="display:flex;gap:12px;align-items:flex-start">
             <span class="tile" aria-hidden="true"><WsIcon /></span>
             <div style="flex:1;min-width:0">

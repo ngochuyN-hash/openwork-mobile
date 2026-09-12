@@ -149,3 +149,29 @@ export function MouseIcon({ size }) {
     </Icon>
   );
 }
+
+export function ExpandIcon({ size }) {
+  return (
+    <Icon size={size ?? 18}>
+      <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+    </Icon>
+  );
+}
+
+export function CameraIcon({ size }) {
+  return (
+    <Icon size={size ?? 18}>
+      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+      <circle cx="12" cy="13" r="4" />
+    </Icon>
+  );
+}
+
+export function PasteIcon({ size }) {
+  return (
+    <Icon size={size ?? 18}>
+      <rect x="8" y="2" width="8" height="4" rx="1" />
+      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+    </Icon>
+  );
+}

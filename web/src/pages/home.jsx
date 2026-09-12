@@ -119,7 +119,7 @@ export function HomePage() {
               <span class={`dot ${status === "busy" ? "busy" : "ok"}`} aria-label={status ?? "idle"} />
             </div>
             <div class="row-between" style="margin-top:6px">
-              <span class="ws-chip">
+              <span class="ws-chip" style={`--ws-c:${wsColor(ws.id)}`}>
                 <span class="ws-dot" style={`background:${wsColor(ws.id)}`} aria-hidden="true" />
                 <span class="ws-name">{ws.name || ws.displayName || ws.id}</span>
               </span>
