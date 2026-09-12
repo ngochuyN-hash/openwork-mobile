@@ -449,7 +449,12 @@ export class ScreenService {
     const srcCopy = join(dir, "desktop-input.cs");
     await writeFile(srcCopy, source, "utf8");
     try {
-      await execFileP(csc, ["/nologo", "/target:exe", "/platform:anycpu", `/out:${exe}`, srcCopy]);
+      // System.Windows.Forms chỉ dùng cho Clipboard.SetText (TEXT đi đường clipboard)
+      await execFileP(csc, [
+        "/nologo", "/target:exe", "/platform:anycpu",
+        "/r:System.Windows.Forms.dll",
+        `/out:${exe}`, srcCopy,
+      ]);
     } catch (error) {
       throw new Error(`Compile daemon lỗi: ${error.message} ${error.stderr ?? ""}`.trim());
     }

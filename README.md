@@ -35,6 +35,7 @@ opencode engine  →  sessions · models · files
 - 💬 **Sessions**: danh sách (busy/idle realtime), tạo mới, xem transcript đầy đủ (text/tool/reasoning, markdown + code block), gửi prompt (chọn model); **chữ agent chảy dần từng đoạn ngay khi đang trả lời**, mất mạng/khóa màn hình/đổi Wifi mở lại tự bắt kịp không cần thoát ra vào lại; khi agent đang chạy, **nút Gửi biến thành nút Dừng đỏ (■)** — bấm lại để ngắt như ChatGPT/Gemini, draft đang gõ được giữ nguyên
 - 🔐 **Permissions**: duyệt Allow/Deny ngay trên điện thoại khi agent xin phép
 - 🗂 **Files**: duyệt cây thư mục, xem/sửa + lưu file text, xem ảnh **+ PDF**, upload từ điện thoại, tải file về (hiện % + Hủy + nút Chia sẻ để iOS Lưu về Files)
+- 🖥 **Màn hình (v1.7, học cơ chế 9Remote)**: xem màn hình máy tính trực tiếp trên điện thoại (~3-4 hình/s, ảnh nén JPEG không lưu đĩa) và **điều khiển được luôn** — chạm = click, giữ kéo = kéo thả, nút chuột phải/cuộn/Enter/Esc, tổ hợp Ctrl/Alt/Shift/Win, **gõ tiếng Việt từ điện thoại** (đi đường clipboard nên không bị IME máy tính ăn chữ). Mặc định ở chế độ **Chỉ xem** — muốn điều khiển phải bật công tắc. Chi tiết bên dưới 👇
 - 📎 **File trong chat (2 chiều)**: file agent nhắc tới hiện **thẻ Mở/Tải về + Xem trong Files** ngay trong tin nhắn; nút **kẹp giấy** trong khung chat để gửi file/ảnh từ điện thoại cho agent đọc
 - 📴 **Offline queue** + auto-reconnect; PWA cài màn hình chính iOS/Android (icon 192/512 + maskable đủ chuẩn cài Android, apple-touch-icon cho iOS)
 
@@ -101,6 +102,15 @@ Không kèm `--with-openwork` thì chỉ bridge tự chạy (OpenWork bạn tự
 
 **Bật OpenWork từ điện thoại:** máy tính đang bật + bridge đang chạy mà app OpenWork chưa mở → mở app trên điện thoại sẽ thấy nút **"Bật OpenWork trên máy tính"** (ngay banner đỏ + trong Cài đặt → Trạng thái bridge). Bấm → đợi ~20s → bấm Kiểm tra lại. Lưu ý: máy tính tắt hẳn/ngủ sâu thì chịu — phải bật máy lên trước.
 
+### Xem & điều khiển màn hình máy tính (tab "Màn hình")
+
+Mở app → tab **Màn hình** (nav đáy) là thấy màn hình máy tính ngay, giống mở TV xem camera nhà:
+
+- **Xem**: bridge chụp màn hình ~3-4 hình/s, nén JPEG và đẩy thẳng về điện thoại (RAM chỉ giữ đúng 1 khung — **không lưu vào đĩa gì cả**). Chọn chất lượng: Nhanh (tiết kiệm 3G) / Cân bằng / Nét. Màn đứng yên gần như tốn 0 byte.
+- **Điều khiển**: bấm nút "Chỉ xem" để đổi thành "Đang điều khiển" → **chạm vào hình = click tại đó**, **giữ rồi kéo = kéo thả**, các nút phụ: chuột phải, double-click, cuộn, Enter/Esc/Backspace/Tab, tổ hợp (bật sáng Ctrl/Alt/Shift/Win rồi bấm phím), và **ô gõ chữ tiếng Việt** — chữ được đưa sang máy tính qua clipboard + dán, nên dấu nguyên vẹn dù máy cài Unikey.
+- **Giới hạn đáng nhớ**: không thấy màn hình khóa / UAC (Windows chặn chụp secure desktop); chỉ monitor chính; không điều khiển được app chạy quyền As Admin; khoảng 3-4 hình/s là "chụp liên tục" chứ không phải video. Không ai xem thì bridge tự ngừng chụp sau 90 giây cho mát máy.
+- Cơ chế học từ **9Remote** (mổ xẻ bản npm cài trên máy): chụp bằng `node-screenshots` + nén `sharp`, điều khiển bằng daemon C# tự compile (SendInput), gõ chữ đi clipboard — đúng bài bản của họ nhưng tự dựng lại toàn bộ, không dùng code của họ.
+
 ## Nhiều máy trên cùng một web (multi-tenant)
 
 Web `YOUR-WORKER.workers.dev` là "tòa nhà nhiều phòng": ai cũng mở được, nhưng mỗi người chỉ đụng được OpenWork **máy nhà mình**. Chủ worker cấp cho mỗi người bạn một cặp **tên đăng nhập + mật khẩu** — dùng được cho cả 2 đầu:
@@ -124,14 +134,14 @@ Máy của chủ worker không phải đổi gì — không join phòng thì ti�
 
 ```
 bridge/          # Node.js — discovery, token bootstrap, proxy, static, QR
-  src/           # index.js (entry) · proxy.js · discovery.js · bootstrap.js · auth.js …
+  src/           # index.js (entry) · proxy.js · discovery.js · bootstrap.js · auth.js · screen.js + desktop-input.cs (màn hình) · fslist.js …
   test/          # unit test (npm test)
-  scripts/       # e2e-live.mjs, dbg-prompt.mjs (test live với OpenWork thật)
+  scripts/       # e2e-live.mjs, dbg-prompt.mjs, dbg-screen.mjs (test live với OpenWork thật)
 worker/          # Cloudflare Worker "openpocket" — URL cố định + multi-tenant
   src/index.js   # /__register (đăng ký phòng) · /api/* (relay theo phòng) · serve web
   scripts/tenant.mjs # cấp/xóa phòng (tài khoản user/pass) trên KV
 web/             # PWA Preact + Vite → build ra web/dist do bridge serve
-  src/pages/     # pairing (Đăng nhập/Ghép/Nhập token) · workspaces · sessions · chat · files · settings
+  src/pages/     # pairing (Đăng nhập/Ghép/Nhập token) · workspaces · sessions · chat · files · screen (màn hình) · settings
   src/components/# ui.jsx (Loading/Skeleton/Empty/Banner/Sheet/Confirm) · icons.jsx (SVG set)
   .zcode/skills/ # pwa-workspace-ui: skill thiết kế nội bộ (tokens · ui-rules · pwa-checklist)
 README.md        # file này

@@ -131,3 +131,21 @@ export function StopIcon({ size }) {
     </Icon>
   );
 }
+
+export function ScreenIcon({ size }) {
+  return (
+    <Icon size={size ?? 22}>
+      <rect x="2" y="3" width="20" height="14" rx="2" />
+      <path d="M8 21h8m-4-4v4" />
+    </Icon>
+  );
+}
+
+export function MouseIcon({ size }) {
+  return (
+    <Icon size={size ?? 18}>
+      <rect x="6" y="2" width="12" height="20" rx="6" />
+      <path d="M12 6v4" />
+    </Icon>
+  );
+}

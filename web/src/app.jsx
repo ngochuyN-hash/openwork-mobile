@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "preact/hooks";
 import { getToken, apiState, apiWakeOpenWork, apiRecheck } from "./api.js";
-import { BackIcon, WsIcon, GearIcon, MessageIcon } from "./components/icons.jsx";
+import { BackIcon, WsIcon, GearIcon, MessageIcon, ScreenIcon } from "./components/icons.jsx";
 import { Banner } from "./components/ui.jsx";
 import { PairingScreen } from "./pages/pairing.jsx";
 import { HomePage } from "./pages/home.jsx";
@@ -9,6 +9,7 @@ import { WorkspacesPage } from "./pages/workspaces.jsx";
 import { SessionsPage } from "./pages/sessions.jsx";
 import { ChatPage } from "./pages/chat.jsx";
 import { FilesPage } from "./pages/files.jsx";
+import { ScreenPage } from "./pages/screen.jsx";
 import { SettingsPage } from "./pages/settings.jsx";
 
 // Hash router:
@@ -17,6 +18,7 @@ import { SettingsPage } from "./pages/settings.jsx";
 //   #/ws/:id               -> sessions (workspace)
 //   #/ws/:id/chat/:sid     -> chat
 //   #/ws/:id/files         -> files
+//   #/screen               -> xem + điều khiển màn hình máy tính
 //   #/settings             -> settings
 function parseHash() {
   const hash = location.hash.replace(/^#/, "");
@@ -25,6 +27,7 @@ function parseHash() {
   const params = new URLSearchParams(query ?? "");
   if (parts[0] === "settings") return { view: "settings" };
   if (parts[0] === "workspaces") return { view: "workspaces" };
+  if (parts[0] === "screen") return { view: "screen" };
   if (parts[0] === "ws" && parts[1]) {
     if (parts[2] === "chat" && parts[3]) return { view: "chat", wsId: parts[1], sessionId: parts[3] };
     if (parts[2] === "files") return { view: "files", wsId: parts[1], path: params.get("path") ?? "" };
@@ -106,6 +109,10 @@ export function App() {
     case "workspaces":
       view = <WorkspacesPage />;
       title = "Workspace";
+      break;
+    case "screen":
+      view = <ScreenPage />;
+      title = "Màn hình";
       break;
     case "settings":
       view = <SettingsPage state={state} onRecheck={refreshState} onUnpaired={() => setPaired(false)} />;
@@ -204,6 +211,7 @@ function BottomNav({ current }) {
     chat: "home",
     files: "workspaces",
     workspaces: "workspaces",
+    screen: "screen",
     settings: "settings",
   };
   const active = activeOf[current] ?? "home";
@@ -218,6 +226,7 @@ function BottomNav({ current }) {
       <nav class="bottomnav">
         {tab("home", "Phiên", "#/", <MessageIcon />)}
         {tab("workspaces", "Workspace", "#/workspaces", <WsIcon />)}
+        {tab("screen", "Màn hình", "#/screen", <ScreenIcon />)}
         {tab("settings", "Cài đặt", "#/settings", <GearIcon />)}
       </nav>
     </div>

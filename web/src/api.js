@@ -176,6 +176,71 @@ export async function apiFsMkdir(dir, name) {
   return payload;
 }
 
+// ---- Xem + điều khiển màn hình máy tính (v1.7, học cơ chế 9remote) ----
+
+/** Thông tin màn hình: {available, screen:{width,height}, viewers} */
+export async function apiScreenInfo() {
+  const res = await fetch("/api/screen/info", { headers: authHeaders() });
+  if (res.status === 401) throw new Error("UNPAIRED");
+  return res.json().catch(() => ({ available: false }));
+}
+
+/** Gửi 1 lệnh điều khiển chuột/bàn phím. Tọa độ gửi chuẩn hóa 0..1. */
+export async function owScreenInput(payload) {
+  const res = await fetch("/api/screen/input", {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  if (res.status === 401) throw new Error("UNPAIRED");
+  if (res.status === 429) throw new Error("Đang gửi lệnh quá nhanh — chờ 1 nhịp rồi làm tiếp");
+  if (!res.ok && res.status !== 204) {
+    const p = await res.json().catch(() => null);
+    throw new Error(p?.message ?? `screen input ${res.status}`);
+  }
+}
+
+/**
+ * Nối stream frame màn hình từ bridge. Mỗi frame trên đường truyền là
+ * [4 byte độ dài][1 byte type][payload]: 0 = màn đứng yên, 1 = JPEG,
+ * 2 = meta JSON, 3 = lỗi JSON. Promise kết thúc khi server ngắt hoặc signal abort.
+ */
+export async function owScreenStream({ w = 880, q = 55, signal, onFrame, onMeta, onUnchanged, onError }) {
+  const res = await fetch(`/api/screen/stream?w=${w}&q=${q}`, { headers: authHeaders(), signal });
+  if (res.status === 401) throw new Error("UNPAIRED");
+  if (!res.ok || !res.body) {
+    const p = await res.json().catch(() => null);
+    throw new Error(p?.message ?? `screen stream ${res.status}`);
+  }
+  const reader = res.body.getReader();
+  const text = new TextDecoder();
+  let buf = new Uint8Array(0);
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return;
+    if (value?.length) {
+      const merged = new Uint8Array(buf.length + value.length);
+      merged.set(buf);
+      merged.set(value, buf.length);
+      buf = merged;
+    }
+    while (buf.length >= 5) {
+      const len = (buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3];
+      if (len < 0 || len > 8_000_000) throw new Error("Frame hỏng (độ dài sai)");
+      const type = buf[4];
+      if (buf.length < 5 + len) break;
+      const payload = buf.subarray(5, 5 + len);
+      if (type === 1) onFrame?.(new Blob([payload], { type: "image/jpeg" }));
+      else if (type === 2) {
+        try { onMeta?.(JSON.parse(text.decode(payload))); } catch {}
+      } else if (type === 3) {
+        try { onError?.(JSON.parse(text.decode(payload)).message ?? "Lỗi chụp màn hình"); } catch {}
+      } else if (type === 0) onUnchanged?.();
+      buf = buf.subarray(5 + len);
+    }
+  }
+}
+
 /** Gọi openwork-server qua bridge. path bắt đầu bằng "/". */
 export async function ow(path, { method = "GET", body, headers = {}, raw = false, signal } = {}) {
   const res = await fetch(`/api/ow${path}`, {

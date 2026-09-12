@@ -11,7 +11,9 @@
 //     WHEEL <dx> <dy>             -> cuộn (notch, dương = lên/phải)
 //     KEY <name>                  -> bấm 1 phím (enter/esc/tab/…, chữ, số, f1..f12)
 //     COMBO <k1,k2> <key>         -> giữ k1..k2 (ctrl/alt/shift/win) rồi bấm key
-//     TEXT <base64-utf8>          -> gõ chuỗi Unicode (tiếng Việt có dấu OK), không Enter
+//     TEXT <base64-utf8>          -> set clipboard rồi Ctrl+V (an toàn tiếng Việt:
+//                                    gõ phím Unicode thẳng sẽ bị IME/Unikey ăn mất —
+//                                    9remote cũng đi đường clipboard cho Rich text)
 //     STOP                        -> thoát
 // Reply: "<id>|OK" hoặc "<id>|ERR|<lỗi>".
 // LƯU Ý: csc v4.0.30319 chỉ hiểu C# 5 — không dùng string interpolation/$"" ,
@@ -150,19 +152,23 @@ class DesktopInput
 
   static void DoText(string s)
   {
-    // Unicode events: wVk=0, wScan=codepoint. Gửi theo mẻ 20 events để app kịp xử lý.
-    List<INPUT> batch = new List<INPUT>();
-    for (int i = 0; i < s.Length; i++)
+    // Đi đường clipboard + Ctrl+V: gõ phím Unicode thẳng (KEYEVENTF_UNICODE)
+    // bị IME tiếng Việt (Unikey/Telex) biến "chào" thành "OOOOO" — đã thử thật.
+    // Clipboard thì nguyên vẹn mọi ký tự. Lỗi clipboard bận (app khác đang giữ)
+    // thường hết sau ~200ms nên thử tối đa 5 lần.
+    for (int attempt = 0; ; attempt++)
     {
-      char c = s[i];
-      if (char.IsSurrogate(c)) throw new Exception("Ký tự emoji ngoài BMP chưa hỗ trợ");
-      batch.Add(Key(0, (ushort)c, KEYEVENTF_UNICODE));
-      batch.Add(Key(0, (ushort)c, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
-      if (batch.Count >= 20) { Send(batch.ToArray()); batch.Clear(); System.Threading.Thread.Sleep(5); }
+      try { System.Windows.Forms.Clipboard.SetText(s); break; }
+      catch (Exception)
+      {
+        if (attempt >= 5) throw new Exception("Clipboard đang bận (app khác giữ)");
+        System.Threading.Thread.Sleep(200);
+      }
     }
-    if (batch.Count > 0) Send(batch.ToArray());
+    DoCombo(new string[] { "ctrl" }, "v");
   }
 
+  [STAThread]
   static void Main()
   {
     try { SetProcessDPIAware(); } catch {}
