@@ -36,7 +36,7 @@ opencode engine  →  sessions · models · files
 - 🔐 **Permissions**: duyệt Allow/Deny ngay trên điện thoại khi agent xin phép
 - 🗂 **Files**: duyệt cây thư mục, xem/sửa + lưu file text, xem ảnh **+ PDF**, upload từ điện thoại, tải file về (hiện % + Hủy + nút Chia sẻ để iOS Lưu về Files)
 - 📎 **File trong chat (2 chiều)**: file agent nhắc tới hiện **thẻ Mở/Tải về + Xem trong Files** ngay trong tin nhắn; nút **kẹp giấy** trong khung chat để gửi file/ảnh từ điện thoại cho agent đọc
-- 📴 **Offline queue** + auto-reconnect; PWA cài màn hình chính iOS/Android
+- 📴 **Offline queue** + auto-reconnect; PWA cài màn hình chính iOS/Android (icon 192/512 + maskable đủ chuẩn cài Android, apple-touch-icon cho iOS)
 
 ## Giao diện (v4 "desktop-first")
 

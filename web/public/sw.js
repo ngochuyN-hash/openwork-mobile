@@ -1,8 +1,15 @@
 // Service worker: app-shell precache so the PWA opens instantly / offline.
 // Chỉ cache tài nguyên tĩnh cùng origin; không bao giờ cache /api/* (REST+SSE).
-const CACHE = "owm-shell-v6";
+const CACHE = "owm-shell-v7";
 // index.html dùng navigate-fallback (không precache cứng vì Vite hash asset mỗi build).
-const SHELL = ["/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png"];
+const SHELL = [
+  "/manifest.webmanifest",
+  "/icon.svg",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/icon-maskable-192.png",
+  "/icon-maskable-512.png",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
