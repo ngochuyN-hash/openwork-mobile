@@ -84,7 +84,7 @@ export function App() {
 
   let view;
   let showNav = true;
-  let title = "Phiên";
+  let title = "Sessions";
   // Nút Trở lại ghim trên topbar (vốn đã sticky) để cuộn đâu vẫn bấm được.
   let back = null;
   switch (route.view) {
@@ -112,15 +112,15 @@ export function App() {
       break;
     case "screen":
       view = <ScreenPage />;
-      title = "Màn hình";
+      title = "Screen";
       break;
     case "settings":
       view = <SettingsPage state={state} onRecheck={refreshState} onUnpaired={() => setPaired(false)} />;
-      title = "Cài đặt";
+      title = "Settings";
       break;
     default:
       view = <HomePage />;
-      title = "Phiên";
+      title = "Sessions";
   }
 
   return (
@@ -224,10 +224,10 @@ function BottomNav({ current }) {
   return (
     <div class="bottomnav-wrap">
       <nav class="bottomnav">
-        {tab("home", "Phiên", "#/", <MessageIcon />)}
+        {tab("home", "Sessions", "#/", <MessageIcon />)}
         {tab("workspaces", "Workspace", "#/workspaces", <WsIcon />)}
-        {tab("screen", "Màn hình", "#/screen", <ScreenIcon />)}
-        {tab("settings", "Cài đặt", "#/settings", <GearIcon />)}
+        {tab("screen", "Screen", "#/screen", <ScreenIcon />)}
+        {tab("settings", "Settings", "#/settings", <GearIcon />)}
       </nav>
     </div>
   );

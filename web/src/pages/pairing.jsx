@@ -251,7 +251,7 @@ export function PairingScreen({ onPaired }) {
         )}
       </div>
 
-      <p class="pair-hint">Mất điện thoại / muốn bỏ quyền truy cập: vào Cài đặt → Thiết bị đã ghép → thu hồi.</p>
+      <p class="pair-hint">Mất điện thoại / muốn bỏ quyền truy cập: vào Settings → Thiết bị đã ghép → thu hồi.</p>
     </div>
   );
 }

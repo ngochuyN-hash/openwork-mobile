@@ -47,7 +47,7 @@ A faithful clone of the **real OpenWork desktop** UI (studied directly from the 
 **per-workspace colors** (one fixed color per workspace — the color paints the **whole workspace card**: left border stripe + tinted logo tile, not just a tiny dot), the official hexagon
 `openwork-mark.svg` logo (original SVG, dark variant included). The structure follows agent-control
 apps (Happy, Omnara): opening the app shows **recent sessions across all workspaces**, a floating
-3-tab nav (Sessions · Workspace · Settings), a FAB to create sessions. **Back buttons (Sessions, Workspace, Close) are always pinned to the topbar** (already sticky at the top with blur and safe-area), so they never scroll away no matter how long the content is. Follows the internal skill
+floating 4-tab nav — **Sessions · Workspace · Screen · Settings** (tab labels and route titles are English, like the app's product vocabulary; the Settings tab uses a proper cog icon) — plus a FAB to create sessions. **Back buttons (Sessions, Workspace, Close) are always pinned to the topbar** (already sticky at the top with blur and safe-area), so they never scroll away no matter how long the content is. Follows the internal skill
 `pwa-workspace-ui` (`.zcode/skills/`): 16px inputs against iOS zoom, ≥44px touch targets,
 safe-area, skeleton loading, `prefers-reduced-motion`, all-SVG icons.
 
