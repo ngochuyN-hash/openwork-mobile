@@ -1,7 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { ow, unwrap } from "../api.js";
 import { navigate } from "../app.jsx";
-import { PlusIcon } from "../components/icons.jsx";
+import { PlusIcon, WsIcon } from "../components/icons.jsx";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
 
 export function WorkspacesPage() {
@@ -27,9 +27,6 @@ export function WorkspacesPage() {
     <>
       <div class="page-head">
         <span class="hint">{workspaces ? `${workspaces.length} workspace` : "…"}</span>
-        <button class="btn small ghost btn-icon" onClick={() => setShowCreate(true)}>
-          <PlusIcon size={14} /> Thêm workspace
-        </button>
       </div>
 
       {error && <Banner kind="err" actionLabel="Thử lại" onAction={load}>{error}</Banner>}
@@ -38,8 +35,9 @@ export function WorkspacesPage() {
 
       {workspaces?.length === 0 && (
         <Empty
+          icon
           title="Chưa có workspace nào"
-          hint="Tạo mới bên OpenWork desktop, hoặc bấm nút dưới để thêm thư mục."
+          hint="Thêm thư mục từ máy tính để bắt đầu làm việc với agent."
           actionLabel="Thêm workspace"
           onAction={() => setShowCreate(true)}
         />
@@ -47,33 +45,42 @@ export function WorkspacesPage() {
 
       {workspaces?.map((ws) => (
         <div key={ws.id} class="card tap" onClick={() => navigate(`#/ws/${encodeURIComponent(ws.id)}`)}>
-          <div class="row-between">
-            <h3>{ws.name || ws.displayName || ws.id}</h3>
-            <span class="badge">{ws.workspaceType === "remote" ? "remote" : "local"}</span>
-          </div>
-          <div class="meta mono">{ws.path ?? ""}</div>
-          <div class="page-actions" style="margin-top:10px">
-            <button
-              class="btn small"
-              onClick={(e) => {
-                e.stopPropagation();
-                navigate(`#/ws/${encodeURIComponent(ws.id)}`);
-              }}
-            >
-              Sessions
-            </button>
-            <button
-              class="btn small ghost"
-              onClick={(e) => {
-                e.stopPropagation();
-                navigate(`#/ws/${encodeURIComponent(ws.id)}/files`);
-              }}
-            >
-              Files
-            </button>
+          <div style="display:flex;gap:12px;align-items:flex-start">
+            <span class="tile" aria-hidden="true"><WsIcon /></span>
+            <div style="flex:1;min-width:0">
+              <div class="row-between">
+                <h3 style="margin:0">{ws.name || ws.displayName || ws.id}</h3>
+                <span class="badge">{ws.workspaceType === "remote" ? "remote" : "local"}</span>
+              </div>
+              <div class="meta mono">{ws.path ?? ""}</div>
+              <div class="page-actions" style="margin-top:10px">
+                <button
+                  class="btn small primary"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigate(`#/ws/${encodeURIComponent(ws.id)}`);
+                  }}
+                >
+                  Sessions
+                </button>
+                <button
+                  class="btn small ghost"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigate(`#/ws/${encodeURIComponent(ws.id)}/files`);
+                  }}
+                >
+                  Files
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       ))}
+
+      <button class="fab" aria-label="Thêm workspace" onClick={() => setShowCreate(true)}>
+        <PlusIcon size={24} />
+      </button>
 
       {showCreate && <CreateWorkspaceDialog onClose={() => setShowCreate(false)} onCreated={load} />}
     </>

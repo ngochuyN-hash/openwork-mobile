@@ -25,12 +25,14 @@ function sameToken(presented, expected) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/**
- * Auth cho request không đặt được header (EventSource, <img>, link tải file):
- * chấp nhận ?_t=<mobile token> nhưng CHỈ cho GET.
- */
-export function isQueryAuthorized(req, url, mobileToken) {
-  if (req.method.toUpperCase() !== "GET") return false;
-  const presented = url.searchParams.get("_t");
-  return Boolean(presented && mobileToken && sameToken(presented, mobileToken));
+/** Lấy Bearer token từ header, hoặc ?_t= (chỉ GET - cho EventSource/img). */
+export function requestToken(req, url) {
+  const header = req.headers["authorization"] ?? "";
+  const match = /^Bearer\s+(.+)$/i.exec(String(header));
+  if (match?.[1]) return match[1].trim();
+  if (req.method.toUpperCase() === "GET") {
+    const query = url.searchParams.get("_t");
+    if (query) return query;
+  }
+  return "";
 }

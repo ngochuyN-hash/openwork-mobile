@@ -4,11 +4,12 @@ import qrcode from "qrcode-terminal";
 import { loadConfig, saveConfig, bridgeDataDir } from "./config.js";
 import { ensureOwnerToken } from "./bootstrap.js";
 import { discoverServer, checkTokenActive, readEngineRegistry, probeServerUrl } from "./discovery.js";
-import { isAuthorized, isQueryAuthorized, deny } from "./auth.js";
+import { isAuthorized, requestToken, deny } from "./auth.js";
 import { proxyToOpenWork } from "./proxy.js";
 import { createStaticHandler } from "./static.js";
 import { openworkFilePath } from "./paths.js";
 import { startQuickTunnel } from "./tunnel.js";
+import { PairingService, CODE_TTL_MINUTES } from "./pairing.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -36,6 +37,44 @@ const state = {
   lastCheckAt: 0,
   tunnelUrl: "", // URL trycloudflare.com hiện tại (đổi mỗi lần cloudflared chạy lại)
 };
+
+// ---------------------------------------------------------------------------
+// 1.5 Pairing kiểu 9Remote: mã one-time 30 phút trong QR + khóa thiết bị vĩnh viễn
+// ---------------------------------------------------------------------------
+const pairing = new PairingService();
+
+const currentBase = () => state.tunnelUrl || config.publicUrl || `http://127.0.0.1:${config.port}`;
+let printingPairing = false;
+pairing.onCode = () => {
+  // Mã mới (thiết bị vừa ghép xong hoặc mã cũ hết hạn) -> in lại QR
+  if (!printingPairing) printPairing(currentBase(), "[pairing] mã ghép MỚI:");
+};
+
+// Rate limit thô cho /api/pair: tối đa 10 lần/phút/IP - chống dò mã
+const pairAttempts = new Map();
+function pairRateLimited(ip) {
+  const now = Date.now();
+  const list = (pairAttempts.get(ip) ?? []).filter((t) => now - t < 60_000);
+  if (list.length >= 10) {
+    pairAttempts.set(ip, list);
+    return true;
+  }
+  list.push(now);
+  pairAttempts.set(ip, list);
+  return false;
+}
+
+async function readJsonBody(req, limit = 1_000_000) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) throw new Error("body too large");
+    chunks.push(chunk);
+  }
+  if (!chunks.length) return {};
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
 
 async function refreshDiscovery({ force = false } = {}) {
   if (force) state.server = null;
@@ -128,7 +167,45 @@ async function handleRequest(req, res) {
   const pathname = decodeURIComponent(url.pathname);
 
   if (pathname.startsWith("/api/")) {
-    if (!isAuthorized(req, config.mobileToken) && !isQueryAuthorized(req, url, config.mobileToken)) return deny(res);
+    // Ghép thiết bị mới: KHÔNG cần token, chỉ cần mã one-time từ QR/terminal
+    if (req.method === "POST" && pathname === "/api/pair") {
+      const ip = req.socket.remoteAddress ?? "?";
+      if (pairRateLimited(ip)) return deny(res);
+      try {
+        const body = await readJsonBody(req);
+        const result = pairing.pair(body?.code, body?.label);
+        if (!result) {
+          res.writeHead(401, { "content-type": "application/json" });
+          res.end(JSON.stringify({ code: "invalid_code", message: `Mã không đúng, đã dùng hoặc hết hạn (mã sống ${CODE_TTL_MINUTES} phút). Lấy mã mới trong terminal bridge.` }));
+          return;
+        }
+        console.log(`[pairing] thiết bị mới đã ghép: ${result.device.label} (${result.device.id})`);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(result));
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: "invalid_body", message: "Body JSON không hợp lệ" }));
+      }
+      return;
+    }
+
+    // Các route còn lại: master token (owm_) hoặc khóa thiết bị (owd_)
+    const token = requestToken(req, url);
+    const device = token ? pairing.authenticate(token) : null;
+    if (!isAuthorized(req, config.mobileToken) && !device) return deny(res);
+
+    if (req.method === "GET" && pathname === "/api/devices") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ devices: pairing.list() }));
+      return;
+    }
+    if (req.method === "DELETE" && /^\/api\/devices\/[^/]+$/.test(pathname)) {
+      const id = pathname.split("/").pop();
+      const ok = pairing.revoke(id);
+      res.writeHead(ok ? 200 : 404, { "content-type": "application/json" });
+      res.end(JSON.stringify(ok ? { ok: true, devices: pairing.list() } : { code: "not_found" }));
+      return;
+    }
 
     if (req.method === "GET" && pathname === "/api/state") {
       const engine = readEngineRegistry();
@@ -145,6 +222,9 @@ async function handleRequest(req, res) {
           restartRequired: state.restartRequired,
           engine: engine ? { pid: engine.ownerPid, enginePort: engine.port } : null,
           publicUrl: state.tunnelUrl || config.publicUrl || null,
+          devices: pairing.list().length,
+          pairingCodeSecondsLeft: pairing.codeSecondsLeft(),
+          thisDevice: device ? { id: device.id, label: device.label } : { id: "master", label: "Master token (owm_)" },
         })
       );
       return;
@@ -190,12 +270,17 @@ async function handleRequest(req, res) {
 server.requestTimeout = 0;
 server.headersTimeout = 60_000;
 
-// In QR pairing cho một URL gốc (local hoặc tunnel)
+// In QR pairing cho một URL gốc (local hoặc tunnel) — QR chứa MÃ ONE-TIME 30 phút,
+// không chứa khóa dài hạn (mô hình 9Remote: mã ngắn để ghép, khóa dài cấp sau).
 function printPairing(base, note) {
-  const pairingUrl = `${base}/#t=${config.mobileToken}`;
+  printingPairing = true;
+  const code = pairing.ensureCode();
+  printingPairing = false;
+  const pairingUrl = `${base}/#p=${code}`;
   console.log("");
   if (note) console.log(note);
   console.log(`  ${pairingUrl}`);
+  console.log(`  Mã ghép (1 lần, hết hạn sau ${CODE_TTL_MINUTES} phút): ${code.slice(0, 4)}-${code.slice(4)}`);
   console.log("");
   qrcode.generate(pairingUrl, { small: true });
   console.log("");
@@ -221,7 +306,7 @@ server.listen(config.port, "127.0.0.1", () => {
     }).catch((error) => console.error(`[tunnel] lỗi: ${error.message}`));
   }
 
-  console.log(`Pairing token (manual entry): ${config.mobileToken}`);
+  console.log(`Pairing token dự phòng (chỉ dùng tại máy, không đưa cho ai): ${config.mobileToken}`);
   console.log(`Bridge data dir: ${bridgeDataDir()}`);
 });
 

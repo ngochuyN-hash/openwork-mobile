@@ -13,8 +13,7 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
-// Auto-pairing: terminal in ra URL dạng https://.../#t=<token> (kèm QR).
-// Lần đầu mở link -> lưu token và dọn hash.
+// Auto-pairing kiểu cũ (master token trong #t=) — vẫn giữ làm đường dự phòng.
 export function absorbTokenFromHash() {
   const match = /^#t=(.+)$/.exec(location.hash);
   if (match?.[1]) {
@@ -23,6 +22,41 @@ export function absorbTokenFromHash() {
     return true;
   }
   return false;
+}
+
+// Mã one-time từ QR/link dạng .../#p=<code> — màn pairing sẽ tự ghép.
+export function pairingCodeFromHash() {
+  const match = /^#p=(.+)$/.exec(location.hash);
+  if (match?.[1]) {
+    history.replaceState(null, "", location.pathname + location.search);
+    return match[1].trim();
+  }
+  return "";
+}
+
+/** Ghép thiết bị bằng mã 30 phút → nhận khóa vĩnh viễn owd_... */
+export async function apiPair(code, label) {
+  const res = await fetch("/api/pair", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code: code.trim(), label: label?.trim() || undefined }),
+  });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(payload?.message ?? `HTTP ${res.status}`);
+  return payload; // {token, device}
+}
+
+export async function apiDevices() {
+  const res = await fetch("/api/devices", { headers: authHeaders() });
+  if (res.status === 401) throw new Error("UNPAIRED");
+  if (!res.ok) throw new Error(`devices ${res.status}`);
+  return (await res.json()).devices ?? [];
+}
+
+export async function apiRevokeDevice(id) {
+  const res = await fetch(`/api/devices/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
+  if (!res.ok) throw new Error(`revoke ${res.status}`);
+  return res.json();
 }
 
 function authHeaders(extra = {}) {

@@ -75,9 +75,6 @@ export function SessionsPage({ route }) {
     <>
       <div class="page-head">
         <BackButton label="Workspace" onBack={() => navigate("#/")} />
-        <button class="btn small btn-icon" onClick={newSession}>
-          <PlusIcon size={14} /> Session mới
-        </button>
       </div>
 
       {error && <Banner kind="err" actionLabel="Thử lại" onAction={load}>{error}</Banner>}
@@ -86,8 +83,9 @@ export function SessionsPage({ route }) {
 
       {sessions?.length === 0 && (
         <Empty
-          title="Workspace này chưa có session nào"
-          hint="Bấm nút dưới để bắt đầu trò chuyện với agent."
+          icon
+          title="Chưa có session nào"
+          hint="Bấm nút (+) để bắt đầu trò chuyện với agent."
           actionLabel="Tạo session mới"
           onAction={newSession}
         />
@@ -103,14 +101,16 @@ export function SessionsPage({ route }) {
           >
             <div class="row-between">
               <h3>{s.title || "Không tiêu đề"}</h3>
-              {status && <span class={`badge ${status === "busy" ? "busy" : "ok"}`}>{status}</span>}
+              <span class={`dot ${status === "busy" ? "busy" : "ok"}`} aria-label={status ?? "idle"} />
             </div>
-            <div class="meta">
-              {timeAgo(s.time?.updated)} · <span class="mono">{s.id}</span>
-            </div>
+            <div class="meta">{timeAgo(s.time?.updated)}</div>
           </div>
         );
       })}
+
+      <button class="fab" aria-label="Tạo session mới" onClick={newSession}>
+        <PlusIcon size={24} />
+      </button>
     </>
   );
 }

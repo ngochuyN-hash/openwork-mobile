@@ -9,8 +9,8 @@
   "orientation": "portrait",
   "lang": "vi",
   "categories": ["productivity", "utilities"],
-  "background_color": "#101418",
-  "theme_color": "#101418",
+  "background_color": "#111113",
+  "theme_color": "#111113",
   "icons": [
     {
       "src": "/icon-192.png",

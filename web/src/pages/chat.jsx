@@ -284,8 +284,11 @@ export function ChatPage({ route }) {
                 }
               }}
             />
-            <button class="btn" disabled={!draft.trim() || sending} onClick={send}>
-              {sending ? "…" : "Gửi"}
+            <button class="btn btn-send" aria-label="Gửi prompt" disabled={!draft.trim() || sending} onClick={send}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m22 2-7 20-4-9-9-4z" />
+                <path d="M22 2 11 13" />
+              </svg>
             </button>
           </div>
         </div>

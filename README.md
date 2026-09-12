@@ -31,11 +31,23 @@ opencode engine  →  sessions · models · files
 
 ## Tính năng (v1)
 
-- 📁 **Workspaces**: danh sách live, tạo workspace mới
-- 💬 **Sessions**: danh sách (busy/idle realtime), tạo mới, xem transcript đầy đủ (text/tool/reasoning), gửi prompt (chọn model), abort
+- 📁 **Workspaces**: danh sách live, tạo workspace mới (FAB gradient)
+- 💬 **Sessions**: danh sách (busy/idle realtime), tạo mới, xem transcript đầy đủ (text/tool/reasoning, markdown + code block), gửi prompt (chọn model), abort
 - 🔐 **Permissions**: duyệt Allow/Deny ngay trên điện thoại khi agent xin phép
 - 🗂 **Files**: duyệt cây thư mục, xem/sửa + lưu file text, xem ảnh, upload từ điện thoại, tải file về
 - 📴 **Offline queue** + auto-reconnect; PWA cài màn hình chính iOS/Android
+
+## Giao diện (v3 "OpenWork brand")
+
+Bám đúng bảng màu của **OpenWork desktop chính chủ** (soi từ
+`resources/app-dist/assets/index-*.css` — Radix Colors): nền slate dark
+`#111113`, card `#18191b`, accent **xanh dương đặc `#0090ff`** (không gradient),
+radius nhỏ nét. Mobile-first theo skill nội bộ `pwa-workspace-ui`
+(`.zcode/skills/`, tổng hợp từ mobile-hybrid-audit + pwa-review + Vercel
+web-interface-guidelines + Anthropic frontend-design): bottom nav nổi pill blur,
+FAB xanh, card có icon tile, chấm trạng thái session, empty-state có icon + nút
+hành động, icon SVG toàn bộ (không emoji), input 16px chống iOS zoom, nút ≥44px,
+safe-area (notch/home indicator), skeleton loading, `prefers-reduced-motion`.
 
 ## Yêu cầu
 
@@ -55,15 +67,16 @@ cd ../web && npm install && npm run build
 cd ../bridge && npm start
 ```
 
-Lần đầu chạy, bridge tự mint token vào OpenWork và in ra **QR + mã pairing `owm_...`**.
+Lần đầu chạy, bridge tự mint token vào OpenWork và in ra **QR chứa mã ghép một lần (sống 30 phút)**.
 
 > ⚠️ Sau lần chạy bridge **đầu tiên**, restart OpenWork desktop **đúng 1 lần** để token có hiệu lực (OpenWork chỉ nạp `tokens.json` lúc khởi động). Bridge tự nhận biết — làm 1 lần thôi.
 
 ## Dùng trên điện thoại (không cần cài gì)
 
 Bridge khởi động xong sẽ **tự mở Cloudflare Quick Tunnel** (tự tải cloudflared lần đầu, ~50MB) và in ra terminal:
-- **URL public** dạng `https://xxx.trycloudflare.com` kèm **QR** và token pairing
-- Mở link đó trên điện thoại (4G ở đâu cũng được) → tự pair → *Thêm vào màn hình chính* để dùng như app
+- **URL public** dạng `https://xxx.trycloudflare.com` kèm **QR chứa mã ghép một lần (30 phút)**
+- Mở link đó trên điện thoại (4G ở đâu cũng được) → app **tự ghép** → nhận **khóa vĩnh viễn riêng của thiết bị** → *Thêm vào màn hình chính*
+- Từ lần sau mở icon là vào thẳng, không cần mã nữa
 
 Điểm cần biết về Quick Tunnel:
 - **URL đổi mỗi lần bridge/cloudflared chạy lại** (mất điện, restart máy...) — bridge **tự in QR mới** trong terminal, quét lại 10 giây là xong.
@@ -87,16 +100,20 @@ bridge/          # Node.js — discovery, token bootstrap, proxy, static, QR
   scripts/       # e2e-live.mjs, dbg-prompt.mjs (test live với OpenWork thật)
 web/             # PWA Preact + Vite → build ra web/dist do bridge serve
   src/pages/     # pairing · workspaces · sessions · chat · files · settings
+  src/components/# ui.jsx (Loading/Skeleton/Empty/Banner/Sheet/Confirm) · icons.jsx (SVG set)
+  .zcode/skills/ # pwa-workspace-ui: skill thiết kế nội bộ (tokens · ui-rules · pwa-checklist)
 README.md        # file này
 CODE_SUMMARY.md  # bản đồ code + bảng "triệu chứng → chỗ sửa"
 ```
 
-## Bảo mật
+## Bảo mật (mô hình Pair Device học từ 9Remote)
 
-- Bridge chỉ nghe `127.0.0.1` — bên ngoài chỉ thấy qua tailnet của bạn, không lộ internet công cộng.
-- Điện thoại pair bằng token `owm_...` riêng (revoke: xóa `mobileToken` trong `%APPDATA%\openwork-bridge\config.json`, chạy lại bridge).
-- Token owner `owt_...` của OpenWork không bao giờ gửi ra browser.
-- Proxy whitelist: chỉ path quản trị được chuyển tiếp (`bridge/src/proxy.js`).
+- **Mã ghép một lần, sống 30 phút**: nằm trong QR/terminal của bridge — dùng đúng 1 lần rồi chết. QR bị lộ cũng chỉ nguy hiểm trong 30 phút.
+- **Khóa thiết bị vĩnh viễn (`owd_...`)**: sau khi ghép, mỗi điện thoại nhận khóa riêng (lưu trong điện thoại, bridge chỉ lưu hash). Mở lại app bao giờ cũng vào thẳng.
+- **Thu hồi từng thiết bị**: trong app → Cài đặt → *Thiết bị đã ghép*. Mất điện thoại? Bấm thu hồi là nó mất quyền truy cập ngay lập tức.
+- Token master `owm_...` chỉ là đường dự phòng in trên terminal (dùng tại máy, không đưa cho ai).
+- Bridge chỉ nghe `127.0.0.1` — bên ngoài chỉ thấy qua tunnel/tailnet; mọi request phải có token hợp lệ (deny-by-default); `/api/pair` được rate-limit chống dò mã.
+- Token owner `owt_...` của OpenWork không bao giờ gửi ra browser; proxy whitelist chỉ cho phép path quản trị (`bridge/src/proxy.js`).
 
 ## Xử lý sự cố nhanh
 

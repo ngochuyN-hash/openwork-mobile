@@ -1,10 +1,33 @@
-import { useState } from "preact/hooks";
-import { clearToken, apiRecheck } from "../api.js";
+import { useEffect, useState } from "preact/hooks";
+import { clearToken, apiRecheck, apiDevices, apiRevokeDevice } from "../api.js";
 import { useConfirm } from "../components/ui.jsx";
 
 export function SettingsPage({ state, onRecheck, onUnpaired }) {
   const [busy, setBusy] = useState(false);
   const [confirmDialog, askConfirm] = useConfirm();
+  const [devices, setDevices] = useState(null);
+  const [thisDeviceLabel, setThisDeviceLabel] = useState("");
+
+  useEffect(() => {
+    apiDevices().then(setDevices).catch(() => setDevices([]));
+    if (state?.thisDevice?.label) setThisDeviceLabel(state.thisDevice.label);
+  }, [state?.thisDevice?.id]);
+
+  async function revoke(device) {
+    askConfirm({
+      title: "Thu hồi thiết bị?",
+      body: `"${device.label}" sẽ mất quyền truy cập vĩnh viễn (phải ghép lại bằng mã mới).`,
+      confirmLabel: "Thu hồi",
+      onConfirm: async () => {
+        try {
+          const { devices } = await apiRevokeDevice(device.id);
+          setDevices(devices);
+        } catch {
+          /* bỏ qua - tải lại danh sách */
+        }
+      },
+    });
+  }
 
   async function recheck() {
     setBusy(true);
@@ -60,6 +83,33 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
             Gỡ pairing
           </button>
         </div>
+      </div>
+
+      <div class="card">
+        <h3>Thiết bị đã ghép</h3>
+        <p class="sheet-body">Thiết bị này: <b>{thisDeviceLabel || "—"}</b></p>
+        {devices === null ? (
+          <p class="sheet-body">Đang tải…</p>
+        ) : devices.length === 0 ? (
+          <p class="sheet-body">Chưa có thiết bị nào dùng mã ghép (bạn đang dùng token dự phòng owm_).</p>
+        ) : (
+          <div>
+            {devices.map((d) => (
+              <div class="file-row" key={d.id} style="cursor:default">
+                <span class="icon">📱</span>
+                <span class="name">
+                  {d.label}
+                  <span class="pair-hint" style="display:block">
+                    ghép {new Date(d.createdAt).toLocaleString("vi-VN")} · hoạt động {d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString("vi-VN") : "—"}
+                  </span>
+                </span>
+                <button class="btn small danger" onClick={() => revoke(d)}>
+                  Thu hồi
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div class="card">

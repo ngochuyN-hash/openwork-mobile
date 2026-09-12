@@ -1,4 +1,5 @@
 import { useState } from "preact/hooks";
+import { FolderIcon } from "./icons.jsx";
 
 /** Component dùng chung (skill pwa-workspace-ui) — gom mẫu loading/error/empty
  *  đang copy ở mỗi page, thay confirm() native, icon SVG thay emoji. */
@@ -24,13 +25,18 @@ export function SkeletonList({ rows = 3 }) {
   );
 }
 
-export function Empty({ title, hint, actionLabel, onAction }) {
+export function Empty({ title, hint, actionLabel, onAction, icon }) {
   return (
     <div class="empty">
-      <p style="margin:0 0 4px;font-weight:600;color:var(--text)">{title}</p>
+      {icon && (
+        <span class="empty-ico" aria-hidden="true">
+          <FolderIcon size={26} />
+        </span>
+      )}
+      <p style="margin:0 0 4px;font-weight:650;color:var(--text);font-size:15px">{title}</p>
       {hint && <p style="margin:0 0 12px">{hint}</p>}
       {actionLabel && (
-        <button class="btn small" onClick={onAction}>
+        <button class="btn small primary" onClick={onAction}>
           {actionLabel}
         </button>
       )}

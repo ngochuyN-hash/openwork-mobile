@@ -1,64 +1,114 @@
-import { useState } from "preact/hooks";
-import { setToken, apiState } from "../api.js";
+import { useEffect, useState } from "preact/hooks";
+import { setToken, apiState, apiPair, pairingCodeFromHash } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 
+// Ghép thiết bị kiểu 9Remote:
+//  - Mở link/QR từ terminal bridge (#p=MÃ) → tự ghép, nhận khóa vĩnh viễn owd_
+//  - Hoặc tự gõ mã 8 ký tự (XXXX-XXXX) in trên terminal
+//  - Hoặc dán token dự phòng owm_/owd_ (đường cứu hộ)
 export function PairingScreen({ onPaired }) {
   const [code, setCode] = useState("");
+  const [label, setLabel] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
 
-  async function connect() {
-    const token = code.trim();
-    if (!token) return;
+  async function pairWithCode(codeValue, labelValue) {
     setBusy(true);
     setError("");
-    setToken(token);
+    setStatus("Đang ghép với bridge…");
     try {
-      await apiState(); // 401 -> UNPAIRED nếu sai
+      const { token } = await apiPair(codeValue, labelValue);
+      setToken(token);
       onPaired();
-    } catch {
-      localStorage.removeItem("owm_token");
-      setError("Token không đúng hoặc bridge chưa chạy. Nhập lại mã in trên terminal của bridge nhé.");
+    } catch (e) {
+      setStatus("");
+      setError(String(e.message || e));
     } finally {
       setBusy(false);
     }
   }
 
+  // Dự phòng: dán trực tiếp token dài (owm_/owd_)
+  async function connectWithToken() {
+    const token = code.trim();
+    if (!token) return;
+    setBusy(true);
+    setError("");
+    setStatus("Đang kiểm tra token…");
+    setToken(token);
+    try {
+      await apiState();
+      onPaired();
+    } catch {
+      localStorage.removeItem("owm_token");
+      setStatus("");
+      setError("Token không đúng hoặc bridge chưa chạy.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submit() {
+    const value = code.trim().toUpperCase();
+    if (!value) return;
+    if (value.startsWith("OWM_") || value.startsWith("OWD_")) return connectWithToken();
+    return pairWithCode(value, label);
+  }
+
+  // Tự ghép khi mở từ QR/link .../#p=MÃ
+  useEffect(() => {
+    const fromHash = pairingCodeFromHash();
+    if (fromHash) pairWithCode(fromHash, "");
+  }, []);
+
   return (
     <div class="view no-nav pair-view">
       <div class="pair-hero">
-        <svg width="56" height="56" viewBox="0 0 64 64" aria-hidden="true" style="margin-bottom:8px">
-          <rect width="64" height="64" rx="14" fill="#171d24" />
-          <path d="M18 44V26m14 18V18m14 26V32" stroke="#4da3ff" stroke-width="6" stroke-linecap="round" />
-        </svg>
-        <h2 style="margin:0">OpenWork Mobile</h2>
-        <p class="pair-sub">
-          Quản lý session, workspace và file của OpenWork từ điện thoại
-        </p>
+        <span class="pair-logo" aria-hidden="true">
+          <svg width="34" height="34" viewBox="0 0 64 64" fill="none">
+            <path d="M18 44V26m14 18V18m14 26V32" stroke="#fff" stroke-width="7" stroke-linecap="round" />
+          </svg>
+        </span>
+        <h2 style="margin:0;letter-spacing:-0.02em">OpenWork Mobile</h2>
+        <p class="pair-sub">Quản lý session, workspace và file của OpenWork từ điện thoại</p>
       </div>
 
       <div class="card">
-        <label class="field" for="pair-code">Mã pairing (in trên terminal lúc bridge khởi động, hoặc quét QR)</label>
+        <label class="field" for="pair-code">
+          Mã ghép (in trên terminal bridge, sống 30 phút — hoặc quét QR trên đó)
+        </label>
         <input
           id="pair-code"
           type="text"
-          placeholder="owm_…"
+          placeholder="XXXX-XXXX"
           autocomplete="one-time-code"
           spellcheck={false}
           value={code}
           onInput={(e) => setCode(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === "Enter" && connect()}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+        />
+        <label class="field" for="pair-label">Tên thiết bị này (tùy chọn)</label>
+        <input
+          id="pair-label"
+          type="text"
+          placeholder="vd: iPhone của bạn"
+          value={label}
+          onInput={(e) => setLabel(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
         />
         <div class="sheet-actions">
-          <button class="btn" disabled={busy || !code.trim()} onClick={connect}>
-            {busy ? "Đang kết nối…" : "Kết nối"}
+          <button class="btn" disabled={busy || !code.trim()} onClick={submit}>
+            {busy ? status || "Đang ghép…" : "Ghép thiết bị"}
           </button>
         </div>
+        {status && !error && <p class="pair-hint">{status}</p>}
         {error && <Banner kind="err">{error}</Banner>}
       </div>
 
       <p class="pair-hint">
-        Bridge chạy trên máy tính có OpenWork. Mở link/QR từ terminal bridge là tự pair.
+        Ghép xong thiết bị này được cấp khóa vĩnh viễn — lần sau mở app là vào thẳng, không cần mã nữa.
+        Mất điện thoại / muốn bỏ quyền truy cập: vào Cài đặt → Thiết bị đã ghép → thu hồi.
       </p>
     </div>
   );

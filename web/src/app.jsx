@@ -96,8 +96,13 @@ export function App() {
   return (
     <>
       <div class="topbar">
+        <span class="logo-mark" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 64 64" fill="none">
+            <path d="M18 44V26m14 18V18m14 26V32" stroke="#fff" stroke-width="8" stroke-linecap="round" />
+          </svg>
+        </span>
         <span class="title">{title}</span>
-        {state?.server ? <span class="sub">server {state.server.version}</span> : <span class="sub">…</span>}
+        {state?.server ? <span class="sub">v{state.server.version}</span> : null}
       </div>
       <div class={`view ${showNav ? "" : "no-nav"}`}>
         {banners}
@@ -139,9 +144,11 @@ function BottomNav({ current }) {
     </button>
   );
   return (
-    <nav class="bottomnav">
-      {tab("workspaces", "Workspace", "#/", <WsIcon />)}
-      {tab("settings", "Cài đặt", "#/settings", <GearIcon />)}
-    </nav>
+    <div class="bottomnav-wrap">
+      <nav class="bottomnav">
+        {tab("workspaces", "Workspace", "#/", <WsIcon />)}
+        {tab("settings", "Cài đặt", "#/settings", <GearIcon />)}
+      </nav>
+    </div>
   );
 }

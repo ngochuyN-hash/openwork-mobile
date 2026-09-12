@@ -1,7 +1,7 @@
 # CODE_SUMMARY — OpenWork Mobile
 
 > Tài liệu tra nhanh "gặp lỗi thì sửa ở đâu". Cập nhật sau mỗi milestone.
-> Cập nhật lần cuối: 2026-09-12 (v1.1: auto Cloudflare Quick Tunnel, đã test public URL qua internet)
+> Cập nhật lần cuối: 2026-09-12 (v3 redesign UI "OpenWork brand" — bám bảng màu desktop chính chủ)
 >
 > 📌 **Quy tắc (yêu cầu của chủ dự án):** mỗi khi thay đổi code/cấu trúc/hành vi,
 > PHẢI cập nhật đồng thời file này VÀ `README.md` trong cùng commit.
@@ -38,25 +38,30 @@
 | `src/proxy.js` | Reverse proxy `/api/ow/*` → openwork-server. Whitelist sau khi **normalize dot-segments**, method allowlist, inject Bearer owner, **body buffer (cap 64MB)**, stream response + SSE keepalive 20s. |
 | `src/auth.js` | Phone → bridge: `owm_` token (header) + `?_t=` (chỉ GET, cho EventSource/img). timingSafeEqual. |
 | `src/static.js` | Serve `web/dist` (SPA fallback index.html). |
+| `src/pairing.js` | Pairing kiểu 9Remote: mã one-time 8 ký tự (30 phút, 1 lần, in trong QR), khóa thiết bị vĩnh viễn owd_ (lưu hash trong devices.json), thu hồi. |
 | `src/tunnel.js` | Auto Cloudflare Quick Tunnel (học từ 9Remote): tự tải cloudflared về data dir, spawn `tunnel --url :8788`, dò URL trycloudflare.com từ log, tự chạy lại khi chết, gọi `onUrl` (index.js in QR mới). Tắt bằng `OPENWORK_BRIDGE_TUNNEL=0`. |
 | `src/paths.js` | Vị trí `%APPDATA%\openwork` (env `OPENWORK_DIR` override cho test). |
 | `test/bridge.test.js` | Unit: netstat parse, whitelist + traversal, auth, hash. `npm test` |
 | `scripts/e2e-live.mjs` | E2E: tạo session → prompt_async → poll reply → delete. `node scripts/e2e-live.mjs <wsId> <providerId> <modelId>` |
 | `scripts/dbg-prompt.mjs` | Debug prompt: dump status + parts mỗi 5s. |
 
-### web/ (Preact + Vite → dist ~40KB gzip 14KB)
+### web/ (Preact + Vite → dist ~44KB gzip 16KB, design v3 "OpenWork brand")
 
 | File | Trách nhiệm |
 |---|---|
+| `src/styles.css` | Design tokens v3 (skill `.zcode/skills/pwa-workspace-ui/references/tokens.md`): Radix slate dark `#111113/#18191b/#212225` + blue đặc `#0090ff/#0588f0` (soi từ app-dist desktop — KHÔNG gradient), nav nổi pill, FAB 54px, tile, dot, skeleton, safe-area `--sat/--sab`, input 16px, touch 44px, focus-visible, reduced-motion. **Đổi giao diện = sửa file này + tokens.md.** |
+| `src/components/ui.jsx` | Loading, SkeletonList, Empty (icon + CTA), Banner, ConfirmDialog (thay `confirm()` native), BackButton, `useConfirm()` hook. |
+| `src/components/icons.jsx` | SVG stroke set nội bộ (Folder/File/Image/Upload/Download/Refresh/Back/Plus/Ws/Gear) — không dùng emoji làm icon. |
 | `src/api.js` | Token localStorage + auto-pair từ `#t=`; `ow()` fetch qua `/api/ow`; `sseUrl()` thêm `?_t=`; unwrap `.data`. |
-| `src/app.jsx` | Hash router (`#/`, `#/ws/:id`, `#/ws/:id/chat/:sid`, `#/ws/:id/files`, `#/settings`), StatusBanners, BottomNav. |
-| `src/pages/pairing.jsx` | Nhập mã `owm_...` lần đầu. |
-| `src/pages/workspaces.jsx` | List workspaces + dialog tạo mới (POST /workspaces/local). |
-| `src/pages/sessions.jsx` | Session list + status busy/idle + live SSE + tạo session mới. |
-| `src/pages/chat.jsx` | Transcript (parts: text/tool/reasoning), composer + **model picker (bắt buộc)**, abort, offline queue, permission cards (Allow/Deny), SSE events. |
-| `src/pages/files.jsx` | Duyệt qua `/opencode/file`; đọc/preview + **sửa+lưu + upload** qua `/files/raw` (base64); tải file về. |
-| `src/pages/settings.jsx` | Trạng thái bridge, recheck, gỡ pairing, hướng dẫn tailscale. |
-| `public/sw.js` | App-shell precache; không cache `/api/*`. |
+| `src/app.jsx` | Hash router (`#/`, `#/ws/:id`, `#/ws/:id/chat/:sid`, `#/ws/:id/files`, `#/settings`), topbar logo gradient + chip version, StatusBanners, BottomNav nổi (`bottomnav-wrap`). |
+| `src/pages/pairing.jsx` | Nhập mã `owm_...` lần đầu; hero logo gradient. |
+| `src/pages/workspaces.jsx` | List card có tile + FAB thêm workspace; sheet tạo mới (POST /workspaces/local). |
+| `src/pages/sessions.jsx` | Card session có dot busy/idle + FAB tạo session mới; SSE live. |
+| `src/pages/chat.jsx` | Transcript (text/tool/reasoning; markdown tối giản: code block/inline code/list — `MarkdownText`), composer nút send icon gradient + **model picker (bắt buộc)**, abort, offline queue, permission cards (Allow/Deny), SSE events. |
+| `src/pages/files.jsx` | Duyệt `/opencode/file` (icon tile, size qua `Intl.NumberFormat` vi-VN); xem/sửa+lưu + upload qua `/files/raw` (base64); tải file về. |
+| `src/pages/settings.jsx` | Trạng thái bridge, recheck, gỡ pairing (ConfirmDialog), hướng dẫn tailscale. |
+| `public/sw.js` | App-shell precache v2 + navigate fallback (offline mở được shell); không cache `/api/*`. |
+| `public/icon*.png/svg` + manifest | Icon nền `#111113` + vạch xanh `#0090ff` đặc (đúng logo desktop) 192/512 + maskable (safe zone 80%); manifest có id/scope/lang/orientation/shortcuts. |
 
 ## Bảng "triệu chứng → chỗ sửa"
 
@@ -72,6 +77,9 @@
 | Phone không pair được | `bridge/src/auth.js` + token trong `%APPDATA%\openwork-bridge\config.json`; QR in lúc bridge khởi động |
 | Sai danh sách workspace | Do openwork-server; kiểm tra `%APPDATA%\openwork\server.json` |
 | Web trắng / không load | Build lại `web/` (`npm run build`) — bridge serve `web/dist` qua `bridge/src/static.js` |
+| Muốn đổi màu/tông giao diện | `web/src/styles.css` (`:root` tokens) + đồng bộ `.zcode/skills/pwa-workspace-ui/references/tokens.md` |
+| Nút bị che notch/home indicator | Safe-area: `--sat/--sab` trong `web/src/styles.css` (topbar, bottomnav-wrap, FAB, composer) |
+| Input bị iPhone tự zoom khi focus | Font-size field < 16px — kiểm tra `web/src/styles.css` (mọi input/textarea/select phải ≥16px) |
 | Tunnel không lên / URL public không mở được | `bridge/src/tunnel.js` (download cloudflared, parse URL từ log). Lưu ý: URL ĐỔI mỗi lần cloudflared chạy lại — terminal bridge in QR mới |
 | Điện thoại mất kết nối sau khi restart máy | URL tunnel đã đổi — quét lại QR trong terminal bridge (hoặc nâng cấp named tunnel/Tailscale cho URL cố định, xem README) |
 | OpenWork update đổi format dữ liệu | Adapter cô lập: `discovery.js` (engine-instances.json), `bootstrap.js` (tokens.json) |
@@ -80,7 +88,9 @@
 
 | Route | Auth | Chức năng |
 |---|---|---|
-| `GET /api/state` | owm_ | Trạng thái bridge + server + token + engine |
+| `GET /api/state` | owm_/owd_ | Trạng thái bridge + server + token + engine + thiết bị hiện tại |
+| `POST /api/pair` | **không cần** (rate-limit 10/phút/IP) | Ghép thiết bị bằng mã 30 phút → trả khóa owd_ vĩnh viễn |
+| `GET /api/devices` · `DELETE /api/devices/:id` | owm_/owd_ | Danh sách thiết bị đã ghép + thu hồi |
 | `POST /api/recheck` | owm_ | Ép discovery lại |
 | `/api/ow/<path>` | owm_ (header hoặc `?_t=` cho GET) | Proxy openwork-server. Whitelist: `/workspaces*`, `/workspace/:id/(events|session-groups|files|opencode/*|engine/reload|artifacts|inbox)`, `/approvals*`, `/files/sessions/*`, `/experimental/(ui-control|extensions)`, `/status`, `/capabilities`, `/whoami`, `/health` |
 
