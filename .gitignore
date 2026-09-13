@@ -12,6 +12,9 @@ Thumbs.db
 # binaries cannot go through the pre-push washer, so keep it local-only
 desktop/bin/
 
+# friend installer bundle (built locally: bridge + web/dist + exe + guide)
+openwork-bridge-friend.zip
+
 # wrangler files
 .wrangler
 .dev.vars*
@@ -24,3 +27,9 @@ desktop/bin/
 
 # wrangler local cache (account info — never publish)
 worker/.wrangler/
+
+# Mimosa security-scan plugin: per-session hook state + scan metadata (machine-local)
+.mimosa/
+
+# GUI test build manifest (asInvoker copy for runtime testing)
+desktop/src/app-test.manifest

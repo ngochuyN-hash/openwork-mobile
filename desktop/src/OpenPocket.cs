@@ -7,6 +7,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Management;
 using System.Web.Script.Serialization;
@@ -171,7 +172,8 @@ namespace OpenPocket.Desktop
             pnlHeader.Controls.Add(lblTitle);
 
             Label lblSubtitle = new Label();
-            lblSubtitle.Text = "Điều khiển OpenWork từ xa qua điện thoại • An toàn & Miễn phí";
+            // Ngắn vừa phải — dài quá là đè lên badge ADMIN bên phải (bắt gặp thật)
+            lblSubtitle.Text = "Điều khiển OpenWork từ điện thoại — miễn phí";
             lblSubtitle.Font = new Font("Segoe UI", 8.5f, FontStyle.Regular);
             lblSubtitle.ForeColor = ColorMuted;
             lblSubtitle.Location = new Point(18, 42);
@@ -196,13 +198,13 @@ namespace OpenPocket.Desktop
             pnlTabs.Padding = new Padding(16, 4, 16, 4);
             this.Controls.Add(pnlTabs);
 
-            btnTabMachine = CreateTabButton("🖥️  Máy của tôi (Bridge)", true);
+            btnTabMachine = CreateTabButton("🖥️  Máy của tôi", true);
             btnTabMachine.Location = new Point(16, 6);
             btnTabMachine.Click += delegate { SwitchTab(true); };
             pnlTabs.Controls.Add(btnTabMachine);
 
-            btnTabTenants = CreateTabButton("🏢  Quản lý phòng (Tenant)", false);
-            btnTabTenants.Location = new Point(220, 6);
+            btnTabTenants = CreateTabButton("🏢  Quản lý phòng", false);
+            btnTabTenants.Location = new Point(232, 6);
             btnTabTenants.Click += delegate { SwitchTab(false); };
             pnlTabs.Controls.Add(btnTabTenants);
 
@@ -222,7 +224,7 @@ namespace OpenPocket.Desktop
             int y = 4;
 
             // Card 1: Trạng thái
-            Panel cardStatus = CreateCard(ref y, 175, pnlMachine);
+            Panel cardStatus = CreateCard(ref y, 205, pnlMachine);
             CreateCardTitle("TRẠNG THÁI KẾT NỐI HIỆN TẠI", cardStatus);
 
             lblStatusBridge = CreateStatusLabel("Bridge: Đang kiểm tra...", 16, 34, cardStatus);
@@ -240,13 +242,12 @@ namespace OpenPocket.Desktop
             btnRestartBridge.Click += delegate { ActionRestartBridge(); };
 
             chkAutostart = new CheckBox();
-            chkAutostart.Text = "Tự khởi động cùng Windows (Chạy ngầm Admin)";
+            // Hàng RIÊNG bên dưới các nút — dồn chung hàng là tràn chữ (bắt gặp thật)
+            chkAutostart.Text = "Tự khởi động cùng Windows (chạy ngầm, quyền Admin)";
             chkAutostart.ForeColor = ColorText;
             chkAutostart.Font = new Font("Segoe UI", 9f, FontStyle.Regular);
-            chkAutostart.Location = new Point(16, 142);
+            chkAutostart.Location = new Point(16, 172);
             chkAutostart.AutoSize = true;
-            // Dời checkbox lên chút
-            chkAutostart.Location = new Point(356, 135);
             chkAutostart.CheckedChanged += OnAutostartChanged;
             cardStatus.Controls.Add(chkAutostart);
 
@@ -315,6 +316,14 @@ namespace OpenPocket.Desktop
             pnlTenants.Visible = false;
             pnlContent.Controls.Add(pnlTenants);
 
+            // Dock layout xử lý collection theo index GIẢM DẦN (index cao được
+            // ưu tiên lấy mép trước): đưa tabs + header lên cuối để chúng lấy
+            // mép trên trước, content fill phần còn lại. Thứ tự add ban đầu làm
+            // content nguyên màn hình và CHÌM dưới header/tabs — các dòng
+            // trạng thái bị che mất, chỉ thấy nút bấm (bắt gặp thật 13/09).
+            this.Controls.SetChildIndex(pnlHeader, this.Controls.Count - 1);
+            this.Controls.SetChildIndex(pnlTabs, this.Controls.Count - 1);
+
             int y2 = 4;
 
             // Note nếu không phải máy chủ
@@ -336,7 +345,7 @@ namespace OpenPocket.Desktop
             CreateFieldLabel("Tên hiển thị (vd: Marcus Laptop):", 270, 30, cardNewTenant);
             txtNewDisplayName = CreateInput(270, 50, 280, cardNewTenant);
 
-            CreateFieldLabel("Mật khẩu (≥8 ký tự, để trống = tự đặt 12345678):", 16, 84, cardNewTenant);
+            CreateFieldLabel("Mật khẩu (≥8 ký tự, để trống = tự sinh ngẫu nhiên):", 16, 84, cardNewTenant);
             txtNewPass = CreateInput(16, 104, 240, cardNewTenant);
 
             btnCreateTenant = CreateFlatButton("➕ Tạo phòng & Tạo link mời", ColorSuccess, 270, 102, 280, 30, cardNewTenant);
@@ -697,23 +706,33 @@ namespace OpenPocket.Desktop
         {
             try
             {
-                string logPath = Path.Combine(GetBridgeDataDir(), "bridge.log");
-                if (!File.Exists(logPath))
+                string dataDir = GetBridgeDataDir();
+                // Quét CẢ hai log (CLI `openpocket start` ghi bridge.log, task
+                // scheduler ghi bridge-task.log) — dừng ở bridge.log là hụt URL
+                // khi cầu nối chạy bằng task. Lấy match của file SỬA GẦN NHẤT.
+                string best = "";
+                DateTime bestTime = DateTime.MinValue;
+                foreach (string name in new string[] { "bridge-task.log", "bridge.log" })
                 {
-                    logPath = Path.Combine(GetBridgeDataDir(), "bridge-task.log");
-                    if (!File.Exists(logPath)) return "";
-                }
-
-                using (FileStream fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                using (StreamReader sr = new StreamReader(fs, Encoding.UTF8))
-                {
-                    string content = sr.ReadToEnd();
-                    var matches = Regex.Matches(content, @"https://[a-z0-9-]+\.trycloudflare\.com");
-                    if (matches.Count > 0)
+                    string logPath = Path.Combine(dataDir, name);
+                    if (!File.Exists(logPath)) continue;
+                    DateTime modified = File.GetLastWriteTime(logPath);
+                    string found = "";
+                    using (FileStream fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    using (StreamReader sr = new StreamReader(fs, Encoding.UTF8))
                     {
-                        return matches[matches.Count - 1].Value;
+                        string content = sr.ReadToEnd();
+                        Match last = default(Match);
+                        foreach (Match m in Regex.Matches(content, @"https://[a-z0-9-]+\.trycloudflare\.com")) last = m;
+                        if (last != null && last.Success) found = last.Value;
+                    }
+                    if (found != "" && modified > bestTime)
+                    {
+                        best = found;
+                        bestTime = modified;
                     }
                 }
+                return best;
             }
             catch { }
             return "";
@@ -912,7 +931,10 @@ namespace OpenPocket.Desktop
                     "sh.CurrentDirectory = \"" + bridgeDir.Replace("\"", "\"\"") + "\"\r\n" +
                     "sh.Run \"cmd /c \"\"\"\"" + nodeExe.Replace("\"", "\"\"") + "\"\" \"\"" + bridgeEntry.Replace("\"", "\"\"") + "\"\" >> \"\"" + logPath.Replace("\"", "\"\"") + "\"\" 2>&1\"\"\", 0, False\r\n";
 
-                File.WriteAllText(vbsPath, vbsContent, Encoding.UTF8);
+                // KHÔNG BOM: wscript đọc .vbs dính UTF-8 BOM là chết ngay với lỗi
+                // "Not enough memory resources" — task Running ảo, bridge không
+                // bao giờ boot (bắt gặp thật 13/09, phải printf tay mới chữa được)
+                File.WriteAllText(vbsPath, vbsContent, new UTF8Encoding(false));
 
                 var psi = new ProcessStartInfo("schtasks.exe",
                     "/Create /TN OpenPocketBridge /SC ONLOGON /TR \"\\\"wscript.exe\\\" \\\"" + vbsPath + "\\\"\" /RL HIGHEST /F");
@@ -959,11 +981,25 @@ namespace OpenPocket.Desktop
 
             if (string.IsNullOrEmpty(pass))
             {
-                pass = "12345678";
+                // KHÔNG còn mật khẩu mặc định 12345678 — chữ đầu tiên kẻ phá thử
+                // với mọi phòng. Để trống = tự sinh 48 hex (nằm sẵn trong link mời).
+                byte[] entropy = new byte[24];
+                using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(entropy);
+                pass = "owes_" + BitConverter.ToString(entropy).Replace("-", "").ToLowerInvariant();
             }
             else if (pass.Length < 8 || Regex.IsMatch(pass, @"[\s""':&]"))
             {
                 MessageBox.Show(this, "Mật khẩu phòng cần ít nhất 8 ký tự, không chứa dấu cách, nháy kép/nháy đơn, ':' hoặc '&'.", "Mật khẩu không hợp lệ", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // Đọc + kiểm tra workerUrl trên UI thread (trước khi khóa nút):
+            // URL lỗi định dạng sẽ xê dịch tham số khi ghép lệnh node bên dưới.
+            string workerUrl = txtWorkerUrl.Text.Trim().TrimEnd('/');
+            if (string.IsNullOrEmpty(workerUrl)) workerUrl = "https://YOUR-WORKER.workers.dev";
+            if (!workerUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(workerUrl, @"\s"))
+            {
+                MessageBox.Show(this, "Địa chỉ worker phải bắt đầu bằng https:// và không chứa dấu cách.", "Lỗi định dạng", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -980,12 +1016,13 @@ namespace OpenPocket.Desktop
             ThreadPool.QueueUserWorkItem(delegate {
                 try
                 {
-                    string workerUrl = txtWorkerUrl.Text.Trim().TrimEnd('/');
-                    if (string.IsNullOrEmpty(workerUrl)) workerUrl = "https://YOUR-WORKER.workers.dev";
-
                     var psi = new ProcessStartInfo(nodeExe);
-                    psi.Arguments = string.Format("\"{0}\" add {1} \"{2}\" {3} --pass {4}",
-                        tenantScript, user, !string.IsNullOrEmpty(name) ? name : user, workerUrl, pass);
+                    // Nháy kép/CR/LF trong tên hiển thị sẽ thoát khỏi cặp nháy của
+                    // Arguments và xê dịch tham số tenant.mjs — bỏ trước khi ghép lệnh.
+                    string displayName = (string.IsNullOrEmpty(name) ? user : name)
+                        .Replace("\"", "").Replace("\r", "").Replace("\n", "");
+                    psi.Arguments = string.Format("\"{0}\" add {1} \"{2}\" {3} --pass \"{4}\"",
+                        tenantScript, user, displayName, workerUrl, pass);
                     psi.WorkingDirectory = workerDir;
                     psi.CreateNoWindow = true;
                     psi.UseShellExecute = false;
@@ -1375,8 +1412,13 @@ namespace OpenPocket.Desktop
             btnClose.Click += delegate { this.Close(); };
             this.Controls.Add(btnClose);
 
-            // Lấy mã live từ bridge
-            FetchLiveCode(port, token);
+            // Lấy mã live từ bridge — SAU khi form có handle (Load event): gọi
+            // Invoke từ ThreadPool trước khi ShowDialog tạo handle là sập app.
+            int portAtLoad = port;
+            string tokenAtLoad = token;
+            this.Load += delegate {
+                FetchLiveCode(portAtLoad, tokenAtLoad);
+            };
         }
 
         private void ShowQr(bool master)

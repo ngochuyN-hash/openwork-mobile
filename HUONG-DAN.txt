@@ -1,0 +1,28 @@
+══════════════════════════════════════════════════════════════
+ OPENPOCKET — ĐIỀU KHIỂN MÁY TÍNH NÀY TỪ ĐIỆN THOẠI
+ (không cần app trên điện thoại, miễn phí 100%)
+══════════════════════════════════════════════════════════════
+
+CẦN CHỈ 1 THỨ CÀI SẴN: Node.js 20 trở lên
+  → Chưa có? Vào https://nodejs.org tải bản LTS, cài next-next là xong.
+
+BƯỚC 1 — Cài phần nối (1 lần duy nhất, ~2 phút)
+  Mở thư mục "bridge" → bấm đúp vào:  setup-friend.bat
+  (đợi chữ XONG! hiện ra là xong)
+
+BƯỚC 2 — Dán link mời
+  Bấm đúp:  OpenPocket.exe
+  (Windows hỏi xanh "Windows protected your PC"? → More info → Run anyway
+   — app chưa mua chữ ký số nên lần đầu bị hỏi vậy, bình thường)
+  → Tab "Máy của tôi" → dán LINK MỜI bạn nhận được vào ô lớn
+  → Bấm "💾 Lưu cấu hình & Bật kết nối phòng"
+
+BƯỚC 3 — Trên điện thoại
+  Bấm vào link mời (gửi qua Zalo/Messenger) → tự vào app luôn.
+  Lần sau mở app là vào thẳng, không gõ lại gì cả.
+
+MẸO
+  • Tick "Tự khởi động cùng Windows" để máy nào restart cũng tự nối lại.
+  • Nút "📱 Xem mã ghép" in QR để ghép thêm điện thoại khác không cần pass.
+  • Rắc rối? Bấm "📄 Xem nhật ký" rồi chụp màn hình gửi chủ nhà.
+══════════════════════════════════════════════════════════════

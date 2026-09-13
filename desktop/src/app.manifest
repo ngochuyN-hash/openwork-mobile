@@ -17,10 +17,8 @@
       <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}" />
     </application>
   </compatibility>
-  <!-- DPI awareness: giao diện sắc nét trên màn hình Retina / 2K / 4K / Laptop -->
-  <application xmlns="urn:schemas-microsoft-com:asm.v3">
-    <windowsSettings>
-      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
-    </windowsSettings>
-  </application>
+  <!-- CỐ Ý KHÔNG bật dpiAware: layout dùng tọa độ pixel cố định, bật pm-aware
+       trên màn hình DPI cao (150-250%) làm chữ phóng to trong khi khung đứng
+       yên -> chữ đè lên nhau (bắt gặp thật trên máy chủ). Không khai báo =
+       Windows co giãn BIỂU DIỄN cả cửa sổ, layout giữ nguyên trên mọi máy. -->
 </assembly>
