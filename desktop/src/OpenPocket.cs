@@ -255,15 +255,14 @@ namespace OpenPocket.Desktop
 
             // Card 2: Ghép điện thoại (QR) & Tiện ích
             Panel cardPair = CreateCard(ref y, 75, pnlMachine);
-            Button btnShowQr = CreateFlatButton("📱 Xem mã ghép điện thoại (QR)", ColorPrimary, 16, 18, 240, 38, cardPair);
+            // Hai nút đủ dụng — nút "Thư mục" (mở %APPDATA%) đã XOÁ: chả có ý
+            // nghĩa với người dùng, dại mà đụng vào là hỏng config (user chốt)
+            Button btnShowQr = CreateFlatButton("📱 Xem mã ghép điện thoại (QR)", ColorPrimary, 16, 18, 270, 38, cardPair);
             btnShowQr.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
             btnShowQr.Click += delegate { ActionShowPairingDialog(); };
 
-            Button btnOpenLogs = CreateFlatButton("📄 Xem nhật ký (Logs)", ColorCardBorder, 268, 18, 160, 38, cardPair);
+            Button btnOpenLogs = CreateFlatButton("📄 Xem nhật ký (Logs)", ColorCardBorder, 298, 18, 240, 38, cardPair);
             btnOpenLogs.Click += delegate { ActionOpenLogs(); };
-
-            Button btnOpenDataDir = CreateFlatButton("📂 Thư mục", ColorCardBorder, 440, 18, 110, 38, cardPair);
-            btnOpenDataDir.Click += delegate { ActionOpenDataDir(); };
 
             y += 12;
 
@@ -861,13 +860,6 @@ namespace OpenPocket.Desktop
             {
                 MessageBox.Show(this, "Chưa có file log. Hãy khởi động Bridge trước.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
-        }
-
-        private void ActionOpenDataDir()
-        {
-            string dir = GetBridgeDataDir();
-            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            Process.Start("explorer.exe", dir);
         }
 
         // ================= AUTOSTART TASK =================
