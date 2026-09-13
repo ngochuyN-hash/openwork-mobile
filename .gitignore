@@ -21,3 +21,6 @@ desktop/bin/
 
 # publishing washer hook is machine-local (never published to the remote)
 .githooks/
+
+# wrangler local cache (account info — never publish)
+worker/.wrangler/
