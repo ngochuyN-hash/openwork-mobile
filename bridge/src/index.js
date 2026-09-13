@@ -370,6 +370,53 @@ async function handleRequest(req, res) {
       return;
     }
 
+    // Restart tunnel THỦ CÔNG (nút "Restart tunnel" GUI): chủ động xin tunnel
+    // mới thay vì đợi bộ đếm backoff 429 (đôi khi hên xui — IP đã đổi mà vẫn
+    // kẹt hẹn cũ trong tunnel-state.json). Bridge giữ nguyên, chỉ cloudflared
+    // được thay; URL mới có rồi bridge tự đăng ký lại lên worker như thường.
+    if (req.method === "POST" && pathname === "/api/tunnel/restart") {
+      if (!tunnelRestart()) {
+        res.writeHead(409, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            code: "tunnel_inactive",
+            message: "Tunnel không chạy (OPENWORK_BRIDGE_TUNNEL=0 hoặc đang restart dở).",
+          })
+        );
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, tunnel: tunnelGetState() }));
+      return;
+    }
+
+    // Đổi tên máy (ô "Tên máy" trong GUI desktop): cập nhật config trong RAM +
+    // file NGAY — đăng nhập mới trên điện thoại thấy tên mới qua /api/pair/
+    // tenant, /api/state cũng báo theo. Không cần restart bridge.
+    if (req.method === "POST" && pathname === "/api/machine/name") {
+      try {
+        const body = await readJsonBody(req);
+        const name = String(body?.name ?? "")
+          .replace(/[\r\n"']/g, "")
+          .trim()
+          .slice(0, 60);
+        if (!name) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ code: "invalid_name", message: "Tên máy trống." }));
+          return;
+        }
+        config.machineName = name;
+        saveConfig(config);
+        console.log(`[bridge] tên máy mới: ${name}`);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, machineName: name }));
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: "invalid_body", message: "Body JSON không hợp lệ" }));
+      }
+      return;
+    }
+
     // Bật OpenWork desktop từ điện thoại (khi máy tính đang bật + bridge chạy
     // nhưng app OpenWork chưa mở). Chống bấm liên tục: 5 lần/phút/IP.
     if (req.method === "POST" && pathname === "/api/openwork/wake") {

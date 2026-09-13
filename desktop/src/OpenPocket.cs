@@ -52,6 +52,8 @@ namespace OpenPocket.Desktop
         private string currentMachineName = "";
         private string bridgeDir = "";
         private string nodeExe = "";
+        // Tên máy đang gửi lên bridge (chống poll 3.5s ghi đè ô giữa chừng lưu)
+        private string machineNameInFlight = null;
         // 1 PC, hết tài khoản: lần đầu mở app, app TỰ cấp định danh máy (room
         // ngầm + mật khẩu ngầm qua /api/tenant/create) và TỰ npm install bridge
         // — exe chính là bộ cài, người dùng chỉ bấm Bật và quét QR.
@@ -109,13 +111,15 @@ namespace OpenPocket.Desktop
 
         // UI Controls - single page
         private Label lblStatusBridge;
-        private Label lblStatusRoom;
+        private Label lblMachineLabel;
+        private TextBox txtMachineName;
         private Label lblStatusTunnel;
         private Label lblStatusTunnelUrl;
         private Label lblStatusOpenWork;
         private Button btnStartBridge;
         private Button btnStopBridge;
         private Button btnRestartBridge;
+        private Button btnTunnelRestart;
         private CheckBox chkAutostart;
 
         public MainForm()
@@ -205,9 +209,29 @@ namespace OpenPocket.Desktop
             lblStatusBridge = CreateStatusLabel("Bridge: Đang kiểm tra...", 16, 36, cardStatus);
             lblStatusBridge.Size = new Size(448, 22);
             lblStatusBridge.Font = new Font("Segoe UI", 9.75f);
-            lblStatusRoom = CreateStatusLabel("Máy: Đang đọc cấu hình...", 16, 66, cardStatus);
-            lblStatusRoom.Size = new Size(448, 22);
-            lblStatusRoom.Font = new Font("Segoe UI", 9.75f);
+            // Tên máy là ô SỬA ĐƯỢC (owner 13/09: "T cần viết tên máy là gì" —
+            // trước đây chỉ là dòng tĩnh "Máy: ..." lấy từ lúc tạo phòng). Enter
+            // hoặc rời ô là lưu: bridge đang chạy thì POST /api/machine/name
+            // (cập nhật RAM + file + điện thoại thấy ngay), bridge dừng thì ghi
+            // thẳng config.json cho lần boot sau.
+            lblMachineLabel = new Label();
+            lblMachineLabel.Text = "Tên máy";
+            lblMachineLabel.Font = new Font("Segoe UI", 8.5f);
+            lblMachineLabel.ForeColor = ColorMuted;
+            lblMachineLabel.Location = new Point(16, 68);
+            lblMachineLabel.AutoSize = true;
+            cardStatus.Controls.Add(lblMachineLabel);
+
+            txtMachineName = CreateInput(86, 63, 330, cardStatus);
+            txtMachineName.MaxLength = 60;
+            txtMachineName.KeyDown += delegate(object s, KeyEventArgs e) {
+                if (e.KeyCode == Keys.Enter)
+                {
+                    e.SuppressKeyPress = true;
+                    SaveMachineName();
+                }
+            };
+            txtMachineName.Leave += delegate { SaveMachineName(); };
             lblStatusTunnel = CreateStatusLabel("Cloudflare Tunnel: Đang kiểm tra...", 16, 96, cardStatus);
             lblStatusTunnel.Size = new Size(448, 22);
             lblStatusTunnel.Font = new Font("Segoe UI", 9.75f);
@@ -220,6 +244,18 @@ namespace OpenPocket.Desktop
             // dòng thay vì bị cắt cụt (label WordWrap sẵn có)
             lblStatusTunnelUrl.Size = new Size(432, 34);
             cardStatus.Controls.Add(lblStatusTunnelUrl);
+
+            // Restart tunnel CHỦ ĐỘNG (owner 13/09: bộ đếm backoff 429 "hên xui"):
+            // xin tunnel mới ngay không đợi hẹn — bridge vẫn sống, chỉ cloudflared
+            // được thay. Vô hiệu khi bridge dừng (CheckStatus khoá theo đèn xanh).
+            btnTunnelRestart = CreateFlatButton("Restart tunnel", ColorSecondary, 296, 92, 120, 27, cardStatus);
+            btnTunnelRestart.Font = new Font("Segoe UI", 9f);
+            btnTunnelRestart.Click += delegate { ActionRestartTunnel(); };
+            // Label tunnel tạo TRƯỚC nút nên nằm TRÊN (z-order theo thứ tự add,
+            // index 0 đỉnh) — bề rộng 448 ban đầu của label đè trắng nút; kéo
+            // nút lên đỉnh để không bao giờ bị nền label che
+            btnTunnelRestart.BringToFront();
+
             lblStatusOpenWork = CreateStatusLabel("OpenWork Desktop: Đang kiểm tra...", 16, 162, cardStatus);
             lblStatusOpenWork.Size = new Size(448, 22);
             lblStatusOpenWork.Font = new Font("Segoe UI", 9.75f);
@@ -503,6 +539,7 @@ namespace OpenPocket.Desktop
             var config = LoadConfig();
             currentTenant = config.ContainsKey("lookupTenant") ? Convert.ToString(config["lookupTenant"]) : "";
             currentMachineName = config.ContainsKey("machineName") ? Convert.ToString(config["machineName"]) : "";
+            txtMachineName.Text = currentMachineName;
 
             // Kiểm tra autostart task
             CheckAutostartTask();
@@ -678,11 +715,13 @@ namespace OpenPocket.Desktop
 
             if (isBridgeRunning)
             {
-                lblStatusBridge.Text = string.Format("● Bridge: Đang chạy (Cổng {0})", port);
+                lblStatusBridge.Text = string.Format("● Bridge: Đang chạy (Cổng {0})", port) +
+                    (provisioning ? " (đang tạo định danh lần đầu…)" : "");
                 lblStatusBridge.ForeColor = ColorSuccess;
                 btnStartBridge.Enabled = false;
                 btnStopBridge.Enabled = true;
                 btnRestartBridge.Enabled = true;
+                btnTunnelRestart.Enabled = true;
             }
             else
             {
@@ -691,24 +730,27 @@ namespace OpenPocket.Desktop
                 btnStartBridge.Enabled = true;
                 btnStopBridge.Enabled = false;
                 btnRestartBridge.Enabled = false;
+                btnTunnelRestart.Enabled = false;
             }
 
-            // 2. Phòng hiện tại
+            // 2. Tên máy — chỉ nạp lại vào ô khi ô KHÔNG đang focus và KHÔNG có
+            // lệnh lưu đang bay, kẻo ghi đè mất chữ user đang gõ
             currentTenant = config.ContainsKey("lookupTenant") ? Convert.ToString(config["lookupTenant"]) : "";
             currentMachineName = config.ContainsKey("machineName") ? Convert.ToString(config["machineName"]) : "";
-
-            string who = !string.IsNullOrEmpty(currentMachineName) ? currentMachineName
-                : (!string.IsNullOrEmpty(currentTenant) ? currentTenant : "máy chính");
-            lblStatusRoom.Text = "Máy: " + who + (provisioning ? " (đang tạo định danh lần đầu…)" : "");
+            if (!txtMachineName.Focused && machineNameInFlight == null && txtMachineName.Text != currentMachineName)
+            {
+                txtMachineName.Text = currentMachineName;
+            }
 
             // 3. Đọc tunnel URL từ log — nhưng nếu tunnel-state.json đang báo
-            // backoff 429 thì ưu tiên cảnh báo: đừng restart (càng restart càng lâu).
+            // backoff 429 thì ưu tiên cảnh báo. Nút Restart tunnel cho phép
+            // chủ động thử ngay (bridge vẫn sống, chỉ cloudflared được thay).
             int backoffMin = ReadTunnelBackoffMinutes();
             tunnelUrl = ReadTunnelUrlFromLog();
             if (backoffMin > 0)
             {
                 lblStatusTunnel.Text = "Cloudflare: đang chờ mở lại đường hầm (429)";
-                lblStatusTunnelUrl.Text = "Tự thử lại sau ~" + backoffMin + " phút — đừng restart bridge, càng restart càng lâu.";
+                lblStatusTunnelUrl.Text = "Tự thử lại sau ~" + backoffMin + " phút — hoặc bấm [Restart tunnel] để thử ngay.";
                 lblStatusTunnel.ForeColor = ColorAmber;
             }
             else if (!string.IsNullOrEmpty(tunnelUrl))
@@ -966,6 +1008,106 @@ namespace OpenPocket.Desktop
             ActionStopBridge();
             Thread.Sleep(1200);
             ActionStartBridge();
+        }
+
+        // ================= BRIDGE HTTP (POST JSON, Bearer master token) =================
+
+        // POST tới bridge localhost bằng master token trong config (GUI là chủ
+        // máy). onDone(dict, err): dict = đáp án JSON khi 2xx, null = lỗi (err
+        // mang mô tả). Chạy thread pool, đáp án marshal về UI thread.
+        private void PostBridgeJson(string path, string json, Action<Dictionary<string, object>, string> onDone)
+        {
+            var config = LoadConfig();
+            int port = 8788;
+            if (config.ContainsKey("port"))
+            {
+                int p;
+                if (int.TryParse(Convert.ToString(config["port"]), out p) && p > 0) port = p;
+            }
+            string token = config.ContainsKey("mobileToken") ? Convert.ToString(config["mobileToken"]) : "";
+            ThreadPool.QueueUserWorkItem(delegate {
+                Dictionary<string, object> dict = null;
+                string error = null;
+                try
+                {
+                    var req = (HttpWebRequest)WebRequest.Create("http://127.0.0.1:" + port + path);
+                    req.Method = "POST";
+                    req.ContentType = "application/json";
+                    req.Headers.Add("Authorization", "Bearer " + token);
+                    req.Timeout = 8000;
+                    if (json != null)
+                    {
+                        byte[] body = Encoding.UTF8.GetBytes(json);
+                        req.ContentLength = body.Length;
+                        using (Stream stream = req.GetRequestStream()) stream.Write(body, 0, body.Length);
+                    }
+                    using (var res = (HttpWebResponse)req.GetResponse())
+                    using (var sr = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
+                    {
+                        dict = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(sr.ReadToEnd()) ?? new Dictionary<string, object>();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    error = ex.Message;
+                }
+                Dictionary<string, object> result = dict;
+                string errText = error;
+                this.Invoke(new MethodInvoker(delegate { onDone(result, errText); }));
+            });
+        }
+
+        // Nút "Restart tunnel": xin Cloudflare tunnel mới NGAY, không đợi bộ đếm
+        // backoff (owner 13/09: đặt giờ nhiều hồi hên xui — IP đã đổi mà vẫn kẹt
+        // hẹn cũ). Trạng thái thật để poll 3.5s tự cập nhật từ tunnel-state.json.
+        private void ActionRestartTunnel()
+        {
+            if (!isBridgeRunning) return;
+            btnTunnelRestart.Enabled = false;
+            btnTunnelRestart.Text = "Đang restart…";
+            lblStatusTunnel.Text = "Cloudflare: đang xin đường hầm mới...";
+            lblStatusTunnel.ForeColor = ColorAmber;
+            PostBridgeJson("/api/tunnel/restart", null, (dict, err) => {
+                btnTunnelRestart.Text = "Restart tunnel";
+                btnTunnelRestart.Enabled = isBridgeRunning;
+                if (dict == null)
+                {
+                    lblStatusTunnel.Text = "Cloudflare: không restart được (" + err + ")";
+                    lblStatusTunnel.ForeColor = ColorDanger;
+                }
+                // dict != null: bridge đã nhận — poll sắp tới tự hiện trạng thái mới
+            });
+        }
+
+        // Lưu tên máy từ ô "Tên máy" (Enter hoặc rời ô, chỉ khi chữ thật sự đổi).
+        // Bridge chạy: POST /api/machine/name — bridge cập nhật RAM + file, điện
+        // thoại đăng nhập mới thấy ngay. Bridge dừng: ghi thẳng config.json, lần
+        // boot sau bridge đọc tên mới. 404/lỗi khác (bridge cũ): hoàn lại tên cũ.
+        private void SaveMachineName()
+        {
+            string name = txtMachineName.Text.Trim();
+            if (name.Length == 0 || name == currentMachineName || machineNameInFlight != null) return;
+            machineNameInFlight = name;
+            string payload = new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "name", name } });
+            PostBridgeJson("/api/machine/name", payload, (dict, err) => {
+                machineNameInFlight = null;
+                if (dict != null && dict.ContainsKey("ok"))
+                {
+                    currentMachineName = Convert.ToString(dict["machineName"]);
+                    return;
+                }
+                if (dict == null && err != null && (err.Contains("không thể kết nối") || err.ToLower().Contains("unable to connect")))
+                {
+                    // Bridge tắt hẳn: ghi file là đủ (bridge đọc config lúc mở)
+                    var cfg = LoadConfig();
+                    cfg["machineName"] = name;
+                    SaveConfig(cfg);
+                    currentMachineName = name;
+                    return;
+                }
+                // Bridge cũ chưa có route / phản hồi lạ: trả ô về tên đã biết
+                txtMachineName.Text = currentMachineName;
+            });
         }
 
         private void ActionShowPairingDialog()

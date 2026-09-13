@@ -97,6 +97,10 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
   let rateLimitStreak = 0; // số lần dính 429 liên tiếp
   let phase = "starting"; // "starting" | "up" | "backoff" — cho CLI/GUI/heartbeat đọc
   let nextRetryAt = 0; // mốc thời gian lần thử tiếp theo khi đang backoff
+  let currentChild = null; // cloudflared đang sống — restart thủ công phải giết ĐÚNG con này
+  let pendingRetryTimer = null; // hẹn chạy lại đang treo — restart phải huỷ trước khi tự chạy
+  let suppressExit = false; // exit sắp firing là do mình kill để restart, đừng xếp lịch lại
+  let restarting = false; // khoá re-entrancy: 1 restart đang đi thì bấm nữa bỏ qua
 
   // Nhặt lại bộ đếm từ lần chạy trước: bridge vừa restart cũng KHÔNG được gõ
   // cửa 429 sớm hơn mức đã hẹn — limit đếm theo IP, không quan tâm tiến trình.
@@ -119,7 +123,8 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
       if (respawnScheduled || stopped) return;
       respawnScheduled = true;
       log(`[tunnel] ${reason} - chờ ${Math.round(delay / 1000)}s...`);
-      setTimeout(() => {
+      pendingRetryTimer = setTimeout(() => {
+        pendingRetryTimer = null;
         if (!stopped) runOnce().catch((e) => log(`[tunnel] lỗi: ${e.message}`));
       }, delay);
     };
@@ -127,6 +132,8 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
     const child = spawn(bin, ["tunnel", "--url", `http://127.0.0.1:${targetPort}`, ...SPAWN_FLAGS, "--no-autoupdate"], {
       stdio: ["ignore", "pipe", "pipe"],
     });
+    currentChild = child;
+    suppressExit = false;
     // spawn hụt (exe bị khoá/ENOENT...) KHÔNG phát exit — không bắt error thì
     // vòng retry lặng lẽ chết, bridge tưởng còn tunnel mãi (bệnh đêm 13/09:
     // im re hơn 2 tiếng không một dòng log, worker báo bridge_offline).
@@ -156,7 +163,10 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
     child.stderr.on("data", scan);
 
     child.on("exit", async (code) => {
-      if (stopped) return;
+      // suppressExit = chính mình vừa kill để restart; child !== currentChild =
+      // con của đợt cũ chết trễ sau khi đợt mới đã lên — cả hai đừng xếp lịch
+      // thêm, kẻo hai cloudflared cùng sống là xin hai tunnel tự nuôi limit.
+      if (stopped || suppressExit || child !== currentChild) return;
       // 429/1015 = Cloudflare rate-limit quick tunnel theo IP: chờ lâu dần
       // (2ph → 4ph → ... tối đa 10ph) thay vì dội 5s/lần làm limit kéo dài thêm.
       // Code -1 (4294967295, Windows) = bị edge dump sau khi cấp URL hoặc bị giết
@@ -200,6 +210,46 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
       return currentUrl;
     },
     getState,
+    // Restart THỦ CÔNG (nút "Restart tunnel" GUI / POST /api/tunnel/restart):
+    // bỏ qua bộ đếm backoff — bộ đếm nhiều khi hên xui vì nó đếm theo TỪNG LẦN
+    // 429 trong file, không biết IP đã đổi (restart router) hay limit đã hết
+    // hạn. Người dùng chủ động = cho gõ cửa NGAY; Cloudflare vẫn còn limit thì
+    // dính 429 và backoff tự chạy lại như cũ, không hư gì.
+    restart() {
+      if (stopped || restarting) return false;
+      restarting = true;
+      log("[tunnel] restart thủ công — bỏ bộ đếm chờ, xin tunnel mới ngay...");
+      if (pendingRetryTimer) {
+        clearTimeout(pendingRetryTimer);
+        pendingRetryTimer = null;
+      }
+      attempt = 0;
+      rateLimitStreak = 0;
+      nextRetryAt = 0;
+      phase = "starting";
+      saveTunnelState({ phase: "starting", url: "", streak: 0, nextAttemptAt: 0 });
+      const child = currentChild;
+      const go = () => {
+        if (!restarting) return; // exit thật + fallback timeout cùng firing — cái trước thắng
+        restarting = false;
+        if (stopped) return;
+        runOnce().catch((error) => log(`[tunnel] lỗi restart: ${error.message}`));
+      };
+      if (child && child.exitCode === null) {
+        // Con cũ còn sống: giết rồi đợi nó chết hẳn mới chạy lại — hai
+        // cloudflared cùng lúc là xin hai tunnel, tự nuôi thêm limit.
+        suppressExit = true;
+        child.once("exit", go);
+        try {
+          child.kill();
+        } catch {}
+        // kill cứng hiếm khi không phát exit — 3s vẫn phải đi tiếp
+        setTimeout(go, 3000);
+      } else {
+        go();
+      }
+      return true;
+    },
     stop() {
       stopped = true;
     },
