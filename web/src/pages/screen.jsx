@@ -113,9 +113,9 @@ export function ScreenPage() {
       const stage = stageRef.current;
       if (!stage) return;
       const R = ratioRef.current || 16 / 9;
-      // sw = chiều DÀI ảnh (PC width) chạy dọc trục cao stage; chừa 20px làm
-      // margin trái/phải của cột ảnh cho khỏi đè thanh nút bên phải.
-      const sw = Math.min(stage.clientHeight, (stage.clientWidth - 20) * R);
+      // sw = chiều DÀI ảnh (PC width) chạy dọc trục cao stage; chỉ chừa 8px
+      // margin cho khỏi đè mép — ảnh ôm TRÁI hết cỡ trong khung đen toàn màn.
+      const sw = Math.min(stage.clientHeight, (stage.clientWidth - 8) * R);
       const sh = sw / R;
       const sig = Math.round(sw) + "x" + Math.round(sh);
       if (sig !== last) {
@@ -496,7 +496,7 @@ export function ScreenPage() {
                 // thành cột đứng rộng sh, cao sw, tâm neo tại (sh/2+m, giữa)
                 width: `${vbox.sw}px`,
                 height: `${vbox.sh}px`,
-                left: `${Math.round(vbox.sh / 2) + 10}px`,
+                left: `${Math.round(vbox.sh / 2) + 4}px`,
                 top: "50%",
                 transform: "translate(-50%, -50%) rotate(90deg)",
               } : undefined}
