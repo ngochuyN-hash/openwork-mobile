@@ -10,7 +10,8 @@ import { listDirs, makeDir } from "../src/fslist.js";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { LOG_NAMES, deleteLogs, rotateStaleLogs, wipeLogs } from "../src/logwipe.js";
 
 test("parseListeningPorts filters by pid and extracts ports", () => {
   const netstat = [
@@ -171,5 +172,30 @@ test("makeDir: tạo thư mục con, chặn ký tự cấm, báo rõ khi trùng 
     await assert.rejects(() => makeDir(root, "Project Moi 2026"), /Đã có thư mục/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("logwipe: truncate giữ file, delete xóa hẳn, sang ngày mới thì dọn log cũ", () => {
+  const dir = mkdtempSync(join(tmpdir(), "owm-logwipe-"));
+  try {
+    const p = (n) => join(dir, n);
+    for (const n of LOG_NAMES) writeFileSync(p(n), "du lieu log cu");
+
+    wipeLogs(dir); // tắt app khi bridge vẫn ghi: truncate, giữ file
+    for (const n of LOG_NAMES) assert.equal(statSync(p(n)).size, 0);
+
+    deleteLogs(dir); // sau khi bridge đã chết: xóa hẳn
+    for (const n of LOG_NAMES) assert.equal(existsSync(p(n)), false);
+
+    // boot: log mtime hôm qua bị dọn, log viết hôm nay giữ nguyên
+    writeFileSync(p("bridge.log"), "hom qua");
+    writeFileSync(p("bridge-task.log"), "hom nay");
+    const yesterday = new Date(Date.now() - 24 * 3600 * 1000);
+    utimesSync(p("bridge.log"), yesterday, yesterday);
+    rotateStaleLogs(dir);
+    assert.equal(statSync(p("bridge.log")).size, 0);
+    assert.equal(statSync(p("bridge-task.log")).size, "hom nay".length);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

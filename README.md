@@ -110,6 +110,8 @@ openpocket watchdog --uninstall   # disable
 ```
 `ensure` is safe to run any time: if the bridge is alive it does nothing; if the port is held by an instance started outside the CLI it does NOT start a duplicate (no EADDRINUSE pile-ups). The bridge also writes its own pid file since this version, so `openpocket status/stop` see every start path (Task Scheduler task, `openpocket start`, manual).
 
+**Logs don't pile up (2026-09-13):** the bridge keeps no log history on the machine — `bridge.log` / `bridge-task.log` / `watchdog.log` in `%APPDATA%\openwork-bridge\` are truncated at boot if they hold a previous day's lines, wiped again at local midnight while the bridge runs, and wiped clean when you stop things: `openpocket stop` and the OpenPocket GUI **Stop** button delete the log files outright (the bridge is dead by then), while the GUI tray **"Thoát hẳn"** truncates them (the bridge keeps running headless and still holds its append handles). Crash-time output survives so a failure stays debuggable — `openpocket logs` right after a stop correctly says "Chưa có log."
+
 **Launch OpenWork from the phone:** computer on + bridge running but the OpenWork app closed → the phone app shows a **"Launch OpenWork on the computer"** button (on the red banner + in Settings → Bridge status). Tap → wait ~20s → tap Re-check. Note: a fully shut down or deep-sleeping computer can't be woken — turn it on first.
 
 ### Watch & control the computer's screen ("Screen" tab)

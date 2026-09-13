@@ -116,7 +116,10 @@ if (cmd === "stop") {
     const { unlinkSync } = await import("node:fs");
     unlinkSync(pidFile());
   } catch {}
-  console.log("🛑 Đã dừng bridge.");
+  // Bridge đã chết — xóa sạch cả 3 file log (owner 13/09: log không giữ ở máy).
+  const { deleteLogs } = await import("../src/logwipe.js");
+  deleteLogs();
+  console.log("🛑 Đã dừng bridge (log đã xóa sạch).");
   process.exit(0);
 }
 

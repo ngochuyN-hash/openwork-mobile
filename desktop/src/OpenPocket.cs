@@ -316,6 +316,9 @@ namespace OpenPocket.Desktop
             trayMenu.Items.Add("Mở OpenPocket", null, delegate { ShowFromTray(); });
             trayMenu.Items.Add("Thoát hẳn", null, delegate {
                 reallyExit = true;
+                // Log không giữ ở máy (owner 13/09): bridge vẫn chạy nền nên chỉ
+                // truncate được — mấy dòng nó ghi sau đó là của ngày mới.
+                WipeLogFiles(false);
                 this.Close();
             });
             trayIcon.ContextMenuStrip = trayMenu;
@@ -923,11 +926,38 @@ namespace OpenPocket.Desktop
                 catch { }
 
                 Thread.Sleep(800);
+                // Bridge đã chết — xóa hẳn file log (owner 13/09: log không giữ ở máy).
+                WipeLogFiles(true);
                 CheckStatus();
             }
             catch (Exception ex)
             {
                 MessageBox.Show(this, "Lỗi khi dừng: " + ex.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        // Dọn log bridge trong data dir. deleteFiles = xóa hẳn file (dùng SAU khi
+        // bridge đã chết); false = truncate về 0 (bridge vẫn chạy, file bị giữ
+        // handle append nên không xóa được). Mở FileShare.ReadWrite để không
+        // vấp handle của tiến trình ghi.
+        private void WipeLogFiles(bool deleteFiles)
+        {
+            string[] names = new string[] { "bridge.log", "bridge-task.log", "watchdog.log" };
+            foreach (string name in names)
+            {
+                string path = Path.Combine(GetBridgeDataDir(), name);
+                if (deleteFiles)
+                {
+                    try { File.Delete(path); continue; } catch { }
+                }
+                try
+                {
+                    using (FileStream fs = new FileStream(path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite))
+                    {
+                        fs.SetLength(0);
+                    }
+                }
+                catch { }
             }
         }
 

@@ -14,6 +14,7 @@ import { PairingService, CODE_TTL_MINUTES } from "./pairing.js";
 import { findOpenWorkExe, launchOpenWork } from "./openwork-launch.js";
 import { listDirs, listRoots, makeDir } from "./fslist.js";
 import { ScreenService, createRateLimiter } from "./screen.js";
+import { rotateStaleLogs, scheduleDailyWipe, wipeLogs } from "./logwipe.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -31,6 +32,11 @@ config.ownerToken = boot.token;
 if (process.env.OPENWORK_PUBLIC_URL) config.publicUrl = process.env.OPENWORK_PUBLIC_URL.trim().replace(/\/+$/, "");
 saveConfig(config);
 
+// Log chỉ sống tối đa 1 ngày (owner 13/09): sót từ hôm trước thì dọn NGAY
+// trước khi in banner, rồi hẹn nửa đêm dọn tiếp.
+rotateStaleLogs();
+scheduleDailyWipe();
+
 // ---------------------------------------------------------------------------
 // 2. Runtime state: where is openwork-server, is our token live?
 // ---------------------------------------------------------------------------
@@ -44,6 +50,8 @@ const state = {
 // Trạng thái đường hầm cho /api/state + heartbeat lookup đọc (được thay bằng
 // controller thật ngay khi startQuickTunnel chạy xong bên dưới).
 let tunnelGetState = () => ({ phase: "starting", url: "", streak: 0, nextRetryAt: 0 });
+// Restart thủ công — false = tunnel không chạy (OPENWORK_BRIDGE_TUNNEL=0 / chưa lên)
+let tunnelRestart = () => false;
 
 // ---------------------------------------------------------------------------
 // 1.5 Pairing kiểu 9Remote: mã one-time 30 phút trong QR + khóa thiết bị vĩnh viễn
@@ -602,6 +610,7 @@ server.listen(config.port, "127.0.0.1", () => {
     })
       .then((tunnel) => {
         tunnelGetState = () => tunnel.getState();
+        tunnelRestart = () => tunnel.restart();
       })
       .catch((error) => console.error(`[tunnel] lỗi: ${error.message}`));
   }
@@ -630,6 +639,7 @@ process.on("SIGINT", () => {
   try {
     unlinkSync(join(bridgeDataDir(), "bridge.pid"));
   } catch {}
+  wipeLogs(); // tắt là xóa sạch log (owner 13/09)
   process.exit(0);
 });
 
