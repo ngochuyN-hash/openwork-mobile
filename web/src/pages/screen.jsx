@@ -135,13 +135,55 @@ export function ScreenPage() {
       else window.removeEventListener("resize", measure);
     };
   }, [vland]);
+  // ---- ZOOM XEM CỤC BỘ: s = độ phóng (1..3), x/y = pan px theo khung xem.
+  // Biến đổi nằm NGAY TRÊN ảnh: véo/vuốt ghi thẳng style (mượt, không chờ
+  // render), còn render do stream cũng tự viết đúng chuỗi này vì đọc cùng
+  // zoomRef — hai đường không giẫm chân nhau.
+  const zoomRef = useRef({ s: 1, x: 0, y: 0 });
+  const chipRef = useRef(null); // chip "1.5×" — cập nhật bằng tay, khỏi re-render
+  const zoomStr = () => {
+    const z = zoomRef.current;
+    const parts = [];
+    if (z.x || z.y) parts.push(`translate(${Math.round(z.x)}px, ${Math.round(z.y)}px)`);
+    if (vlandRef.current) parts.push("translate(-50%, -50%) rotate(90deg)");
+    if (z.s !== 1) parts.push(`scale(${z.s.toFixed(4)})`);
+    return parts.join(" ");
+  };
+  const applyZoom = () => {
+    const z = zoomRef.current;
+    if (imgRef.current) imgRef.current.style.transform = zoomStr();
+    if (chipRef.current) {
+      const on = z.s > 1.02;
+      chipRef.current.classList.toggle("show", on);
+      if (on) chipRef.current.textContent = z.s.toFixed(1) + "×";
+    }
+  };
+  const resetZoom = useCallback(() => {
+    zoomRef.current = { s: 1, x: 0, y: 0 };
+    applyZoom();
+  }, []);
+  // Đổi bố cục (bật/tắt toàn màn hình, xoay ảo, đo lại khung) là pan/zoom tính
+  // theo bố cục cũ — trả về vừa khung cho khỏi lệch chết chỗ lạ.
+  useEffect(() => { resetZoom(); }, [full, portraitMobile, vbox, resetZoom]);
+
   // Gesture trên hình, kiểu màn cảm ứng: chạm = click · giữ lâu = Right-click ·
-  // chạm đôi = Double-click · kéo = di chuyển · hai ngón vuốt = cuộn.
+  // chạm đôi = Double-click · kéo = di chuyển · hai ngón vuốt = cuộn · véo = zoom.
   const pointers = useRef(new Map()); // pointerId -> {x, y} (client px)
   const g = useRef({
-    mode: "idle", // idle | press (đã gửi down, đang kéo) | scroll (hai ngón)
+    // idle | press (đã gửi down, đang kéo) | scroll (hai ngón cuộn)
+    // | wait2 (2 ngón, chờ phân loại véo/cuộn) | pinch (đang véo)
+    // | pinch-end (ngón còn lại sau véo, bỏ qua) | pan (1 ngón dời khung nhìn)
+    mode: "idle",
     scx: 0, scy: 0, startT: 0, sentDown: false, longFired: false,
     lpTimer: null, lastSendT: 0, accY: 0, lastMidY: 0,
+    // véo: khoảng cách/điểm giữa 2 ngón lúc đặt xuống, độ phóng lúc đầu (s0),
+    // tâm neo nội dung (fa* — tỉ lệ chỗ ngón kẹp trên khung ảnh), khung ảnh
+    // gốc s=1 (b* — kích thước + tâm theo khung xem) và khung xem (st*/sl*)
+    d0: 1, mx0: 0, my0: 0, s0: 1, fax: 0.5, fay: 0.5,
+    bcx: 0, bcy: 0, bw: 1, bh: 1, stw: 1, sth: 1, slx: 0, sly: 0,
+    // pan 1 ngón khi đã zoom: điểm bắt đầu, pan lúc đầu, biên dời từng trục
+    panSX: 0, panSY: 0, plx0: 0, ply0: 0,
+    plminX: 0, plmaxX: 0, plminY: 0, plmaxY: 0,
   });
   const urlRef = useRef("");
   const runIdRef = useRef(0); // hủy vòng nối lại khi pause/unmount đổi
@@ -292,6 +334,9 @@ export function ScreenPage() {
   const TAP_MS = 260;
   const LP_MS = 550; // giữ lâu -> Right-click
   const WHEEL_STEP = 24; // hai ngón đi được từng này px thì cuộn một nấc
+  const PINCH_PX = 12; // hai ngón nở/thu được từng này px thì tính là véo (zoom)
+  const SCROLL_GATE = 14; // hai ngón trượt được từng này px thì tính là cuộn
+  const ZOOM_MAX = 3; // trần zoom — ảnh gốc 880px, phóng quá là vỡ nét
 
   const onPointerDown = (e) => {
     const n = normXY(e.clientX, e.clientY);
@@ -315,25 +360,81 @@ export function ScreenPage() {
           if (n2) sendInput({ type: "rclick", ...n2 });
         }
       }, LP_MS);
-    } else {
-      // Ngón thứ hai đặt xuống: huỷ long-press, nhả nút nếu đang kéo, vào cuộn
+    } else if (pointers.current.size === 2) {
+      // Ngón thứ hai đặt xuống: huỷ long-press, nhả nút nếu đang kéo, rồi CHỜ
+      // PHÂN LOẠI — véo (khoảng cách 2 ngón nở/thu) hay cuộn (2 ngón trượt).
       clearTimeout(st.lpTimer);
       if (st.mode === "press") {
         const n2 = normXY(e.clientX, e.clientY);
         if (n2) sendInput({ type: "up", ...n2 });
       }
-      st.mode = "scroll";
       st.sentDown = false;
+      st.mode = "wait2";
       const pts = [...pointers.current.values()];
-      st.lastMidY = (pts[0].y + pts[1].y) / 2;
+      st.d0 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+      st.mx0 = (pts[0].x + pts[1].x) / 2;
+      st.my0 = (pts[0].y + pts[1].y) / 2;
+      st.lastMidY = st.my0;
       st.accY = 0;
+      st.s0 = zoomRef.current.s;
     }
+    // ngón thứ 3 trở lên: bỏ qua — gesture 2 ngón đang chạy giữ nguyên
   };
 
   const onPointerMove = (e) => {
     if (!pointers.current.has(e.pointerId)) return;
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const st = g.current;
+    if (st.mode === "wait2") {
+      if (pointers.current.size < 2) return;
+      const pts = [...pointers.current.values()];
+      const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+      const mx = (pts[0].x + pts[1].x) / 2, my = (pts[0].y + pts[1].y) / 2;
+      if (Math.abs(d - st.d0) >= PINCH_PX) {
+        // Véo thắng cuộc: neo đúng nội dung đang nằm dưới điểm giữa 2 ngón —
+        // phóng to/thu nhỏ xong nội dung đó vẫn bám theo ngón, không trôi.
+        const img = imgRef.current, stage = stageRef.current;
+        if (!img || !stage) return;
+        const R = img.getBoundingClientRect(), S = stage.getBoundingClientRect();
+        const z = zoomRef.current;
+        st.bw = R.width / z.s; st.bh = R.height / z.s;
+        st.bcx = R.left + R.width / 2 - S.left - z.x;
+        st.bcy = R.top + R.height / 2 - S.top - z.y;
+        st.fax = (st.mx0 - R.left) / R.width;
+        st.fay = (st.my0 - R.top) / R.height;
+        st.stw = S.width; st.sth = S.height;
+        st.slx = S.left; st.sly = S.top;
+        st.mode = "pinch";
+        // không return — xử luôn cú move này như một bước véo
+      } else {
+        st.accY += my - st.lastMidY;
+        st.lastMidY = my;
+        if (Math.abs(st.accY) >= SCROLL_GATE) st.mode = "scroll";
+        return;
+      }
+    }
+    if (st.mode === "pinch") {
+      if (pointers.current.size < 2) { st.mode = "pinch-end"; return; }
+      const pts = [...pointers.current.values()];
+      const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+      const mx = (pts[0].x + pts[1].x) / 2, my = (pts[0].y + pts[1].y) / 2;
+      const s = Math.min(ZOOM_MAX, Math.max(1, (st.s0 * d) / st.d0));
+      const w = st.bw * s, h = st.bh * s;
+      // đặt nội dung điểm neo dưới điểm giữa ngón, rồi chặn pan cho khung ảnh
+      // không tuột khỏi cửa sổ xem (trục nào chưa đủ rộng thì kẹp giữa)
+      let px = (mx - st.slx) - st.bcx - (st.fax - 0.5) * w;
+      let py = (my - st.sly) - st.bcy - (st.fay - 0.5) * h;
+      px = w >= st.stw
+        ? Math.min(Math.max(px, st.stw - w / 2 - st.bcx), w / 2 - st.bcx)
+        : Math.min(Math.max(px, w / 2 - st.bcx), st.stw - w / 2 - st.bcx);
+      py = h >= st.sth
+        ? Math.min(Math.max(py, st.sth - h / 2 - st.bcy), h / 2 - st.bcy)
+        : Math.min(Math.max(py, h / 2 - st.bcy), st.sth - h / 2 - st.bcy);
+      zoomRef.current = { s, x: px, y: py };
+      applyZoom();
+      return;
+    }
+    if (st.mode === "pinch-end") return; // ngón còn lại sau véo: bỏ tới khi nhấc hết
     if (st.mode === "scroll") {
       if (pointers.current.size >= 2) {
         const pts = [...pointers.current.values()];
@@ -348,6 +449,14 @@ export function ScreenPage() {
       }
       return;
     }
+    if (st.mode === "pan") {
+      const z = zoomRef.current;
+      const px = Math.min(Math.max(st.plx0 + (e.clientX - st.panSX), st.plminX), st.plmaxX);
+      const py = Math.min(Math.max(st.ply0 + (e.clientY - st.panSY), st.plminY), st.plmaxY);
+      zoomRef.current = { s: z.s, x: px, y: py };
+      applyZoom();
+      return;
+    }
     if (st.mode === "press") {
       posEcho(e.clientX, e.clientY); // chấm chạy theo ngón tức thời
       const now = Date.now();
@@ -357,10 +466,26 @@ export function ScreenPage() {
       if (n) sendInput({ type: "move", ...n });
       return;
     }
-    // idle: nếu đi quá ngưỡng -> bắt đầu kéo (gửi down tại điểm chạm ban đầu)
+    // idle: nếu đi quá ngưỡng — đang zoom thì 1 ngón dời khung nhìn (kéo chuột
+    // PC thì thu về vừa khung đã), chưa zoom thì bắt đầu kéo (gửi down tại chỗ chạm)
     const dist = Math.hypot(e.clientX - st.scx, e.clientY - st.scy);
     if (dist > SLOP) {
       clearTimeout(st.lpTimer);
+      if (zoomRef.current.s > 1.02) {
+        st.mode = "pan";
+        st.panSX = e.clientX; st.panSY = e.clientY;
+        st.plx0 = zoomRef.current.x; st.ply0 = zoomRef.current.y;
+        const img = imgRef.current, stage = stageRef.current;
+        if (img && stage) {
+          const R = img.getBoundingClientRect(), S = stage.getBoundingClientRect();
+          const z = zoomRef.current;
+          const bcx = R.left + R.width / 2 - S.left - z.x;
+          const bcy = R.top + R.height / 2 - S.top - z.y;
+          st.plminX = R.width / 2 - bcx; st.plmaxX = S.width - R.width / 2 - bcx;
+          st.plminY = R.height / 2 - bcy; st.plmaxY = S.height - R.height / 2 - bcy;
+        } else { st.plminX = 0; st.plmaxX = 0; st.plminY = 0; st.plmaxY = 0; }
+        return;
+      }
       const n = normXY(st.scx, st.scy);
       if (n) sendInput({ type: "down", ...n });
       st.sentDown = true;
@@ -372,6 +497,18 @@ export function ScreenPage() {
   const finishPointer = (e) => {
     pointers.current.delete(e.pointerId);
     const st = g.current;
+    if (st.mode === "wait2" || st.mode === "pinch" || st.mode === "pinch-end") {
+      if (pointers.current.size === 0) {
+        // véo về ~1x là về nguyên vị trí giữa, khỏi lệch nửa chừng
+        if (zoomRef.current.s <= 1.02) { zoomRef.current = { s: 1, x: 0, y: 0 }; applyZoom(); }
+        st.mode = "idle";
+      } else st.mode = "pinch-end"; // ngón còn lại: bỏ qua tới khi nhấc hết
+      return;
+    }
+    if (st.mode === "pan") {
+      if (pointers.current.size === 0) st.mode = "idle";
+      return; // dời khung nhìn không đụng tới máy PC
+    }
     if (st.mode === "scroll") {
       if (pointers.current.size === 0) st.mode = "idle";
       return; // ngón còn lại sau cuộn: bỏ qua tới khi nhấc hết
@@ -393,7 +530,11 @@ export function ScreenPage() {
   const onPointerCancel = (e) => {
     pointers.current.delete(e.pointerId);
     clearTimeout(g.current.lpTimer);
-    if (g.current.mode !== "scroll") g.current.mode = "idle";
+    const st = g.current;
+    const multi = st.mode === "wait2" || st.mode === "pinch" || st.mode === "pinch-end";
+    if ((multi || st.mode === "scroll") && pointers.current.size) {
+      st.mode = multi ? "pinch-end" : "scroll"; // còn ngón: khoá tới khi nhấc hết
+    } else st.mode = "idle";
   };
 
   const tapKey = (key) => sendInput({ type: "key", key });
@@ -455,12 +596,13 @@ export function ScreenPage() {
               draggable={false}
               style={vland && vbox ? {
                 // khung ảnh TRƯỚC xoay: ngang pw'×ph' (sw/sh) — xoay 90° xong
-                // thành cột đứng rộng sh, cao sw, tâm neo tại (sh/2+m, giữa)
+                // thành cột đứng rộng sh, cao sw, tâm neo tại (sh/2+m, giữa).
+                // transform đọc zoomStr() để zoom/pan không bị render đè mất.
                 width: `${vbox.sw}px`,
                 height: `${vbox.sh}px`,
                 left: `${Math.round(vbox.sh / 2) + 4}px`,
                 top: "50%",
-                transform: "translate(-50%, -50%) rotate(90deg)",
+                transform: zoomStr(),
               } : undefined}
               onContextMenu={(e) => e.preventDefault()}
               onPointerDown={onPointerDown}
@@ -487,11 +629,34 @@ export function ScreenPage() {
               {full ? <CollapseIcon size={17} /> : <ExpandIcon size={17} />}
             </button>
           </div>
+          {/* Chip zoom góc dưới-trái: chỉ hiện khi đang phóng (véo 2 ngón) —
+              bấm là về vừa khung, khỏi phải véo nhỏ lại từng chút một. */}
+          <button
+            ref={chipRef}
+            type="button"
+            class="zoom-chip"
+            onClick={resetZoom}
+            aria-label="Về vừa khung"
+          >1×</button>
         </div>
 
         {/* Gõ chữ + bàn phím GỘP MỘT KHUNG luôn hiển thị: mode thường nằm dưới
             ảnh, toàn màn hình thì CSS dựng thành cột phải xoay 90°. */}
         <div class="screen-panel screen-panel-main">
+            <div class="screen-row">
+              {COMBOS.map((c) => (
+                <button key={c.label} class="screen-key combo" disabled={sending} onClick={() => tapCombo(c)}>
+                  {c.label}
+                </button>
+              ))}
+            </div>
+            <div class="screen-row">
+              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("enter")}>Enter</button>
+              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("esc")}>Esc</button>
+              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("backspace")}>Bksp</button>
+              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("tab")}>Tab</button>
+            </div>
+          {/* Ô nhập ở ĐÁY khung — sát ngay trên thanh trạng thái/nav */}
           <form
             class="screen-textrow"
             onSubmit={async (e) => {
@@ -511,19 +676,6 @@ export function ScreenPage() {
               <SendIcon size={16} /> Send
             </button>
           </form>
-            <div class="screen-row">
-              {COMBOS.map((c) => (
-                <button key={c.label} class="screen-key combo" disabled={sending} onClick={() => tapCombo(c)}>
-                  {c.label}
-                </button>
-              ))}
-            </div>
-            <div class="screen-row">
-              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("enter")}>Enter</button>
-              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("esc")}>Esc</button>
-              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("backspace")}>Bksp</button>
-              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("tab")}>Tab</button>
-            </div>
         </div>
       </div>
   );

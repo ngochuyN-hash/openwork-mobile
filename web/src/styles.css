@@ -1040,6 +1040,33 @@ label.field {
   opacity: 1;
   background: rgba(255, 255, 255, 0.26);
 }
+/* Chip zoom góc dưới-trái: chỉ hiện khi đang phóng (véo 2 ngón xem zoom) —
+   bấm là về vừa khung. Cùng chất mờ blur với corner-btn, nhỏ gọn không che hình. */
+.zoom-chip {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 4;
+  display: none;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 10px;
+  background: rgba(10, 12, 14, 0.5);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1;
+  opacity: 0.85;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.zoom-chip:active { opacity: 1; background: rgba(255, 255, 255, 0.22); }
+.zoom-chip.show { display: block; }
 /* Toàn màn hình kiểu faux (Fullscreen API trên iOS chỉ dành cho <video>): cả
    cụm hình + nút góc cố định kín màn, ảnh co vừa trong vùng an toàn. Bấm nút
    góc là lớp này "mở ra" (hiệu ứng phóng nhẹ), nút góc đổi thành Thu nhỏ. */
@@ -1126,7 +1153,7 @@ label.field {
   box-shadow: 0 10px 34px rgba(0, 0, 0, 0.35);
 }
 .screen-view.vland .screen-textrow {
-  margin: 0 0 6px;
+  margin: 6px 0 0; /* ô nhập hàng cuối của giải */
 }
 .screen-view.vland .screen-textrow input {
   min-height: 34px;
@@ -1186,7 +1213,7 @@ label.field {
   padding: 10px;
 }
 .screen-page .screen-panel-main .screen-textrow {
-  margin: 0 0 8px;
+  margin: 8px 0 0; /* ô nhập ở ĐÁY khung — sát mép dưới */
 }
 .screen-page .screen-panel-main .screen-row {
   margin-bottom: 6px;
