@@ -131,6 +131,33 @@ test("startLookup: tunnel chết -> báo tunnelDown theo bucket retryAt; sống 
   }
 });
 
+test("startLookup: URL cũ còn kẹt trong getUrl nhưng tunnel.js báo không 'up' -> VẪN gửi tunnelDown", async () => {
+  const seen = [];
+  const server = await withCaptureServer(seen);
+  try {
+    const { port } = server.address();
+    // Mô phỏng cloudflared chết giữa chừng: currentUrl chưa bị xoá
+    let tstate = { phase: "backoff", url: "https://dead.trycloudflare.com", streak: 1, nextRetryAt: 7000 };
+    const lookup = startLookup({
+      getUrl: () => "https://dead.trycloudflare.com", // URL chết còn kẹt
+      getState: () => tstate,
+      workerUrl: `http://127.0.0.1:${port}`,
+      secret: "s",
+      tickMs: 20,
+      heartbeatMs: 1000,
+      log: () => {},
+    });
+    await sleep(80);
+    assert.ok(seen.length >= 1, "phải báo tunnelDown, không được giữ ấm URL chết");
+    const last = seen[seen.length - 1];
+    assert.equal(last.body.tunnelDown, true);
+    assert.equal(last.body.url, "");
+    lookup.stop();
+  } finally {
+    server.close();
+  }
+});
+
 test("startLookup: tunnel chết mà không có getState (instance cũ) thì KHÔNG tự bịa tunnelDown", async () => {
   const seen = [];
   const server = await withCaptureServer(seen);

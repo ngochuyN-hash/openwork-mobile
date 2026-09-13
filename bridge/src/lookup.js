@@ -93,22 +93,26 @@ export function startLookup({
   const timer = setInterval(() => {
     if (stopped) return;
     const url = getUrl();
-    if (url) {
+    const tunnel = getState ? getState() : null;
+    // URL có thật + tunnel.js xác nhận "up" mới đăng ký giữ ấm bình thường.
+    // KHÔNG tin getUrl() một mình: cloudflared chết giữa chừng thì URL cũ vẫn
+    // kẹt trong biến — giữ ấm URL chết khiến worker cứ tưởng máy online (13/09).
+    if (url && (!tunnel || tunnel.phase === "up")) {
       if (url !== lastSent || now() - lastOkAt > heartbeatMs) {
         register(tenantKey ? { url, tenant: tenantKey } : { url });
       }
       return;
     }
-    // Không có URL tunnel: chỉ báo "máy sống, hầm chết" khi tunnel.js xác nhận
-    // đang backoff (đang chờ được phép thử lại), theo trạng thái đổi + giữ ấm.
-    const tunnel = getState ? getState() : null;
-    if (!tunnel || tunnel.phase !== "backoff") return;
-    const retryAt = Number(tunnel.nextRetryAt) || 0;
-    const key = `down:${Math.round(retryAt / heartbeatMs)}`;
-    if ((key !== lastDownKey || now() - lastOkAt > heartbeatMs) && now() >= blockedUntil) {
-      register(
-        tenantKey ? { url: "", tunnelDown: true, retryAt, tenant: tenantKey } : { url: "", tunnelDown: true, retryAt }
-      );
+    // Tunnel không "up" (đang backoff chờ Cloudflare, hoặc mới start chưa có
+    // URL): báo "máy sống, hầm chết" theo trạng thái đổi + nhịp giữ ấm.
+    if (tunnel && tunnel.phase !== "up") {
+      const retryAt = Number(tunnel.nextRetryAt) || 0;
+      const key = `down:${Math.round(retryAt / heartbeatMs)}`;
+      if ((key !== lastDownKey || now() - lastOkAt > heartbeatMs) && now() >= blockedUntil) {
+        register(
+          tenantKey ? { url: "", tunnelDown: true, retryAt, tenant: tenantKey } : { url: "", tunnelDown: true, retryAt }
+        );
+      }
     }
   }, tickMs);
   timer.unref?.();
