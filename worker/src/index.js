@@ -5,7 +5,9 @@
 //   - `tenant:<id>`  = {secret, name, createdAt} — tài khoản do chủ worker cấp
 //     (worker/scripts/tenant.mjs add). Cặp <id>/<secret> dùng ở CẢ HAI đầu:
 //     bridge (openpocket edge join) và web (tab Đăng nhập).
-//   - `machine:<id>` = {url, updatedAt} — tunnel hiện tại của phòng.
+//   - `machine:<id>` = {url, updatedAt} — tunnel hiện tại của phòng; khi
+//     bridge báo `tunnelDown: true` thì {url: "", tunnelDown, retryAt,
+//     updatedAt} = máy sống nhưng đường hầm đang chờ Cloudflare mở lại.
 //   - `machine:main` = phòng cũ của chủ worker (không tenant, secret =
 //     env BRIDGE_SECRET) — giữ nguyên để máy nhà không phải đổi gì.
 //
@@ -65,6 +67,26 @@ async function rateLimited(request, kind, limit) {
   return false;
 }
 
+/** Ghi slot máy từ /__register: URL tunnel mới, hoặc "máy sống, tunnel đang chết". */
+async function storeRegister(env, slotKey, body) {
+  const url = String(body?.url ?? "");
+  if (url && TUNNEL_RE.test(url)) {
+    await env.OWM_STATE.put(slotKey, JSON.stringify({ url, updatedAt: Date.now() }));
+    return json({ ok: true });
+  }
+  // Heartbeat "hiện diện không URL" từ bridge khi đang chờ Cloudflare hết 429:
+  // slot còn tươi (updatedAt mới) nên worker biết máy SỐNG, chỉ đường hầm chết
+  // — điện thoại nhận lời nhắn rõ thay vì 503 offline/530 mơ hồ.
+  if (body?.tunnelDown === true) {
+    await env.OWM_STATE.put(
+      slotKey,
+      JSON.stringify({ url: "", tunnelDown: true, retryAt: Number(body.retryAt) || 0, updatedAt: Date.now() })
+    );
+    return json({ ok: true });
+  }
+  return json({ error: "invalid_url" }, 400);
+}
+
 /** Relay request tới slot `slotKey`; bodyJson khác null thì gửi lại body đó. */
 async function relay(env, slotKey, request, url, bodyJson = null) {
   let machine = null;
@@ -92,6 +114,20 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
       503
     );
   }
+  // Máy còn heartbeat nhưng đang chờ Cloudflare hết 429 mở lại đường hầm:
+  // nói thẳng cho điện thoại thay vì để nó đâm đầu vào URL rỗng.
+  if (machine.tunnelDown) {
+    const waitMin = machine.retryAt ? Math.max(1, Math.ceil((machine.retryAt - Date.now()) / 60_000)) : null;
+    return json(
+      {
+        code: "tunnel_down",
+        message: `Máy tính đang bật và bridge đang sống, nhưng Cloudflare đang tạm chặn mở đường hầm (giới hạn 429). Bridge tự thử lại${
+          waitMin ? ` (lần tới sau ~${waitMin} phút)` : ""
+        } — đừng restart bridge, càng restart càng lâu.`,
+      },
+      503
+    );
+  }
 
   const headers = new Headers(request.headers);
   headers.delete("host");
@@ -106,6 +142,17 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
   }
   try {
     const response = await fetch(machine.url + url.pathname + url.search, init);
+    // Tunnel vừa chết thì Cloudflare edge trả 5xx riêng của nó (520-527/530)
+    // kèm trang HTML lỗi thô — gói lại JSON sạch cho điện thoại.
+    if ([520, 521, 522, 523, 524, 525, 527, 530].includes(response.status)) {
+      return json(
+        {
+          code: "tunnel_down",
+          message: "Đường hầm tới máy vừa đứt — bridge tự mở đường mới trong vài phút rồi điện thoại tự vào lại. Đừng restart bridge.",
+        },
+        502
+      );
+    }
     let body = response.body;
     const out = new Headers(response.headers);
     // Phòng hờ: nếu response vẫn bị nén dù đã xin identity, giải nén tại chỗ
@@ -163,20 +210,13 @@ export default {
         if (!record?.secret || !(await sameSecret(request.headers.get("x-owm-secret"), record.secret))) {
           return json({ error: "unauthorized" }, 401);
         }
-        if (!body?.url || !TUNNEL_RE.test(String(body.url))) return json({ error: "invalid_url" }, 400);
-        await env.OWM_STATE.put(
-          `machine:${tenant}`,
-          JSON.stringify({ url: String(body.url), updatedAt: Date.now() })
-        );
-        return json({ ok: true });
+        return storeRegister(env, `machine:${tenant}`, body);
       }
       // Luồng cũ của chủ worker (không tenant): secret môi trường -> machine:main
       if (!env.BRIDGE_SECRET || !(await sameSecret(request.headers.get("x-owm-secret"), env.BRIDGE_SECRET))) {
         return json({ error: "unauthorized" }, 401);
       }
-      if (!body?.url || !TUNNEL_RE.test(String(body.url))) return json({ error: "invalid_url" }, 400);
-      await env.OWM_STATE.put(MAIN_KEY, JSON.stringify({ url: String(body.url), updatedAt: Date.now() }));
-      return json({ ok: true });
+      return storeRegister(env, MAIN_KEY, body);
     }
 
     // 2. /api/* → relay tới tunnel hiện tại của phòng

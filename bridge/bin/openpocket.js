@@ -166,6 +166,18 @@ if (cmd === "status") {
   if (config.lookupTenant) {
     console.log(`   Phòng: ${config.lookupTenant}${config.machineName ? ` (${config.machineName})` : ""}`);
   }
+  // Trạng thái đường hầm (tunnel-state.json do bridge/src/tunnel.js ghi) —
+  // đang bị Cloudflare 429 thì nói rõ: đừng restart, càng restart càng lâu.
+  try {
+    const st = JSON.parse(readFileSync(join(bridgeDataDir(), "tunnel-state.json"), "utf8"));
+    if (st.phase === "backoff" && Number(st.nextAttemptAt) > Date.now()) {
+      const mins = Math.ceil((Number(st.nextAttemptAt) - Date.now()) / 60_000);
+      console.log(`   🚧 Tunnel: Cloudflare đang tạm chặn mở đường hầm (429) — tự thử lại sau ~${mins} phút.`);
+      console.log("      ĐỪNG restart bridge — càng restart càng bị gia hạn. Điện thoại tự vào lại khi xong.");
+    } else if (st.phase === "up" && st.url) {
+      console.log(`   🌍 Tunnel: ${st.url}`);
+    }
+  } catch {}
   console.log("   Chạy: openpocket code  để xem mã ghép + QR.");
   process.exit(0);
 }

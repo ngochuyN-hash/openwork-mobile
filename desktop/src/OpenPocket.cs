@@ -604,9 +604,17 @@ namespace OpenPocket.Desktop
                 : (!string.IsNullOrEmpty(currentTenant) ? currentTenant : "máy chính");
             lblStatusRoom.Text = "Máy: " + who + (provisioning ? " (đang tạo định danh lần đầu…)" : "");
 
-            // 3. Đọc tunnel URL từ log
+            // 3. Đọc tunnel URL từ log — nhưng nếu tunnel-state.json đang báo
+            // backoff 429 thì ưu tiên cảnh báo: đừng restart (càng restart càng lâu).
+            int backoffMin = ReadTunnelBackoffMinutes();
             tunnelUrl = ReadTunnelUrlFromLog();
-            if (!string.IsNullOrEmpty(tunnelUrl))
+            if (backoffMin > 0)
+            {
+                lblStatusTunnel.Text = "Cloudflare: đang chờ mở lại đường hầm (429)";
+                lblStatusTunnelUrl.Text = "Tự thử lại sau ~" + backoffMin + " phút — đừng restart bridge, càng restart càng lâu.";
+                lblStatusTunnel.ForeColor = ColorAmber;
+            }
+            else if (!string.IsNullOrEmpty(tunnelUrl))
             {
                 lblStatusTunnel.Text = "Cloudflare Tunnel:";
                 lblStatusTunnelUrl.Text = tunnelUrl;
@@ -692,6 +700,31 @@ namespace OpenPocket.Desktop
             }
             catch { }
             return "";
+        }
+
+        // tunnel-state.json do bridge/src/tunnel.js ghi: {"phase":"backoff",
+        // "streak":N,"nextAttemptAt":<epoch ms>,...}. Trả số PHÚT còn lại phải
+        // chờ (>0 khi đang bị Cloudflare 429), -1 khi không có file/đã hết chờ.
+        // Lý do tồn tại: trước đây user thấy "không kết nối được" là bấm Restart
+        // — mỗi lần Restart = xin Cloudflare 1 tunnel mới = 429 tự gia hạn mãi.
+        private int ReadTunnelBackoffMinutes()
+        {
+            try
+            {
+                string path = Path.Combine(GetBridgeDataDir(), "tunnel-state.json");
+                if (!File.Exists(path)) return -1;
+                string content = File.ReadAllText(path);
+                if (!Regex.IsMatch(content, @"""phase""\s*:\s*""backoff""")) return -1;
+                Match next = Regex.Match(content, @"""nextAttemptAt""\s*:\s*(\d+)");
+                if (!next.Success) return -1;
+                long nextAttemptAt = Convert.ToInt64(next.Groups[1].Value);
+                long epochNow = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
+                long remainingMs = nextAttemptAt - epochNow;
+                if (remainingMs <= 0) return -1;
+                return (int)Math.Ceiling(remainingMs / 60000.0);
+            }
+            catch { }
+            return -1;
         }
 
         // ================= ACTIONS =================

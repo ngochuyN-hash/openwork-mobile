@@ -41,6 +41,9 @@ const state = {
   lastCheckAt: 0,
   tunnelUrl: "", // URL trycloudflare.com hiện tại (đổi mỗi lần cloudflared chạy lại)
 };
+// Trạng thái đường hầm cho /api/state + heartbeat lookup đọc (được thay bằng
+// controller thật ngay khi startQuickTunnel chạy xong bên dưới).
+let tunnelGetState = () => ({ phase: "starting", url: "", streak: 0, nextRetryAt: 0 });
 
 // ---------------------------------------------------------------------------
 // 1.5 Pairing kiểu 9Remote: mã one-time 30 phút trong QR + khóa thiết bị vĩnh viễn
@@ -340,6 +343,7 @@ async function handleRequest(req, res) {
           restartRequired: state.restartRequired,
           engine: engine ? { pid: engine.ownerPid, enginePort: engine.port } : null,
           publicUrl: state.tunnelUrl || config.publicUrl || null,
+          tunnel: tunnelGetState(),
           edge: { tenant: config.lookupTenant || null, machineName: config.machineName || null },
           devices: pairing.list().length,
           pairingCodeSecondsLeft: pairing.codeSecondsLeft(),
@@ -595,7 +599,11 @@ server.listen(config.port, "127.0.0.1", () => {
         // Tunnel URL là public — chỉ in QR mã one-time, KHÔNG in QR master.
         printPairing(currentBase(), "[tunnel] URL public MỚI (dùng được từ 4G, không cần app nào trên điện thoại):");
       },
-    }).catch((error) => console.error(`[tunnel] lỗi: ${error.message}`));
+    })
+      .then((tunnel) => {
+        tunnelGetState = () => tunnel.getState();
+      })
+      .catch((error) => console.error(`[tunnel] lỗi: ${error.message}`));
   }
 
   // Heartbeat lên Cloudflare Worker (địa chỉ cố định) nếu đã cấu hình:
@@ -606,6 +614,7 @@ server.listen(config.port, "127.0.0.1", () => {
     );
     startLookup({
       getUrl: () => state.tunnelUrl,
+      getState: () => tunnelGetState(),
       workerUrl: config.lookupUrl,
       secret: config.lookupSecret,
       tenant: config.lookupTenant,

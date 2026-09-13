@@ -84,3 +84,109 @@ test("startLookup: không tenant thì body cũ {url}; cùng URL trong nhịp gi�
     server.close();
   }
 });
+
+test("startLookup: tunnel chết -> báo tunnelDown theo bucket retryAt; sống lại -> đăng ký URL ngay", async () => {
+  const seen = [];
+  const server = await withCaptureServer(seen);
+  try {
+    const { port } = server.address();
+    let url = "";
+    let tstate = { phase: "backoff", url: "", streak: 2, nextRetryAt: 4000 };
+    const lookup = startLookup({
+      getUrl: () => url,
+      getState: () => tstate,
+      workerUrl: `http://127.0.0.1:${port}`,
+      secret: "s",
+      tenant: "pc-test",
+      tickMs: 20,
+      heartbeatMs: 1000,
+      log: () => {},
+    });
+    await sleep(80);
+    assert.ok(seen.length >= 1, "phải báo tunnelDown ngay tick đầu");
+    assert.equal(seen[0].body.url, "");
+    assert.equal(seen[0].body.tunnelDown, true);
+    assert.equal(seen[0].body.retryAt, 4000);
+    assert.equal(seen[0].body.tenant, "pc-test");
+    const afterDown = seen.length;
+
+    tstate = { phase: "backoff", url: "", streak: 2, nextRetryAt: 4200 }; // cùng bucket 4 -> không gửi lại
+    await sleep(80);
+    assert.equal(seen.length, afterDown, "cùng bucket retryAt không ghi lặp KV");
+
+    tstate = { phase: "backoff", url: "", streak: 3, nextRetryAt: 8000 }; // bucket 8 -> báo lại
+    await sleep(80);
+    assert.ok(seen.length > afterDown, "retryAt đổi bucket phải báo lại");
+    assert.equal(seen[seen.length - 1].body.retryAt, 8000);
+
+    url = "https://ccc.trycloudflare.com"; // tunnel sống lại -> đăng ký URL NGAY
+    tstate = { phase: "up", url, streak: 0, nextRetryAt: 0 };
+    await sleep(80);
+    const last = seen[seen.length - 1];
+    assert.equal(last.body.url, "https://ccc.trycloudflare.com");
+    assert.ok(!("tunnelDown" in last.body), "đăng ký URL bình thường, hết cờ tunnelDown");
+    lookup.stop();
+  } finally {
+    server.close();
+  }
+});
+
+test("startLookup: tunnel chết mà không có getState (instance cũ) thì KHÔNG tự bịa tunnelDown", async () => {
+  const seen = [];
+  const server = await withCaptureServer(seen);
+  try {
+    const { port } = server.address();
+    const lookup = startLookup({
+      getUrl: () => "", // không có URL, không getState
+      workerUrl: `http://127.0.0.1:${port}`,
+      secret: "s",
+      tickMs: 20,
+      heartbeatMs: 1000,
+      log: () => {},
+    });
+    await sleep(100);
+    assert.equal(seen.length, 0, "không có getState thì không gửi gì cả");
+    lookup.stop();
+  } finally {
+    server.close();
+  }
+});
+
+test("startLookup: 401 thì backoff — không hét mỗi tick một lần", async () => {
+  const seen = [];
+  const logs = [];
+  const server = await new Promise((resolve) => {
+    const s = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        seen.push(JSON.parse(body || "{}"));
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end('{"error":"unauthorized"}');
+      });
+    });
+    s.listen(0, "127.0.0.1", () => resolve(s));
+  });
+  try {
+    const { port } = server.address();
+    const clock = { value: 1_000_000 }; // đồng hồ đóng băng: backoff không bao giờ hết
+    const lookup = startLookup({
+      getUrl: () => "https://xyz.trycloudflare.com",
+      workerUrl: `http://127.0.0.1:${port}`,
+      secret: "s",
+      tickMs: 20,
+      heartbeatMs: 100_000,
+      log: (m) => logs.push(m),
+      now: () => clock.value,
+    });
+    await sleep(150);
+    lookup.stop();
+    assert.equal(seen.length, 1, "401 liên tục vẫn chỉ 1 lần gửi trong cửa sổ backoff");
+    assert.ok(
+      logs.some((m) => m.includes("HTTP 401") && m.includes("lookupTenant")),
+      "phải log 1 dòng rõ ràng kèm gợi ý kiểm tra config"
+    );
+  } finally {
+    server.close();
+  }
+});
