@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
-import { clearToken, clearTenant, getTenantName, apiRecheck, apiDevices, apiRevokeDevice, apiWakeOpenWork } from "../api.js";
-import { useConfirm } from "../components/ui.jsx";
+import { clearToken, clearTenant, getTenantName, getToken, setToken, apiRecheck, apiDevices, apiRevokeDevice, apiWakeOpenWork, apiPair, apiState } from "../api.js";
+import { Banner, useConfirm } from "../components/ui.jsx";
+import { navigate } from "../app.jsx";
 
 export function SettingsPage({ state, onRecheck, onUnpaired }) {
   const [busy, setBusy] = useState(false);
@@ -9,6 +10,13 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
   const [confirmDialog, askConfirm] = useConfirm();
   const [devices, setDevices] = useState(null);
   const [thisDeviceLabel, setThisDeviceLabel] = useState("");
+  // Dòng "ghép máy / token" — nằm SAU tường đăng nhập (yêu cầu chủ máy),
+  // thay kết nối của thiết bị này mà không phải gỡ pairing.
+  const [pairCode, setPairCode] = useState("");
+  const [tokenInput, setTokenInput] = useState("");
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkMsg, setLinkMsg] = useState("");
+  const [linkErr, setLinkErr] = useState("");
 
   useEffect(() => {
     apiDevices().then(setDevices).catch(() => setDevices([]));
@@ -70,6 +78,55 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
         onUnpaired();
       },
     });
+  }
+
+  // Ghép thiết bị này với máy đang kết nối bằng mã 1 lần — khóa mới thay khóa
+  // cũ, tên thiết bị giữ nguyên. Xong là về thẳng app.
+  async function submitPairCode() {
+    const value = pairCode.trim().toUpperCase().replace(/[\s-]/g, "");
+    if (!value || linkBusy) return;
+    setLinkBusy(true);
+    setLinkMsg("Đang ghép…");
+    setLinkErr("");
+    try {
+      const { token } = await apiPair(value, state?.thisDevice?.label || "");
+      setToken(token);
+      onRecheck();
+      navigate("#/");
+    } catch (e) {
+      setLinkMsg("");
+      setLinkErr(String(e.message || e));
+    } finally {
+      setLinkBusy(false);
+    }
+  }
+
+  // Dán token owm_/owd_ — thử nối TRƯỚC khi thay: hỏng thì khôi phục token
+  // cũ, không bao giờ tự bắn mình ra ngoài màn đăng nhập. Token của phòng
+  // khác bị chặn luôn (tenant hiện tại không khớp → 401) — muốn sang máy
+  // phòng khác thì Gỡ pairing rồi đăng nhập lại.
+  async function submitToken() {
+    const value = tokenInput.trim();
+    if (!value || linkBusy) return;
+    const previous = getToken();
+    setLinkBusy(true);
+    setLinkMsg("Đang kiểm tra token…");
+    setLinkErr("");
+    setToken(value);
+    try {
+      await apiState();
+      setTokenInput("");
+      setLinkMsg("");
+      onRecheck();
+      navigate("#/");
+    } catch {
+      if (previous) setToken(previous);
+      else localStorage.removeItem("owm_token");
+      setLinkMsg("");
+      setLinkErr("Token không đúng hoặc bridge chưa chạy — giữ nguyên kết nối cũ.");
+    } finally {
+      setLinkBusy(false);
+    }
   }
 
   const rows = [
@@ -138,6 +195,45 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
             ))}
           </div>
         )}
+      </div>
+
+      <div class="card">
+        <h3>Ghép thiết bị / nhập token</h3>
+        <label class="field" for="settings-pair-code">
+          Mã ghép 8 ký tự (in trên terminal bridge, sống 30 phút — hoặc quét QR trên đó)
+        </label>
+        <input
+          id="settings-pair-code"
+          type="text"
+          autocomplete="one-time-code"
+          spellcheck={false}
+          value={pairCode}
+          onInput={(e) => setPairCode(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && submitPairCode()}
+        />
+        <div class="sheet-actions">
+          <button class="btn small" disabled={linkBusy || !pairCode.trim()} onClick={submitPairCode}>
+            Ghép với máy đang kết nối
+          </button>
+        </div>
+        <label class="field" for="settings-token">
+          Token dài hạn owm_ / owd_ (master từ QR master trên máy, hoặc khóa thiết bị khác)
+        </label>
+        <input
+          id="settings-token"
+          type="text"
+          spellcheck={false}
+          value={tokenInput}
+          onInput={(e) => setTokenInput(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && submitToken()}
+        />
+        <div class="sheet-actions">
+          <button class="btn small" disabled={linkBusy || !tokenInput.trim()} onClick={submitToken}>
+            Kết nối bằng token
+          </button>
+        </div>
+        {linkBusy && linkMsg && <p class="pair-hint">{linkMsg}</p>}
+        {linkErr && <Banner kind="err">{linkErr}</Banner>}
       </div>
 
       <div class="card">

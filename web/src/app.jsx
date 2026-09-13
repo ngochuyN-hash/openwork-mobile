@@ -204,7 +204,7 @@ function StatusBanners({ state, onRecheck }) {
 }
 
 function BottomNav({ current }) {
-  // Session-related views (home/sessions/chat) highlight tab Phiên; files -> Workspace.
+  // Session-related views (home/sessions/chat) highlight tab Sessions; files -> Workspace.
   const activeOf = {
     home: "home",
     sessions: "home",

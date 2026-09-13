@@ -977,17 +977,6 @@ label.field {
   gap: var(--sp-3);
   align-items: center;
 }
-.screen-paused {
-  position: absolute;
-  inset: 0;
-  border: none;
-  background: rgba(10, 12, 14, 0.72);
-  color: #fff;
-  font-size: 14px;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-}
 /* Thanh nút nằm DƯỚI khung hình (yêu cầu: không che màn hình PC) — hàng ngang
    giữa, phong cách card OpenWork. */
 .stage-toolbar {

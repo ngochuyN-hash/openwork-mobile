@@ -57,12 +57,12 @@
   ],
   "shortcuts": [
     {
-      "name": "Phiên",
+      "name": "Sessions",
       "url": "/#/",
       "icons": [{ "src": "/apple-touch-icon.png", "sizes": "180x180" }]
     },
     {
-      "name": "Cài đặt",
+      "name": "Settings",
       "url": "/#/settings",
       "icons": [{ "src": "/apple-touch-icon.png", "sizes": "180x180" }]
     }

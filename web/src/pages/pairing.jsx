@@ -1,26 +1,23 @@
 import { useEffect, useState } from "preact/hooks";
-import { setToken, apiState, apiPair, apiPairTenant, pairingCodeFromHash, inviteFromHash } from "../api.js";
+import { setToken, apiPair, apiPairTenant, pairingCodeFromHash, inviteFromHash } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 import { OpenWorkMark } from "../components/logo.jsx";
 
-// MỘT thẻ duy nhất chia 3 dòng (yêu cầu chủ máy: không tab, không ẩn):
-//   1. Đăng nhập — user/pass do chủ worker cấp (apiPairTenant)
-//   2. Ghép thiết bị — mã 1 lần 8 ký tự in trên terminal bridge (apiPair)
-//   3. Nhập token — dán thẳng owm_/owd_ dài hạn
-// Điền khớp DUY NHẤT một dòng là vào được, ba nút độc lập nhau. Không
-// placeholder, không chữ giải thích thừa — label trên ô nhập nói đủ. Tên thiết
-// bị (tùy chọn) nằm ở dòng 1 nhưng dùng chung: ghép bằng mã cũng gửi theo.
-// Link mời #i= và link ghép #p= vẫn tự chạy khi mở, không cần đụng form.
+// Màn mở app = duy nhất ô Đăng nhập (user + pass + tên thiết bị + nút) —
+// không placeholder, không chữ giải thích thừa. Ghép thiết bị (mã 1 lần) và
+// nhập token owm_/owd_ KHÔNG nằm ở đây nữa: đã dời vào Settings sau khi đăng
+// nhập (yêu cầu chủ máy — tường đăng nhập phải sạch). Hai đường tự động vẫn
+// chạy từ trước khi vào: link mời #i=user:secret tự đăng nhập, link ghép
+// #p=MÃ tự ghép (QR trên terminal bridge trỏ vào link này).
 export function PairingScreen({ onPaired }) {
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
-  const [code, setCode] = useState("");
-  const [token, setTokenValue] = useState("");
   const [label, setLabel] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
 
+  // Ghép bằng mã 1 lần — chỉ còn đường tự động qua link #p= (quét QR)
   async function pairWithCode(codeValue, labelValue) {
     setBusy(true);
     setError("");
@@ -56,40 +53,11 @@ export function PairingScreen({ onPaired }) {
     }
   }
 
-  // Dự phòng: dán trực tiếp token dài (owm_/owd_)
-  async function connectWithToken() {
-    const value = token.trim();
-    if (!value) return;
-    setBusy(true);
-    setError("");
-    setStatus("Đang kiểm tra token…");
-    setToken(value);
-    try {
-      await apiState();
-      onPaired();
-    } catch {
-      localStorage.removeItem("owm_token");
-      setStatus("");
-      setError("Token không đúng hoặc bridge chưa chạy.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function submitPair() {
-    const value = code.trim().toUpperCase().replace(/[\s-]/g, "");
-    if (!value) return;
-    pairWithCode(value, label);
-  }
-
   function submitLogin() {
     if (!user.trim() || !pass) return;
     loginWithTenant(user, pass, label);
   }
 
-  // Tự chạy khi mở link: #p=MÃ(&m=PHÒNG) → ghép; #i=USER:SECRET (link mời) →
-  // tự đăng nhập luôn. Link mời hỏng/máy chưa join → form vẫn được điền sẵn
-  // user/pass, bấm lại một phát là xong.
   useEffect(() => {
     const fromHash = pairingCodeFromHash();
     if (fromHash) {
@@ -104,13 +72,6 @@ export function PairingScreen({ onPaired }) {
     }
   }, []);
 
-  const divider = (
-    <hr style="border:none;border-top:1px solid var(--border);margin:18px 0 0" />
-  );
-  const rowTitle = (text) => (
-    <div style="font-weight:600;font-size:13.5px;margin:14px 0 0">{text}</div>
-  );
-
   return (
     <div class="view no-nav pair-view">
       <div class="pair-hero">
@@ -120,7 +81,6 @@ export function PairingScreen({ onPaired }) {
       </div>
 
       <div class="card">
-        {rowTitle("Đăng nhập")}
         <label class="field" for="login-user">Tên đăng nhập</label>
         <input
           id="login-user"
@@ -154,48 +114,6 @@ export function PairingScreen({ onPaired }) {
             {busy ? status || "Đang đăng nhập…" : "Đăng nhập"}
           </button>
         </div>
-
-        {divider}
-
-        {rowTitle("Ghép thiết bị")}
-        <label class="field" for="pair-code">
-          Mã 8 ký tự in trên terminal bridge (sống 30 phút — hoặc quét QR trên đó)
-        </label>
-        <input
-          id="pair-code"
-          type="text"
-          autocomplete="one-time-code"
-          spellcheck={false}
-          value={code}
-          onInput={(e) => setCode(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === "Enter" && submitPair()}
-        />
-        <div class="sheet-actions">
-          <button class="btn" disabled={busy || !code.trim()} onClick={submitPair}>
-            {busy ? status || "Đang ghép…" : "Ghép thiết bị"}
-          </button>
-        </div>
-
-        {divider}
-
-        {rowTitle("Nhập token")}
-        <label class="field" for="token-code">
-          Token dài hạn owm_ / owd_ (master từ QR master trên máy, hoặc khóa thiết bị cũ)
-        </label>
-        <input
-          id="token-code"
-          type="text"
-          spellcheck={false}
-          value={token}
-          onInput={(e) => setTokenValue(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === "Enter" && connectWithToken()}
-        />
-        <div class="sheet-actions">
-          <button class="btn" disabled={busy || !token.trim()} onClick={connectWithToken}>
-            {busy ? status || "Đang kiểm tra…" : "Kết nối"}
-          </button>
-        </div>
-
         {status && !error && busy && <p class="pair-hint">{status}</p>}
         {error && <Banner kind="err">{error}</Banner>}
       </div>
