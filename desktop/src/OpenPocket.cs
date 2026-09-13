@@ -65,10 +65,11 @@ namespace OpenPocket.Desktop
         private bool reallyExit = false;
         private bool balloonShown = false;
 
-        // Icon app: nền đen bo tròn + vòng O trắng — ĐẢO của logo OpenWork
-        // (O viền đen nền trắng, owner chỉ định 13/09). Vẽ lúc chạy để title
-        // bar / khay hệ thống / dialog QR dùng chung một nguồn; file exe còn
-        // nhúng src\app.ico qua /win32icon cho cửa sổ Explorer.
+        // Icon app: đúng hình khối OpenWork (lục giác bo isometric + lỗ O +
+        // sọc chéo) nhưng ĐẢO MÀU — nét trắng trên nền đen (owner chỉ định
+        // 13/09, rasterize từ web/public/openwork-mark.svg). Nguồn chân lý là
+        // src\app.ico nhúng vào exe qua /win32icon; lúc chạy bấm lại từ exe để
+        // title bar / khay / dialog QR dùng chung một nguồn.
         static Icon _appIcon;
         internal static Icon AppIcon
         {
@@ -76,21 +77,27 @@ namespace OpenPocket.Desktop
             {
                 if (_appIcon == null)
                 {
-                    Bitmap bmp = new Bitmap(32, 32);
-                    using (Graphics g = Graphics.FromImage(bmp))
+                    try { _appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
+                    catch { }
+                    if (_appIcon == null)
                     {
-                        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                        using (SolidBrush bg = new SolidBrush(Color.FromArgb(24, 24, 27)))
-                        using (System.Drawing.Drawing2D.GraphicsPath path = RoundedPath(32, 32, 8))
+                        // fallback hiếm hoi: vòng O trắng nền đen (bản rút gọn)
+                        Bitmap bmp = new Bitmap(32, 32);
+                        using (Graphics g = Graphics.FromImage(bmp))
                         {
-                            g.FillPath(bg, path);
+                            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                            using (SolidBrush bg = new SolidBrush(Color.FromArgb(24, 24, 27)))
+                            using (System.Drawing.Drawing2D.GraphicsPath path = RoundedPath(32, 32, 8))
+                            {
+                                g.FillPath(bg, path);
+                            }
+                            using (Pen ring = new Pen(Color.White, 5f))
+                            {
+                                g.DrawEllipse(ring, 7, 7, 18, 18);
+                            }
                         }
-                        using (Pen ring = new Pen(Color.White, 5f))
-                        {
-                            g.DrawEllipse(ring, 7, 7, 18, 18);
-                        }
+                        _appIcon = Icon.FromHandle(bmp.GetHicon());
                     }
-                    _appIcon = Icon.FromHandle(bmp.GetHicon());
                 }
                 return _appIcon;
             }
@@ -169,14 +176,16 @@ namespace OpenPocket.Desktop
         private void InitializeComponent()
         {
             this.Text = "OpenPocket — Điều khiển OpenWork từ điện thoại";
-            // 512x480 = MỘT cột duy nhất ôm sát thẻ: lề trang 8px, kẽ thẻ 8px.
-            // Bản 680px để thừa góc phải trắng trơn; bản 536px vẫn còn dải lề
-            // phải + kẽ giữa thẻ + đuôi đáy (owner khoanh đỏ lượt 2, 13/09).
+            // 512x460 = MỘT cột duy nhất, thẻ trắng chạm mép, nền trắng toàn
+            // phần. Bản 680px thừa góc phải, 536px còn dải lề phải + kẽ + đuôi
+            // (owner khoanh đỏ 2 lượt 13/09), lượt 3: bỏ hẳn nền xám F4.
             // Chữ chính 9.75pt, dòng cách 30px, nút cao 38 — thở, không bị nhòn.
-            this.Size = new Size(512, 480);
-            this.MinimumSize = new Size(512, 480);
+            this.Size = new Size(512, 460);
+            this.MinimumSize = new Size(512, 460);
             this.StartPosition = FormStartPosition.CenterScreen;
-            this.BackColor = ColorBg;
+            // Nền TRẮNG toàn phần (owner 13/09: "gọt sạch hết còn nền trắng
+            // thôi") — nền xám F4 từng lộ thành dải sáng nhạt bất đối xứng
+            this.BackColor = ColorCard;
             this.ForeColor = ColorText;
             this.Font = new Font("Segoe UI", 9.75f, FontStyle.Regular);
             this.Icon = SystemIcons.Application;
@@ -186,10 +195,11 @@ namespace OpenPocket.Desktop
             // lấy mép Top trước, content Fill phần còn lại (bài học header chìm).
             Panel pnlContent = new Panel();
             pnlContent.Dock = DockStyle.Fill;
-            pnlContent.Padding = new Padding(8, 8, 8, 8);
+            // Padding 0: thẻ trắng chạm mép cửa sổ, không còn viền xám nào
+            pnlContent.Padding = new Padding(0);
 
             int yL = 0;
-            Panel cardStatus = CreateCard(0, ref yL, 480, 284, pnlContent);
+            Panel cardStatus = CreateCard(0, ref yL, 496, 284, pnlContent, false);
             CreateCardTitle("TRẠNG THÁI KẾT NỐI", cardStatus);
 
             lblStatusBridge = CreateStatusLabel("Bridge: Đang kiểm tra...", 16, 36, cardStatus);
@@ -239,7 +249,7 @@ namespace OpenPocket.Desktop
 
             // Thẻ QR — tính năng DUY NHẤT còn lại ngoài trạng thái: hiện mã/QR
             // cho điện thoại ghép, kiểu 9remote. Nút QR là chủ đạo (đen, to).
-            Panel cardPair = CreateCard(0, ref yL, 480, 74, pnlContent);
+            Panel cardPair = CreateCard(0, ref yL, 496, 74, pnlContent, false);
             Button btnShowQr = CreateFlatButton("Xem mã ghép (QR)", ColorPrimary, 16, 16, 200, 42, cardPair);
             btnShowQr.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
             btnShowQr.Click += delegate { ActionShowPairingDialog(); };
@@ -360,12 +370,14 @@ namespace OpenPocket.Desktop
             c.Region = new Region(RoundedPath(c.Width, c.Height, r));
         }
 
-        private Panel CreateCard(int x, ref int y, int width, int height, Panel parent)
+    private Panel CreateCard(int x, ref int y, int width, int height, Panel parent, bool bordered)
+    {
+        Panel card = new Panel();
+        card.Location = new Point(x, y);
+        card.Size = new Size(width, height);
+        card.BackColor = ColorCard;
+        if (bordered)
         {
-            Panel card = new Panel();
-            card.Location = new Point(x, y);
-            card.Size = new Size(width, height);
-            card.BackColor = ColorCard;
             // Viền nhạt bo tròn tự vẽ (kiểu thẻ OpenWork) + Region cắt góc
             card.Paint += delegate(object s, PaintEventArgs e) {
                 e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
@@ -374,11 +386,12 @@ namespace OpenPocket.Desktop
                 }
             };
             Round(card, 12);
-            card.Padding = new Padding(12);
-            parent.Controls.Add(card);
-            y += height;
-            return card;
         }
+        card.Padding = new Padding(12);
+        parent.Controls.Add(card);
+        y += height;
+        return card;
+    }
 
         private void CreateCardTitle(string text, Panel card)
         {
