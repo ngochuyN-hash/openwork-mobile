@@ -225,6 +225,7 @@ export function ScreenPage() {
     plminX: 0, plmaxX: 0, plminY: 0, plmaxY: 0,
   });
   const drawChain = useRef(Promise.resolve()); // vẽ tuần tự — crop về sau không nhảy hàng trước crop trước nó
+  const gotFullRef = useRef(false); // đã có khung FULL cho kết nối hiện tại? crop lẻ không đủ làm nền
   // Ghép khung lên canvas — dùng CHUNG cho cả hai đường truyền. Payload từ v4.1:
   // [2B x][2B y][2B w][2B h] LE + JPEG — vùng đổi vẽ ĐÈ đúng chỗ, vùng đứng yên
   // giữ nguyên trên canvas (không phải truyền lại như <img> src nguyên khung).
@@ -242,6 +243,16 @@ export function ScreenPage() {
       x = u8[0] | (u8[1] << 8); y = u8[2] | (u8[3] << 8);
       w = u8[4] | (u8[5] << 8); h = u8[6] | (u8[7] << 8);
       if (!w || !h) return;
+    }
+    // Chưa có khung full: crop mảnh (replay stale / vùng đổi nhỏ) BỎ QUA hẳn —
+    // vẽ mảnh rời lên canvas trống từng biến thành "màn hình đen" (mảnh ở 0,0
+    // còn bị tưởng là full nên canvas bị resize theo cỡ mảnh rồi CSS phóng to).
+    if (!gotFullRef.current) {
+      const c = imgRef.current;
+      const cw = c && c.width > 2 ? c.width : 300, ch = c && c.height > 2 ? c.height : 150;
+      const isFull = raw || (x === 0 && y === 0 && w * h >= 0.9 * cw * ch);
+      if (!isFull) return;
+      gotFullRef.current = true;
     }
     drawChain.current = drawChain.current.then(async () => {
       try {
@@ -303,6 +314,7 @@ export function ScreenPage() {
         if (runIdRef.current !== myRun) return;
         try {
           setStatus((s) => (s === "live" ? s : "connecting"));
+          gotFullRef.current = false; // kết nối (lại) — chờ khung full đầu tiên
           await owScreenStream({
             w: capW,
             q,
@@ -355,6 +367,7 @@ export function ScreenPage() {
     if (!info?.available || paused) return;
     if (wrtcRef.current === "active" || wrtcRef.current === "failed") return;
     wrtcRef.current = "trying";
+    gotFullRef.current = false; // kết nối mới — chờ khung full đầu tiên
     setWrtc("trying");
     setStatus("connecting");
     let dead = false;
@@ -363,7 +376,6 @@ export function ScreenPage() {
     let fpsTimer = null;
     let frameTimer = null;
     let frameCount = 0;
-    let gotFrame = false;
     const fail = () => {
       if (dead) return;
       dead = true;
@@ -425,8 +437,6 @@ export function ScreenPage() {
         };
         scr.onmessage = (e) => {
           frameCount += 1;
-          gotFrame = true;
-          if (frameTimer) { clearTimeout(frameTimer); frameTimer = null; }
           setStatus("live");
           setErrorMsg("");
           pushFrame(e.data);
@@ -437,11 +447,12 @@ export function ScreenPage() {
         fpsTimer = setInterval(() => { setFps(frameCount); frameCount = 0; }, 1000);
         wrtcRef.current = "active";
         setWrtc("active");
-        // Datachannel mở mà không có khung nào chảy tới (bridge đang lạnh: daemon
-        // chụp phải compile/spawn lại sau idle-stop) thì KHÔNG được đứng im — coi
-        // như thất bại để tự lùi về stream HTTP, kênh đó gửi khung chờ được.
+        // Datachannel mở mà không có khung FULL nào (bridge đang lạnh: daemon
+        // chụp phải compile/spawn lại sau idle-stop, hoặc màn im không sinh frame)
+        // thì KHÔNG được đứng im — coi như thất bại để tự lùi về stream HTTP.
+        // Crop stale/replay không tính là sống (pushFrame chỉ bật gotFull khi full).
         frameTimer = setTimeout(() => {
-          if (!gotFrame) fail();
+          if (!gotFullRef.current) fail();
         }, 8000);
       } catch {
         fail();

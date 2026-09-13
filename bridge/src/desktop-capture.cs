@@ -256,6 +256,8 @@ class DesktopCapture
     static long lastCursorX = long.MinValue, lastCursorY = long.MinValue;
     static long lastKeyframeMs; // đầy 2s là ép nén nguyên khung (người vào trễ tự lành)
     static volatile bool nextFull = true; // khung đầu + lệnh KEY (viewer mới) = full
+    static volatile bool keyWanted = false; // KEY tới lúc màn đang im → đánh thức duplication
+    static volatile bool forceNextCapture = false; // one-shot: chụp khung kế bất kể màn có đổi (sau START / sau re-dup)
     static long lastSentMs;     // gate 40fps
     static long lastHeartbeatMs;
     static volatile bool streaming = false;
@@ -318,7 +320,7 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                 streaming = false;
                 continue;
             }
-            if (line == "KEY") { nextFull = true; continue; } // viewer mới vào — khung kế nén full
+            if (line == "KEY") { nextFull = true; keyWanted = true; continue; } // viewer mới vào — khung kế nén full
             if (line.StartsWith("START|"))
             {
                 string[] p = line.Split('|');
@@ -551,6 +553,9 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                     try { EnsureSmallTextures(); } catch (Exception ex) { throw new Exception("reconfig-step: " + ex.Message); }
                     lastPixels = null;
                     lastCursorX = long.MinValue;
+                    // Khung ĐẦU sau START phải đi ngay kể cả màn đang im — viewer mới
+                    // chờ khung full để có nền (nextFull chỉ ăn khi có frame được acquire).
+                    forceNextCapture = true;
                 }
                 DXGI_OUTDUPL_FRAME_INFO info = new DXGI_OUTDUPL_FRAME_INFO();
                 IntPtr desktopRes;
@@ -559,6 +564,15 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                 statAcquireMs += Environment.TickCount - tA;
                 if (hr == DXGI_ERROR_WAIT_TIMEOUT)
                 {
+                    if (keyWanted)
+                    {
+                        // Viewer mới vào lúc màn đang im: AcquireNextFrame không bao giờ
+                        // trả frame → khung full cho viewer không bao giờ tới (màn hình
+                        // đen trên phone). Re-duplication để acquire kế trả khung HIỆN
+                        // TẠI (frame đầu sau DuplicateOutput luôn có), ép chụp + full.
+                        keyWanted = false;
+                        try { ReinitDuplication(); forceNextCapture = true; } catch { }
+                    }
                     Heartbeat(clock);
                     continue;
                 }
@@ -584,8 +598,10 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                 // khung đen thui vì runtime đọc sai vtable).
                 long now = clock.ElapsedMilliseconds;
                 bool sendDue = now - lastSentMs >= MIN_SEND_INTERVAL_MS;
-                if (contentChanged && sendDue && desktopRes != IntPtr.Zero)
+                bool captureNow = contentChanged || forceNextCapture;
+                if (captureNow && sendDue && desktopRes != IntPtr.Zero)
                 {
+                    forceNextCapture = false;
                     long tC = Environment.TickCount;
                     bool ok = CapturePixels(desktopRes);
                     statCaptureMs += Environment.TickCount - tC;

@@ -254,7 +254,12 @@ export class ScreenService {
   onDxgiJpeg(jpeg) {
     this.touch();
     const key = `${this.dxgi.width}x${this.dxgi.quality}`;
-    this.lastJpegByParams.set(key, jpeg);
+    // Replay cho viewer mới chỉ nên là khung FULL — replay một crop mảnh từng
+    // vẽ mảnh rời lên canvas trống = "màn hình đen" trên phone (14/09).
+    if (jpeg.length >= 8) {
+      const fx = jpeg.readUInt16LE(0), fy = jpeg.readUInt16LE(2), fw = jpeg.readUInt16LE(4);
+      if (fx === 0 && fy === 0 && fw >= this.dxgi.width * 0.95) this.lastJpegByParams.set(key, jpeg);
+    }
     if (this.viewers.size) this.broadcast(FRAME_JPEG, jpeg);
     // viewer tham số khác (zoom) vẫn nhận khung này hiển thị co giãn CSS,
     // nhưng tối ưu: nếu viewer muốn width lớn hơn đang chạy → nới daemon
