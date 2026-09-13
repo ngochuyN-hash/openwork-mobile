@@ -977,6 +977,24 @@ label.field {
   gap: var(--sp-3);
   align-items: center;
 }
+/* Chấm local echo: phản hồi tức thời cú chạm/giữ ngay trên điện thoại */
+.touch-echo {
+  display: none;
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.22);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 3;
+}
+.touch-echo.show { display: block; }
+.touch-echo.rc {
+  background: var(--danger);
+  box-shadow: 0 0 0 7px color-mix(in srgb, var(--danger) 30%, transparent);
+}
 /* Thanh nút nằm DƯỚI khung hình (yêu cầu: không che màn hình PC) — hàng ngang
    giữa, phong cách card OpenWork. */
 .stage-toolbar {

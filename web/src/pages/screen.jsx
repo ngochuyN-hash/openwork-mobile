@@ -76,6 +76,7 @@ export function ScreenPage() {
   const urlRef = useRef("");
   const runIdRef = useRef(0); // hủy vòng nối lại khi pause/unmount đổi
   const textInputRef = useRef(null);
+  const echoRef = useRef(null); // chấm phản hồi cục bộ: cho biết cú chạm đã ăn, khỏi đoán qua mạng
 
   // ---- kiểm tra máy có hỗ trợ không
   useEffect(() => {
@@ -177,6 +178,20 @@ export function ScreenPage() {
     }
   }, []);
 
+  // Local echo: phản hồi tức thời tại ngón tay (không chờ mạng) — chấm trắng
+  // theo ngón khi kéo, biến đỏ + rung máy khi Right-click kịch phát.
+  const posEcho = (cx, cy, cls) => {
+    const stage = imgRef.current?.parentElement;
+    const dot = echoRef.current;
+    if (!stage || !dot) return;
+    const r = stage.getBoundingClientRect();
+    dot.style.left = (cx - r.left) + "px";
+    dot.style.top = (cy - r.top) + "px";
+    dot.className = "touch-echo show " + (cls ?? "");
+  };
+  const hideEcho = () => { if (echoRef.current) echoRef.current.className = "touch-echo"; };
+  const buzz = (ms) => { try { navigator.vibrate?.(ms); } catch {} };
+
   const normXY = (cx, cy) => {
     const rect = imgRef.current?.getBoundingClientRect();
     if (!rect || !rect.width) return null;
@@ -202,10 +217,13 @@ export function ScreenPage() {
       st.scx = e.clientX; st.scy = e.clientY;
       st.startT = Date.now(); st.sentDown = false; st.longFired = false; st.accY = 0;
       clearTimeout(st.lpTimer);
+      posEcho(e.clientX, e.clientY);
       st.lpTimer = setTimeout(() => {
         // Giữ lâu không rời -> Right-click tại điểm chạm
         if (st.mode === "idle" && !st.sentDown) {
           st.longFired = true;
+          buzz(40); // rung ngay: chắc chắn đây là Right-click, không đoán
+          posEcho(st.scx, st.scy, "rc");
           const n2 = normXY(st.scx, st.scy);
           if (n2) sendInput({ type: "rclick", ...n2 });
         }
@@ -244,6 +262,7 @@ export function ScreenPage() {
       return;
     }
     if (st.mode === "press") {
+      posEcho(e.clientX, e.clientY); // chấm chạy theo ngón tức thời
       const now = Date.now();
       if (now - st.lastSendT < 60) return; // throttle ~16 lần/giây
       st.lastSendT = now;
@@ -279,7 +298,7 @@ export function ScreenPage() {
       return;
     }
     // chạm nhanh nhấc tay ngay = click (chạm 2 lần liên tiếp OS tự hiểu là double)
-    if (n && Date.now() - st.startT < TAP_MS + 200) sendInput({ type: "click", ...n });
+    if (n && Date.now() - st.startT < TAP_MS + 200) { buzz(12); sendInput({ type: "click", ...n }); }
     st.mode = "idle";
   };
 
@@ -373,6 +392,7 @@ export function ScreenPage() {
             <p>{unavailable ? "Không khả dụng" : "Đang nối stream màn hình…"}</p>
           </div>
         )}
+        <span ref={echoRef} class="touch-echo" aria-hidden="true" />
       </div>
       {/* Thanh nút nằm DƯỚI khung hình (không đè lên màn hình PC) */}
       <div class="stage-toolbar">
