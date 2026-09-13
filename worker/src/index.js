@@ -73,7 +73,20 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
   } catch {
     machine = null;
   }
-  if (!machine || Date.now() - machine.updatedAt > STALE_MS) {
+  if (!machine) {
+    // Slot biến mất khác máy tắt: nếu cả phòng không còn trên KV (bị dọn dẹp)
+    // thì 401 để app về lại màn ghép mã — quét QR là vào lại được, đừng treo
+    // vĩnh viễn câu "offline" không có lối ra.
+    const tenantId = slotKey.startsWith("machine:") ? slotKey.slice("machine:".length) : "";
+    if (tenantId && (await env.OWM_STATE.get(`tenant:${tenantId}`)) === null) {
+      return json({ code: "unpaired", message: "Phòng này đã bị xóa — ghép lại bằng mã ghép mới." }, 401);
+    }
+    return json(
+      { code: "bridge_offline", message: "Máy tính của phòng này chưa đăng ký hoặc đã offline quá 20 phút." },
+      503
+    );
+  }
+  if (Date.now() - machine.updatedAt > STALE_MS) {
     return json(
       { code: "bridge_offline", message: "Máy tính của phòng này chưa đăng ký hoặc đã offline quá 20 phút." },
       503
@@ -204,6 +217,23 @@ export default {
         .toLowerCase();
       if (tenant && !TENANT_RE.test(tenant)) {
         return json({ code: "bridge_offline", message: "Mã máy (phòng) không hợp lệ." }, 503);
+      }
+      // Gõ mã ghép tay thì web chưa biết phòng nào (chỉ link QR mới mang &m=),
+      // mà machine:main đã không còn. Dạo qua các phòng còn đăng ký máy, phòng
+      // nào nhận mã thì lấy đáp án của phòng đó — thường chỉ có đúng 1 máy
+      // live. Sai mã ở mọi phòng vẫn về 1 câu 401 của bridge như cũ.
+      if (!tenant && url.pathname === "/api/pair" && request.method === "POST") {
+        const slots = await env.OWM_STATE.list({ prefix: "machine:" });
+        let wrongCode = null;
+        let noneOnline = null;
+        for (const key of slots.keys.slice(0, 10)) {
+          const res = await relay(env, key.name, request, url);
+          if (res.ok) return res;
+          if (res.status === 401) wrongCode = res;
+          else noneOnline = res;
+        }
+        if (wrongCode) return wrongCode;
+        if (noneOnline) return noneOnline;
       }
       return relay(env, tenant ? `machine:${tenant}` : MAIN_KEY, request, url);
     }
