@@ -5,20 +5,18 @@
 // từng panel Bàn phím / Chuột / Clipboard, keycap tiếng Anh.
 // v2.0: cắt 3 nút vô nghĩa theo phản hồi user — Tạm dừng (rời app đã tự ngắt
 // stream), chọn chất lượng (chốt cứng 1 thông số tốt cho màn phone), nút
-// "Chỉ xem" to cồng kềnh (thay bằng icon khoá trên toolbar: khoá = chỉ xem,
-// chống bấm nhầm lên PC thật; mở khoá = điều khiển).
+// "Chỉ xem".
+// v2.1: bỏ luôn nút khoá (hình luôn nhận điều khiển như 9remote) và nút chụp
+// ảnh; toolbar chỉ còn Bàn phím · Chuột · Clipboard · Toàn màn hình.
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { apiScreenInfo, owScreenInput, owScreenStream } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 import {
-  CameraIcon,
   ClipboardIcon,
   ExpandIcon,
   KeyboardIcon,
-  LockIcon,
   MousePointerIcon,
   SendIcon,
-  UnlockIcon,
 } from "../components/icons.jsx";
 
 // Thông số stream duy nhất: 880px vừa nét trên màn phone, JPEG 55 đủ đọc chữ —
@@ -57,7 +55,6 @@ const NAV_KEYS = [
 export function ScreenPage() {
   const [info, setInfo] = useState(null); // {available, screen}
   const [paused, setPaused] = useState(false); // CHỈ nội bộ: ẩn app thì ngắt stream, đỡ pin/3G
-  const [armed, setArmed] = useState(false); // mở khoá điều khiển (mặc định khoá = chỉ xem)
   const [status, setStatus] = useState("connecting"); // connecting|live|paused|error|unavailable
   const [errorMsg, setErrorMsg] = useState("");
   const [fps, setFps] = useState(0);
@@ -71,7 +68,6 @@ export function ScreenPage() {
   const imgRef = useRef(null);
   const lastPoint = useRef({ x: 0.5, y: 0.5 }); // điểm chạm cuối cho chuột phải/double
   const urlRef = useRef("");
-  const frameBlobRef = useRef(null); // frame JPEG gần nhất — cho nút Chụp ảnh
   const dragRef = useRef(null); // {lastSent: ms} khi đang kéo
   const runIdRef = useRef(0); // hủy vòng nối lại khi pause/unmount đổi
   const textInputRef = useRef(null);
@@ -113,7 +109,6 @@ export function ScreenPage() {
             onFrame: (blob) => {
               frameCount += 1;
               setStatus("live");
-              frameBlobRef.current = blob;
               const next = URL.createObjectURL(blob);
               if (urlRef.current) URL.revokeObjectURL(urlRef.current);
               urlRef.current = next;
@@ -187,7 +182,6 @@ export function ScreenPage() {
   };
 
   const onPointerDown = (e) => {
-    if (!armed) return;
     const p = normFromEvent(e);
     if (!p) return;
     lastPoint.current = p;
@@ -196,7 +190,7 @@ export function ScreenPage() {
     sendInput({ type: "down", ...p });
   };
   const onPointerMove = (e) => {
-    if (!armed || !dragRef.current) return;
+    if (!dragRef.current) return;
     const p = normFromEvent(e);
     if (!p) return;
     lastPoint.current = p;
@@ -206,7 +200,7 @@ export function ScreenPage() {
     sendInput({ type: "move", ...p });
   };
   const onPointerUp = (e) => {
-    if (!armed || !dragRef.current) return;
+    if (!dragRef.current) return;
     const p = normFromEvent(e) ?? lastPoint.current;
     dragRef.current = null;
     sendInput({ type: "up", ...p });
@@ -234,25 +228,8 @@ export function ScreenPage() {
   // trên iOS Safari chỉ dành cho <video>, nên dùng CSS cho đồng bộ mọi máy).
   const toggleFull = () => setFull((f) => !f);
 
-  // Lưu frame hiện tại về điện thoại — frame vốn là JPEG nên tải thẳng, khỏi vẽ canvas.
-  const saveSnapshot = () => {
-    const blob = frameBlobRef.current;
-    if (!blob) return;
-    const d = new Date();
-    const pad = (n) => String(n).padStart(2, "0");
-    const name = `man-hinh-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.jpg`;
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-  };
-
   // Nút Clipboard kiểu 9remote: mở panel gõ chữ + nạp clipboard điện thoại vào ô.
   const openClipboard = async () => {
-    setArmed(true); // ý định gõ chữ = muốn điều khiển
     setPanel("text");
     try {
       const clip = await navigator.clipboard.readText();
@@ -265,7 +242,6 @@ export function ScreenPage() {
 
   // Bật panel điều khiển nào đó = ý định điều khiển → tự mở khoá.
   const togglePanel = (name) => {
-    setArmed(true);
     setPanel((p) => (p === name ? null : name));
   };
 
@@ -298,7 +274,7 @@ export function ScreenPage() {
         {url ? (
           <img
             ref={imgRef}
-            class={`screen-img ${armed ? "control" : ""}`}
+            class="screen-img control"
             src={url}
             alt="Màn hình máy tính"
             draggable={false}
@@ -344,19 +320,6 @@ export function ScreenPage() {
           >
             <ClipboardIcon size={20} />
           </button>
-          <span class="stage-sep" aria-hidden="true" />
-          <button
-            class={`stage-btn ${armed ? "on" : ""}`}
-            disabled={unavailable}
-            aria-label={armed ? "Khoá điều khiển — chỉ xem" : "Mở khoá để điều khiển"}
-            aria-pressed={armed}
-            onClick={() => setArmed((a) => !a)}
-          >
-            {armed ? <UnlockIcon size={20} /> : <LockIcon size={20} />}
-          </button>
-          <button class="stage-btn" onClick={saveSnapshot} disabled={!url} aria-label="Lưu ảnh màn hình về điện thoại">
-            <CameraIcon size={20} />
-          </button>
           <button
             class={`stage-btn ${full ? "on" : ""}`}
             onClick={toggleFull}
@@ -371,7 +334,7 @@ export function ScreenPage() {
       )}
 
       {/* Panel trượt ra dưới khung hình — mỗi lần 1 panel, kiểu tab Input 9remote */}
-      {panel === "keys" && armed && (
+      {panel === "keys" && (
         <div class="screen-panel">
           <div class="screen-row">
             {MODS.map((m) => (
@@ -409,7 +372,7 @@ export function ScreenPage() {
         </div>
       )}
 
-      {panel === "mouse" && armed && (
+      {panel === "mouse" && (
         <div class="screen-panel">
           <div class="screen-row">
             <button class="screen-key" disabled={sending} onClick={() => sendInput({ type: "rclick", ...at })}>Right-click</button>
@@ -421,7 +384,7 @@ export function ScreenPage() {
         </div>
       )}
 
-      {panel === "text" && armed && (
+      {panel === "text" && (
         <div class="screen-panel">
           <form
             class="screen-textrow"
@@ -450,7 +413,7 @@ export function ScreenPage() {
       <div class="screen-bar">
         <span class={`badge ${status === "live" ? "ok" : status === "error" ? "err" : "busy"}`}>
           {status === "live"
-            ? `Đang xem${armed ? " · đã mở khoá" : ""}${fps ? ` · ${fps} hình/2s` : ""}`
+            ? `Đang xem${fps ? ` · ${fps} hình/2s` : ""}`
             : status === "connecting"
               ? "Đang nối…"
               : status === "paused"
