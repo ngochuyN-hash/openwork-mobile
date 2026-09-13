@@ -59,6 +59,43 @@ namespace OpenPocket.Desktop
         private bool provisioning = false;
         private bool provisionDone = false;
 
+        // Bấm X = ẩn xuống khay chạy nền (owner yêu cầu 13/09); thoát hẳn chỉ
+        // qua menu chuột phải của icon khay
+        private NotifyIcon trayIcon;
+        private bool reallyExit = false;
+        private bool balloonShown = false;
+
+        // Icon app: nền đen bo tròn + vòng O trắng — ĐẢO của logo OpenWork
+        // (O viền đen nền trắng, owner chỉ định 13/09). Vẽ lúc chạy để title
+        // bar / khay hệ thống / dialog QR dùng chung một nguồn; file exe còn
+        // nhúng src\app.ico qua /win32icon cho cửa sổ Explorer.
+        static Icon _appIcon;
+        internal static Icon AppIcon
+        {
+            get
+            {
+                if (_appIcon == null)
+                {
+                    Bitmap bmp = new Bitmap(32, 32);
+                    using (Graphics g = Graphics.FromImage(bmp))
+                    {
+                        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                        using (SolidBrush bg = new SolidBrush(Color.FromArgb(24, 24, 27)))
+                        using (System.Drawing.Drawing2D.GraphicsPath path = RoundedPath(32, 32, 8))
+                        {
+                            g.FillPath(bg, path);
+                        }
+                        using (Pen ring = new Pen(Color.White, 5f))
+                        {
+                            g.DrawEllipse(ring, 7, 7, 18, 18);
+                        }
+                    }
+                    _appIcon = Icon.FromHandle(bmp.GetHicon());
+                }
+                return _appIcon;
+            }
+        }
+
         // UI Controls - Header
         private Label lblAdminBadge;
         private Panel pnlHeader;
@@ -132,12 +169,12 @@ namespace OpenPocket.Desktop
         private void InitializeComponent()
         {
             this.Text = "OpenPocket — Điều khiển OpenWork từ điện thoại";
-            // 536x500 = MỘT cột duy nhất, mở ra là đủ khung, không cuộn. Bề rộng
-            // khít nội dung dài nhất (URL tunnel monospace) — form 680px cũ để
-            // thừa cả một góc phải trắng trơn (bắt gặp bằng mắt 13/09).
+            // 512x480 = MỘT cột duy nhất ôm sát thẻ: lề trang 8px, kẽ thẻ 8px.
+            // Bản 680px để thừa góc phải trắng trơn; bản 536px vẫn còn dải lề
+            // phải + kẽ giữa thẻ + đuôi đáy (owner khoanh đỏ lượt 2, 13/09).
             // Chữ chính 9.75pt, dòng cách 30px, nút cao 38 — thở, không bị nhòn.
-            this.Size = new Size(536, 500);
-            this.MinimumSize = new Size(536, 500);
+            this.Size = new Size(512, 480);
+            this.MinimumSize = new Size(512, 480);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = ColorBg;
             this.ForeColor = ColorText;
@@ -149,7 +186,7 @@ namespace OpenPocket.Desktop
             // lấy mép Top trước, content Fill phần còn lại (bài học header chìm).
             Panel pnlContent = new Panel();
             pnlContent.Dock = DockStyle.Fill;
-            pnlContent.Padding = new Padding(20, 16, 20, 16);
+            pnlContent.Padding = new Padding(8, 8, 8, 8);
 
             int yL = 0;
             Panel cardStatus = CreateCard(0, ref yL, 480, 284, pnlContent);
@@ -198,7 +235,7 @@ namespace OpenPocket.Desktop
             chkAutostart.CheckedChanged += OnAutostartChanged;
             cardStatus.Controls.Add(chkAutostart);
 
-            yL += 12;
+            yL += 8;
 
             // Thẻ QR — tính năng DUY NHẤT còn lại ngoài trạng thái: hiện mã/QR
             // cho điện thoại ghép, kiểu 9remote. Nút QR là chủ đạo (đen, to).
@@ -256,6 +293,50 @@ namespace OpenPocket.Desktop
 
             this.Controls.Add(pnlContent);
             this.Controls.Add(pnlHeader);
+
+            // Icon app + khay hệ thống: X chỉ ẩn xuống khay, "Thoát hẳn" mới
+            // kết thúc app (owner yêu cầu 13/09 — tắt cửa sổ mà bridge theo dõi
+            // vẫn chạy nền)
+            this.Icon = AppIcon;
+            trayIcon = new NotifyIcon();
+            trayIcon.Icon = AppIcon;
+            trayIcon.Text = "OpenPocket — điều khiển OpenWork từ điện thoại";
+            trayIcon.Visible = true;
+            ContextMenuStrip trayMenu = new ContextMenuStrip();
+            trayMenu.Items.Add("Mở OpenPocket", null, delegate { ShowFromTray(); });
+            trayMenu.Items.Add("Thoát hẳn", null, delegate {
+                reallyExit = true;
+                this.Close();
+            });
+            trayIcon.ContextMenuStrip = trayMenu;
+            trayIcon.DoubleClick += delegate { ShowFromTray(); };
+
+            this.FormClosing += delegate(object s, FormClosingEventArgs e) {
+                if (!reallyExit && e.CloseReason == CloseReason.UserClosing)
+                {
+                    e.Cancel = true;
+                    this.Hide();
+                    if (!balloonShown)
+                    {
+                        balloonShown = true;
+                        trayIcon.BalloonTipTitle = "OpenPocket vẫn đang chạy";
+                        trayIcon.BalloonTipText = "Đã ẩn xuống khay hệ thống — bấm đôi icon để mở lại, chuột phải chọn Thoát hẳn để tắt.";
+                        trayIcon.ShowBalloonTip(4000);
+                    }
+                }
+            };
+            this.FormClosed += delegate {
+                trayIcon.Visible = false;
+                trayIcon.Dispose();
+            };
+        }
+
+        // Mở lại cửa sổ từ khay: hiện + khôi phục nếu đang thu nhỏ + kéo lên trước
+        private void ShowFromTray()
+        {
+            this.Show();
+            if (this.WindowState == FormWindowState.Minimized) this.WindowState = FormWindowState.Normal;
+            this.Activate();
         }
 
         // Vẽ đường bo tròn (path) dùng chung cho Region + viền thẻ — dialog QR
@@ -1045,6 +1126,7 @@ namespace OpenPocket.Desktop
             this.BackColor = ColorBg;
             this.ForeColor = ColorText;
             this.Font = new Font("Segoe UI", 9.5f);
+            this.Icon = MainForm.AppIcon;
 
             int port = 8788;
             if (config.ContainsKey("port"))

@@ -15,7 +15,7 @@ if not exist "%CSC%" (
 if not exist "bin" mkdir "bin"
 
 echo Compiling OpenPocket.exe...
-"%CSC%" /target:winexe /optimize /codepage:65001 /win32manifest:src\app.manifest /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket.exe src\OpenPocket.cs
+"%CSC%" /target:winexe /optimize /codepage:65001 /win32manifest:src\app.manifest /win32icon:src\app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket.exe src\OpenPocket.cs
 
 if %ERRORLEVEL% equ 0 (
     echo [OK] Bien dich thanh cong: desktop\bin\OpenPocket.exe
