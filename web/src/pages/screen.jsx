@@ -8,6 +8,9 @@
 // "Chỉ xem".
 // v2.1: bỏ luôn nút khoá (hình luôn nhận điều khiển như 9remote) và nút chụp
 // ảnh; toolbar chỉ còn Bàn phím · Gõ chữ · Toàn màn hình.
+// v2.8: dọn phím theo user — bỏ hàng Ctrl/Alt/Shift/Win, Win+D/E,
+// Ctrl+Shift+Esc và hàng mũi tên/điều hướng; combo đổi nhãn thành
+// Copy · Paste · Undo · Redo (thêm Redo = Ctrl+Y).
 // v2.3: bridge đẩy khung nhanh hơn (trần 4→12 hình/s, màn đứng yên bỏ encode) +
 // toàn màn hình ăn theo xoay NGANG — hình dồn sát trái, thanh phím đứng dọc
 // bên phải; thanh nút nằm trong lớp toàn màn hình nên không còn bị đè mất.
@@ -36,34 +39,12 @@ function CollapseIcon({ size }) {
 // Thông số stream duy nhất: 880px vừa nét trên màn phone, JPEG 55 đủ đọc chữ —
 // từng có 3 preset chọn tay nhưng không ai đổi (phản hồi user 13/09/2026).
 const STREAM_PARAMS = { w: 880, q: 55 };
-// Sticky modifiers — bật sáng rồi bấm phím = tổ hợp, xong tự nhả (như 9remote).
-const MODS = [
-  { id: "ctrl", label: "Ctrl" },
-  { id: "alt", label: "Alt" },
-  { id: "shift", label: "Shift" },
-  { id: "win", label: "Win" },
-];
-// Combo hay dùng bấm 1 phát — nhãn theo đúng keycap tiếng Anh.
+// Tổ hợp hay dùng bấm 1 phát — nhãn tiếng Anh dễ hiểu, không ra phím tắt thô.
 const COMBOS = [
-  { label: "Ctrl+C", mods: ["ctrl"], key: "c", hint: "Copy" },
-  { label: "Ctrl+V", mods: ["ctrl"], key: "v", hint: "Paste" },
-  { label: "Ctrl+Z", mods: ["ctrl"], key: "z", hint: "Undo" },
-  { label: "Alt+Tab", mods: ["alt"], key: "tab", hint: "Switch window" },
-  { label: "Win+D", mods: ["win"], key: "d", hint: "Show desktop" },
-  { label: "Win+E", mods: ["win"], key: "e", hint: "File Explorer" },
-  { label: "Ctrl+Shift+Esc", mods: ["ctrl", "shift"], key: "esc", hint: "Task Manager" },
-];
-const NAV_KEYS = [
-  { key: "up", label: "↑" },
-  { key: "down", label: "↓" },
-  { key: "left", label: "←" },
-  { key: "right", label: "→" },
-  { key: "delete", label: "Del" },
-  { key: "space", label: "Space" },
-  { key: "home", label: "Home" },
-  { key: "end", label: "End" },
-  { key: "pgup", label: "PgUp" },
-  { key: "pgdn", label: "PgDn" },
+  { label: "Copy", mods: ["ctrl"], key: "c" },
+  { label: "Paste", mods: ["ctrl"], key: "v" },
+  { label: "Undo", mods: ["ctrl"], key: "z" },
+  { label: "Redo", mods: ["ctrl"], key: "y" },
 ];
 
 export function ScreenPage() {
@@ -73,7 +54,6 @@ export function ScreenPage() {
   const [errorMsg, setErrorMsg] = useState("");
   const [fps, setFps] = useState(0);
   const [url, setUrl] = useState("");
-  const [mods, setMods] = useState([]); // sticky Ctrl/Alt/Shift/Win
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [full, setFull] = useState(false); // toàn màn hình kiểu faux (áp dụng mọi trình duyệt)
@@ -410,23 +390,8 @@ export function ScreenPage() {
     if (g.current.mode !== "scroll") g.current.mode = "idle";
   };
 
-  const tapKey = (key) => {
-    // Có sticky mod -> gửi combo (Ctrl+C...), xong tự nhả mod như sticky keys
-    if (mods.length) {
-      sendInput({ type: "combo", mods, key });
-      setMods([]);
-    } else {
-      sendInput({ type: "key", key });
-    }
-  };
-  const toggleMod = (id) =>
-    setMods((m) => (m.includes(id) ? m.filter((x) => x !== id) : [...m, id]));
-  // Combo nút bấm có mods riêng: trừ phần trùng sticky (kẻo Ctrl,Ctrl double).
-  const tapCombo = (combo) => {
-    const rest = mods.filter((m) => !combo.mods.includes(m));
-    sendInput({ type: "combo", mods: [...combo.mods, ...rest], key: combo.key });
-    if (rest.length) setMods([]);
-  };
+  const tapKey = (key) => sendInput({ type: "key", key });
+  const tapCombo = (combo) => sendInput({ type: "combo", mods: combo.mods, key: combo.key });
 
   // Toàn màn hình: ưu tiên API GỐC + KHOÁ XOAY NGANG — bấm phóng to là màn xoay
   // ngang luôn như YouTube (Android Chrome); iOS Safari không cho fullscreen
@@ -517,32 +482,14 @@ export function ScreenPage() {
           </div>
         </div>
 
-        {/* Bàn phím + gõ chữ HIỂN THỊ LUÔN ở mọi chế độ: mode thường nằm dưới
-            ảnh, toàn màn hình thì CSS dựng thành cột phải xoay 90°. */}
+        {/* Bàn phím gọn: Copy/Paste/Undo/Redo + Enter/Esc/Bksp/Tab — HIỂN THỊ
+            LUÔN ở mọi chế độ: mode thường nằm dưới ảnh, toàn màn hình thì CSS
+            dựng thành cột phải xoay 90°. */}
         <div class="screen-panel screen-panel-keys">
             <div class="screen-row">
-              {MODS.map((m) => (
-                <button
-                  key={m.id}
-                  class={`screen-key ${mods.includes(m.id) ? "on" : ""}`}
-                  onClick={() => toggleMod(m.id)}
-                  aria-pressed={mods.includes(m.id)}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-            <div class="screen-row">
               {COMBOS.map((c) => (
-                <button key={c.label} class="screen-key combo" disabled={sending} title={c.hint} onClick={() => tapCombo(c)}>
+                <button key={c.label} class="screen-key combo" disabled={sending} onClick={() => tapCombo(c)}>
                   {c.label}
-                </button>
-              ))}
-            </div>
-            <div class="screen-row">
-              {NAV_KEYS.map((k) => (
-                <button key={k.key} class={`screen-key ${k.label.length === 1 ? "sym" : ""}`} disabled={sending} onClick={() => tapKey(k.key)}>
-                  {k.label}
                 </button>
               ))}
             </div>

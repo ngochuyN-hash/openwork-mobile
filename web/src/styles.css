@@ -1123,8 +1123,8 @@ label.field {
   box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
 }
 .screen-view.vland .screen-panel-keys {
-  left: calc(100vw - 98px); /* giải sâu 180px ôm phải, cách mép 8px */
-  height: 180px;
+  left: calc(100vw - 98px); /* giải sâu 110px ôm phải, cách mép 8px */
+  height: 110px;
 }
 .screen-view.vland .screen-panel-text {
   left: calc(100vw - 220px); /* giải 56px nằm cạnh trái bàn phím */
@@ -1238,10 +1238,6 @@ label.field {
 }
 .screen-key.wide {
   flex: 1.4;
-}
-/* Mũi tên: nút vuông nhỏ gọn, các phím chữ vẫn co giãn đều. */
-.screen-key.sym {
-  flex: 0 0 52px;
 }
 .screen-textrow {
   display: flex;
