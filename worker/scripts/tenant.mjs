@@ -82,10 +82,10 @@ if (action === "add") {
     process.exit(1);
   }
   // --pass <mật-khẩu>: dùng mật khẩu người chủ tự đặt — `openpocket add` /
-  // `openpocket tenant add` luôn hỏi và truyền vào đây (Enter để trống = mật
-  // khẩu mặc định 12345678); gọi script TRỰC TIẾP mà không có --pass thì sinh
-  // pass ngẫu nhiên khỏe. Mật khẩu phải nằm gọn trong link mời (#i=user:secret)
-  // nên cấm dấu cách, ':' và '&'.
+  // `openpocket tenant add` luôn hỏi rồi truyền vào đây (Enter = tự sinh
+  // ngẫu nhiên, KHÔNG còn mật khẩu mặc định); gọi script TRỰC TIẾP mà không
+  // có --pass cũng sinh pass ngẫu nhiên khỏe. Mật khẩu phải nằm gọn trong
+  // link mời (#i=user:secret) nên cấm dấu cách, ':' và '&'.
   // Tách --pass TRƯỚC khi đọc name/url khỏi rest, kẻo lệch vị trí đối số.
   let customPass = "";
   const passIdx = rest.indexOf("--pass");

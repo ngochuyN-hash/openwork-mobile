@@ -124,6 +124,31 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
   }
 }
 
+// Lớp áo giáp thứ hai của web: CSP gắn lên mọi tài nguyên tĩnh — script thì
+// tuyệt đối same-origin (không inline), nên nếu một ngày nào đó lọt XSS thì
+// code chèn động cũng bị trình duyệt cấm chạy trước khi với tới token trong
+// localStorage. blob: cho img vì khung hình stream + preview file là object
+// URL; 'unsafe-inline' chỉ cho style — UI xài style attribute dày đặc.
+// Thêm script CDN/iframe vào web thì phải nới ở đây.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "connect-src 'self'",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+function withSecurityHeaders(page) {
+  const headers = new Headers(page.headers);
+  headers.set("content-security-policy", CSP);
+  return new Response(page.body, { status: page.status, statusText: page.statusText, headers });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -244,6 +269,6 @@ export default {
     }
 
     // 3. Còn lại: static web app (web/dist) qua assets binding
-    return env.ASSETS.fetch(request);
+    return withSecurityHeaders(await env.ASSETS.fetch(request));
   },
 };
