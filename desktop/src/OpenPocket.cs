@@ -302,20 +302,26 @@ namespace OpenPocket.Desktop
 
             // Thẻ HÀNH ĐỘNG: hàng nút bridge trước (quy trình: bật bridge rồi
             // mới ghép máy), hàng QR sau — QR ĐEN rộng nhất là nút chủ đạo.
-            // Mọi nút đồng nhất cao 40 cho đều nhịp dọc.
+            // Mọi nút đồng nhất cao 40 cho đều nhịp dọc. "Dừng" là nút PHÁ HỎY
+            // nên hạ vai + tách mép phải (ux-layout-rules 13/09: solid đỏ đứng
+            // giữa hàng giật attention khỏi QR, ngang vai nút lành) — ghost
+            // viền đỏ chữ đỏ trên nền trắng, khoá thì về xám như mọi nút.
             cardPair = CreateCard(0, ref yL, 496, 120, pnlContent, false);
 
             btnStartBridge = CreateFlatButton("Bật Bridge", ColorSuccess, 16, 14, 149, 40, cardPair);
             btnStartBridge.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
             btnStartBridge.Click += delegate { ActionStartBridge(); };
 
-            btnStopBridge = CreateFlatButton("Dừng", ColorDanger, 173, 14, 149, 40, cardPair);
-            btnStopBridge.Font = new Font("Segoe UI", 10f);
-            btnStopBridge.Click += delegate { ActionStopBridge(); };
-
-            btnRestartBridge = CreateFlatButton("Khởi động lại", ColorSecondary, 330, 14, 150, 40, cardPair);
+            btnRestartBridge = CreateFlatButton("Khởi động lại", ColorSecondary, 173, 14, 149, 40, cardPair);
             btnRestartBridge.Font = new Font("Segoe UI", 10f);
             btnRestartBridge.Click += delegate { ActionRestartBridge(); };
+
+            btnStopBridge = CreateFlatButton("Dừng", ColorCard, 330, 14, 150, 40, cardPair);
+            btnStopBridge.Font = new Font("Segoe UI", 10f);
+            btnStopBridge.ForeColor = ColorDanger;
+            btnStopBridge.FlatAppearance.BorderSize = 1;
+            btnStopBridge.FlatAppearance.BorderColor = ColorDanger;
+            btnStopBridge.Click += delegate { ActionStopBridge(); };
 
             btnShowQr = CreateFlatButton("Xem mã ghép (QR)", ColorPrimary, 16, 66, 304, 40, cardPair);
             btnShowQr.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
@@ -435,12 +441,14 @@ namespace OpenPocket.Desktop
 
             int gap = 8;
             int bw = (inner - 2 * gap) / 3;
+            // Hàng bridge: Bật Bridge | Khởi động lại | Dừng — nút phá hủy đón
+            // mép phải, xa nhất so với nút bật (ux-layout-rules 13/09)
             btnStartBridge.SetBounds(16, 14, bw, 40);
-            btnStopBridge.SetBounds(16 + bw + gap, 14, bw, 40);
-            btnRestartBridge.SetBounds(16 + 2 * (bw + gap), 14, inner - 2 * (bw + gap), 40);
+            btnRestartBridge.SetBounds(16 + bw + gap, 14, bw, 40);
+            btnStopBridge.SetBounds(16 + 2 * (bw + gap), 14, inner - 2 * (bw + gap), 40);
             Round(btnStartBridge, 8);
-            Round(btnStopBridge, 8);
             Round(btnRestartBridge, 8);
+            Round(btnStopBridge, 8);
 
             // QR chiếm 2/3 hàng dưới — nút chủ đạo về kích thước; nhật ký là
             // tiện ích phụ nên nhường bề rộng
@@ -570,11 +578,23 @@ namespace OpenPocket.Desktop
         // Nút disabled phải NHẠT hẳn về xám (audit 13/09: bridge đang chạy mà
         // nút "Bật Bridge" xanh còn nằm đó là mâu thuẫn với đèn trạng thái —
         // FlatStyle giữ nguyên màu nền khi Enabled=false nên phải tự đổi).
-        private void SetBridgeButton(Button btn, bool on, Color enabledBg)
+        // ghost=true dành cho nút phá hủy hạ vai: bật = nền trắng viền đỏ chữ
+        // đỏ (màu enabledBg), khoá = về xám mất viền như nút lành.
+        private void SetBridgeButton(Button btn, bool on, Color enabledBg, bool ghost = false)
         {
             btn.Enabled = on;
-            btn.BackColor = on ? enabledBg : ColorSecondary;
-            btn.ForeColor = on ? ((enabledBg == ColorSecondary) ? ColorText : Color.White) : ColorMuted;
+            if (on && ghost)
+            {
+                btn.BackColor = ColorCard;
+                btn.ForeColor = enabledBg;
+                btn.FlatAppearance.BorderColor = enabledBg;
+            }
+            else
+            {
+                btn.BackColor = on ? enabledBg : ColorSecondary;
+                btn.ForeColor = on ? ((enabledBg == ColorSecondary) ? ColorText : Color.White) : ColorMuted;
+                if (ghost) btn.FlatAppearance.BorderColor = ColorSecondary;
+            }
         }
 
         // ================= CONFIG & LOGIC =================
@@ -800,7 +820,7 @@ namespace OpenPocket.Desktop
                     (provisioning ? " (đang tạo định danh lần đầu…)" : "");
                 lblStatusBridge.ForeColor = ColorSuccess;
                 SetBridgeButton(btnStartBridge, false, ColorSuccess);
-                SetBridgeButton(btnStopBridge, true, ColorDanger);
+                SetBridgeButton(btnStopBridge, true, ColorDanger, true);
                 btnRestartBridge.Enabled = true;
                 btnTunnelRestart.Enabled = true;
             }
@@ -809,7 +829,7 @@ namespace OpenPocket.Desktop
                 lblStatusBridge.Text = "○ Bridge: Đã dừng";
                 lblStatusBridge.ForeColor = ColorDanger;
                 SetBridgeButton(btnStartBridge, true, ColorSuccess);
-                SetBridgeButton(btnStopBridge, false, ColorDanger);
+                SetBridgeButton(btnStopBridge, false, ColorDanger, true);
                 btnRestartBridge.Enabled = false;
                 btnTunnelRestart.Enabled = false;
             }
