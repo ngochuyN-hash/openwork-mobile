@@ -43,7 +43,7 @@ export function PairingScreen({ onPaired }) {
     <div class="view no-nav pair-view">
       <div class="pair-hero">
         <OpenWorkMark className="pair-logo" />
-        <h2 style="margin:0;letter-spacing:-0.01em">OpenWork Mobile</h2>
+        <h2>OpenWork Mobile</h2>
         <div class="pair-sub">OpenWork in your pocket</div>
       </div>
 
@@ -53,17 +53,17 @@ export function PairingScreen({ onPaired }) {
         </label>
         <input
           id="pair-code"
+          class="pair-code-input"
           type="text"
           autocomplete="one-time-code"
           autocapitalize="characters"
           spellcheck={false}
-          style="text-transform:uppercase;letter-spacing:0.2em;text-align:center;font-size:18px"
           value={code}
           onInput={(e) => setCode(e.currentTarget.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}
         />
         <div class="sheet-actions">
-          <button class="btn" disabled={busy || !code.trim()} onClick={submit}>
+          <button class="btn pair-btn" disabled={busy || !code.trim()} onClick={submit}>
             {busy ? status || "Đang ghép…" : "Vào"}
           </button>
         </div>
