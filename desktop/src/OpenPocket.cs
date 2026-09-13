@@ -972,12 +972,15 @@ namespace OpenPocket.Desktop
         private Label lblQrRender;
         private Label lblPairCode;
         private Label lblExpiry;
+        private Label lblPairUrlNote;
+        private Label lblMasterNote;
         private TextBox txtPairUrl;
         private TextBox txtMasterUrl;
         private Button btnCopyUrl;
         private Button btnCopyMaster;
         private Button btnShowLive;
         private Button btnShowMaster;
+        private Button btnClose;
 
         private string liveQr = "";
         private string masterQr = "";
@@ -1061,18 +1064,22 @@ namespace OpenPocket.Desktop
             Round(btnShowMaster);
             this.Controls.Add(btnShowMaster);
 
-            // QR render ASCII (nền trắng, chữ đen — font monospace giữ khối vuông)
+            // QR render ASCII (nền trắng, chữ đen — font monospace giữ khối vuông).
+            // KHÔNG ghim Left: ASCII mã master dài hơn mã 1 lần nên Width thay đổi —
+            // Relayout() căn giữa theo Width thật sau mỗi lần đổi text (trước đây
+            // cứng x=95 → mã lệch trái, cả khối link dưới bị ghim y=496 dù QR chỉ
+            // cao ~330px → hụt một mảng trống lớn giữa QR và link)
             lblQrRender = new Label();
             lblQrRender.Text = "\n\n   Đang tải QR từ bridge...";
             lblQrRender.Font = new Font("Consolas", 7.5f);
             lblQrRender.BackColor = Color.White;
             lblQrRender.ForeColor = Color.Black;
-            lblQrRender.Location = new Point(95, 140);
+            lblQrRender.Location = new Point(0, 140);
             lblQrRender.AutoSize = true;
             this.Controls.Add(lblQrRender);
 
             // Link ghép 1 lần
-            Label lblPairUrlNote = new Label();
+            lblPairUrlNote = new Label();
             lblPairUrlNote.Text = "Link ghép 1 lần (gửi Zalo cũng được — bấm là vào):";
             lblPairUrlNote.Font = new Font("Segoe UI", 8.5f);
             lblPairUrlNote.ForeColor = ColorMuted;
@@ -1110,7 +1117,7 @@ namespace OpenPocket.Desktop
             this.Controls.Add(btnCopyUrl);
 
             // Master token
-            Label lblMasterNote = new Label();
+            lblMasterNote = new Label();
             lblMasterNote.Text = "⭐ Mã vĩnh viễn — KHÔNG chia sẻ, chỉ quét tại máy này:";
             lblMasterNote.Font = new Font("Segoe UI", 8.5f);
             lblMasterNote.ForeColor = ColorMuted;
@@ -1147,7 +1154,7 @@ namespace OpenPocket.Desktop
             this.Controls.Add(btnCopyMaster);
 
             // Close Button
-            Button btnClose = new Button();
+            btnClose = new Button();
             btnClose.Text = "Đóng";
             btnClose.Location = new Point(200, 668);
             btnClose.Size = new Size(120, 28);
@@ -1166,6 +1173,33 @@ namespace OpenPocket.Desktop
             this.Load += delegate {
                 FetchLiveCode(portAtLoad, tokenAtLoad);
             };
+
+            Relayout();
+        }
+
+        // Xếp lại toàn bộ khối dưới theo chiều cao QR thật + căn QR giữa khung.
+        // QR 1 lần và master khác nhau cả rộng lẫn cao → không thể ghim tọa độ
+        // cứng; form cũng tự co/giãn theo nội dung (FixedDialog nên vẫn đẹp)
+        private void Relayout()
+        {
+            int clientW = this.ClientSize.Width;
+            lblQrRender.Left = Math.Max(12, (clientW - lblQrRender.Width) / 2);
+
+            int y = lblQrRender.Bottom + 22;
+            lblPairUrlNote.Location = new Point(24, y);
+            y += lblPairUrlNote.Height + 6;
+            txtPairUrl.Location = new Point(24, y);
+            y += txtPairUrl.Height + 10;
+            btnCopyUrl.Location = new Point(24, y);
+            y += btnCopyUrl.Height + 14;
+            lblMasterNote.Location = new Point(24, y);
+            y += lblMasterNote.Height + 6;
+            txtMasterUrl.Location = new Point(24, y);
+            y += txtMasterUrl.Height + 10;
+            btnCopyMaster.Location = new Point(24, y);
+            y += btnCopyMaster.Height + 16;
+            btnClose.Location = new Point((clientW - btnClose.Width) / 2, y);
+            this.ClientSize = new Size(clientW, btnClose.Bottom + 12);
         }
 
         private void ShowQr(bool master)
@@ -1179,6 +1213,7 @@ namespace OpenPocket.Desktop
             btnShowLive.ForeColor = master ? ColorText : Color.White;
             btnShowMaster.BackColor = master ? ColorPrimary : ColorCard;
             btnShowMaster.ForeColor = master ? Color.White : ColorText;
+            Relayout();
         }
 
         private static void Round(Control c)
