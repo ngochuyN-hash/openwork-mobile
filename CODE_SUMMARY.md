@@ -148,6 +148,7 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | `GET /api/state` | owm_/owd_ | Bridge + server + token + engine status, current device + `edge: {tenant, machineName}` |
 | `POST /api/pair` | **none** (rate-limit 10/min/IP) | Pair a device with the 30-minute code → returns the permanent owd_ key |
 | `POST /api/pair/tenant` | **none** (shared rate-limit, 10/min/IP) | Multi-tenant sign-in: body `{user, secret, label}` — compared against `lookupTenant`/`lookupSecret` in config → returns `{token, device, tenant, machineName}`. Not joined → 404 `not_joined`; wrong → 401 `invalid_credentials` |
+| `GET /api/pairing-code` | owm_/owd_ | Mã ghép ĐANG SỐNG + baseUrl (cho CLI `openpocket code` — hết phải parse log) |
 | `GET /api/devices` · `DELETE /api/devices/:id` | owm_/owd_ | Paired devices list + revoke |
 | `POST /api/recheck` | owm_ | Force discovery |
 | `POST /api/openwork/wake` | owm_/owd_ (rate-limit 5/min/IP) | Launch OpenWork desktop on the computer (already running → `alreadyRunning`; launched → `launched`) |
