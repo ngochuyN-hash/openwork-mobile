@@ -143,9 +143,13 @@ if (cmd === "autostart") {
   const sub = (args[1] || "--status").toLowerCase();
   const withOpenwork = args.includes("--with-openwork");
   if (sub === "--enable") {
+    // /RL HIGHEST: bridge (và daemon điều khiển màn hình sinh ra từ nó) chạy
+    // quyền admin — SendInput mới chạm được vào app đang chạy Administrator
+    // (UIPI chặn input chiều thường -> admin). Đánh đổi: lệnh từ điện thoại
+    // cũng mang quyền admin, bù bằng khóa thiết bị/phòng sẵn có.
     const created = spawnSync(
       "schtasks",
-      ["/Create", "/TN", AUTOSTART_TASK_NAME, "/SC", "ONLOGON", "/TR", buildAutostartAction(), "/F"],
+      ["/Create", "/TN", AUTOSTART_TASK_NAME, "/SC", "ONLOGON", "/TR", buildAutostartAction(), "/RL", "HIGHEST", "/F"],
       { stdio: "inherit" }
     );
     if (created.status !== 0) {
