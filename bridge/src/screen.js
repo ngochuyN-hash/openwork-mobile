@@ -18,6 +18,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { bridgeDataDir } from "./config.js";
+import { DxgiCaptureService } from "./screen-dxgi.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const IS_WINDOWS = platform() === "win32";
@@ -177,6 +178,8 @@ export class ScreenService {
     this.daemon = null; // { proc, pending: Map }
     this.daemonSeq = 0;
     this.idleTimer = null;
+    this.dxgi = null; // DxgiCaptureService — đường GPU-direct (ưu tiên)
+    this.dxgiFailed = false; // đã thử và chết → khỏi thử lại phiên này, dùng GDI
   }
 
   dims() {
@@ -195,11 +198,71 @@ export class ScreenService {
   async ensureReady(timeoutMs = 8000) {
     if (!this.available) throw new Error(this.setupError ?? "Chỉ hỗ trợ Windows");
     if (this.dimsCache) return;
+    // Ưu tiên đường GPU-direct (desktop-capture.exe): DWM đưa thẳng khung đã pha,
+    // thu nhỏ trên GPU, nén JPEG 2 thread song song. Chết/máy ảo/thiếu driver →
+    // tự rơi về worker GDI cũ — hành vi v3.2 giữ nguyên.
+    if (!this.dxgiFailed) {
+      try {
+        await this.startDxgi(timeoutMs);
+        return;
+      } catch (error) {
+        this.dxgiFailed = true;
+        this.setupError = null;
+      }
+    }
     this.startWorker();
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("worker chụp màn hình không đáp ứng")), timeoutMs);
       this.workerWaiters.push(() => { clearTimeout(timer); resolve(); });
     });
+  }
+
+  /** Khởi động DXGI daemon với width = viewer rộng nhất, gắn handlers vào pipeline. */
+  async startDxgi(timeoutMs = 8000) {
+    let maxW = 0, maxQ = 0;
+    for (const v of this.viewers) { if (v.width > maxW) { maxW = v.width; maxQ = v.quality; } }
+    if (!maxW) { maxW = 880; maxQ = 55; }
+    if (!this.dxgi) {
+      this.dxgi = new DxgiCaptureService({
+        onJpeg: (jpeg) => this.onDxgiJpeg(jpeg),
+        onUnchanged: () => { if (this.viewers.size) this.broadcast(FRAME_UNCHANGED); },
+        onMeta: (m) => {
+          this.touch();
+          const dims = { width: m.screenW, height: m.screenH };
+          const changed = !this.dimsCache || this.dimsCache.width !== dims.width || this.dimsCache.height !== dims.height;
+          this.dimsCache = dims;
+          if (this.workerWaiters.length) for (const r of this.workerWaiters.splice(0)) r();
+          if (changed && this.viewers.size) this.broadcastMeta();
+        },
+        onError: (msg) => {
+          // daemon chết giữa phiên: báo + chạy GDI thay ngay
+          if (this.viewers.size) {
+            this.broadcast(FRAME_ERROR, Buffer.from(JSON.stringify({ message: `Đường GPU gặp lỗi: ${msg} — chuyển về chụp thường` })));
+            this.stopWorker();
+            this.dxgiFailed = true;
+            this.startWorker();
+          }
+        },
+      });
+    }
+    await this.dxgi.start(maxW, maxQ);
+    if (!this.dimsCache) {
+      this.dimsCache = this.dxgi.dims; // meta đã về trong start()
+    }
+  }
+
+  onDxgiJpeg(jpeg) {
+    this.touch();
+    const key = `${this.dxgi.width}x${this.dxgi.quality}`;
+    this.lastJpegByParams.set(key, jpeg);
+    if (this.viewers.size) this.broadcast(FRAME_JPEG, jpeg);
+    // viewer tham số khác (zoom) vẫn nhận khung này hiển thị co giãn CSS,
+    // nhưng tối ưu: nếu viewer muốn width lớn hơn đang chạy → nới daemon
+    let maxW = 0, maxQ = 0;
+    for (const v of this.viewers) { if (v.width > maxW) { maxW = v.width; maxQ = v.quality; } }
+    if (maxW && (maxW > this.dxgi.width || maxQ !== this.dxgi.quality)) {
+      this.dxgi.reconfigure(maxW, maxQ);
+    }
   }
 
   startWorker() {
@@ -327,8 +390,11 @@ export class ScreenService {
     }
   }
 
-  /** Lệnh điều khiển vừa vào → đánh thức mọi worker chụp NGAY ở nhịp burst. */
+  /** Lệnh điều khiển vừa vào → đánh thức mọi worker GDI chụp NGAY ở nhịp burst.
+   *  Đường DXGI không cần poke: AcquireNextFrame ngủ tới khi màn ĐỔI — latency
+   *  phát hiện thay đổi gần bằng 0 sẵn. */
   poke() {
+    if (this.dxgi && this.dxgi.proc) return;
     this.touch();
     const until = Date.now() + BURST_MS;
     this.changedStreak = Math.max(this.changedStreak, 4); // input sắp làm màn đổi — turbo sẵn
@@ -481,6 +547,7 @@ export class ScreenService {
       if (this.viewers.size === 0) {
         this.stopDaemon();
         this.stopWorker();
+        if (this.dxgi) { void this.dxgi.stop(); }
         this.encodedHash = null;
         this.lastJpegByParams.clear();
       }

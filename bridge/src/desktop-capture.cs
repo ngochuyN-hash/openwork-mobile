@@ -25,6 +25,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Runtime.CompilerServices;
 
 class DesktopCapture
 {
@@ -245,6 +246,10 @@ class DesktopCapture
     static int screenW, screenH;
     static int targetW = 880, targetH = 551, quality = 55;
     static IntPtr smallRT, smallRTV, staging;
+    // Hàng đợi pixel giữa capture-thread và encode-thread (pipeline song song:
+    // acquire+GPU+map ~10ms || encode JPEG ~15ms — từng nối chuỗi giữ fps ở 21).
+    static System.Collections.Concurrent.ConcurrentQueue<byte[]> encodeQueue = new System.Collections.Concurrent.ConcurrentQueue<byte[]>();
+    static volatile bool encodeAlive = false;
     static byte[] lastPixels;   // bản cache (row-pitch layout) để vẽ con trỏ khi màn đứng yên
     static int lastPitch;
     static long lastCursorX = long.MinValue, lastCursorY = long.MinValue;
@@ -291,6 +296,9 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
         Thread cap = new Thread(CaptureLoop);
         cap.IsBackground = true;
         cap.Start();
+        Thread enc = new Thread(EncodeLoop);
+        enc.IsBackground = true;
+        enc.Start();
         // Main thread đọc lệnh từ stdin
         string line;
         while ((line = Console.ReadLine()) != null)
@@ -542,7 +550,9 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                 }
                 DXGI_OUTDUPL_FRAME_INFO info = new DXGI_OUTDUPL_FRAME_INFO();
                 IntPtr desktopRes;
+                long tA = Environment.TickCount;
                 int hr = Fn<AcquireNextFrameDel>(duplication, 8)(duplication, ACQUIRE_TIMEOUT_MS, ref info, out desktopRes);
+                statAcquireMs += Environment.TickCount - tA;
                 if (hr == DXGI_ERROR_WAIT_TIMEOUT)
                 {
                     Heartbeat(clock);
@@ -564,34 +574,141 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                 bool cursorMoved = (info.PointerX != lastCursorX || info.PointerY != lastCursorY) && info.PointerVisible != 0;
                 lastCursorX = info.PointerX; lastCursorY = info.PointerY;
 
-                // Copy desktop về texture riêng rồi ReleaseFrame NGAY để khung kế không kẹt
-                if (contentChanged && desktopRes != IntPtr.Zero)
-                {
-                    ctx.CopyResource(devTexture, desktopRes);
-                }
-                try { Fn<ReleaseFrameDel>(duplication, 14)(duplication); } catch { }
-                if (desktopRes != IntPtr.Zero) Marshal.Release(desktopRes);
-
+                // Copy desktop về texture riêng rồi ReleaseFrame NGAY để khung kế không kẹt.
+                // CopyResource cần ID3D11Texture2D* — QI thủ công từ resource raw pointer
+                // (GUID 6f15aaf2... đã verify đa nguồn; truyền thẳng IDXGIResource* từng làm
+                // khung đen thui vì runtime đọc sai vtable).
                 long now = clock.ElapsedMilliseconds;
                 bool sendDue = now - lastSentMs >= MIN_SEND_INTERVAL_MS;
-                if (contentChanged && sendDue)
+                if (contentChanged && sendDue && desktopRes != IntPtr.Zero)
                 {
-                    RenderAndSend(clock, true);
+                    long tC = Environment.TickCount;
+                    bool ok = CapturePixels(desktopRes);
+                    statCaptureMs += Environment.TickCount - tC;
+                    if (ok) { lastSentMs = now; statFrames++; }
                 }
-                else if (!contentChanged && cursorMoved && sendDue && lastPixels != null)
+                else if (!contentChanged && cursorMoved && sendDue && lastPixels != null && encodeQueue.Count == 0)
                 {
-                    RenderAndSend(clock, false); // vẽ lại từ cache + con trỏ mới
+                    encodeQueue.Enqueue(null); // marker: encode từ cache + con trỏ mới
+                    lastSentMs = now;
                 }
                 else
                 {
                     Heartbeat(clock);
                 }
+                DumpStats();
+                try { Fn<ReleaseFrameDel>(duplication, 14)(duplication); } catch { }
+                Marshal.Release(desktopRes);
             }
             catch (Exception ex)
             {
                 Send(FRAME_ERROR, Encoding.UTF8.GetBytes(JsonErr("loop: " + ex.Message)));
                 Thread.Sleep(500);
             }
+        }
+    }
+
+    /** Capture thread: chụp + render + map, đẩy pixel (hoặc null=cursor-only) vào queue. */
+    static bool CapturePixels(IntPtr desktopRes)
+    {
+        Guid iidTex = new Guid("6f15aaf2-d208-4e89-9ab4-489535d34f9c");
+        IntPtr tex;
+        Marshal.QueryInterface(desktopRes, ref iidTex, out tex);
+        if (tex == IntPtr.Zero) return false;
+        try
+        {
+            ctx.CopyResource(devTexture, tex);
+            try { Fn<ReleaseFrameDel>(duplication, 14)(duplication); } catch { }
+            ctx.PSSetShaderResources(0, 1, ref devSRV);
+            IntPtr ps = pixelShader; ctx.PSSetShader(ps, IntPtr.Zero, 0);
+            IntPtr vs = vertexShader; ctx.VSSetShader(vs, IntPtr.Zero, 0);
+            IntPtr smp = sampler; ctx.PSSetSamplers(0, 1, ref smp);
+            ctx.IASetPrimitiveTopology(4 /*TRIANGLELIST*/);
+            IntPtr rtv = smallRTV; ctx.OMSetRenderTargets(1, ref rtv, IntPtr.Zero);
+            ctx.Draw(3, 0);
+            IntPtr nullSrv = IntPtr.Zero; ctx.PSSetShaderResources(0, 1, ref nullSrv);
+            ctx.CopyResource(staging, smallRT);
+            D3D11_MAPPED_SUBRESOURCE mapped;
+            int hr = ctx.Map(staging, 0, 1 /*READ*/, 0, out mapped);
+            if (hr != S_OK) { Send(FRAME_ERROR, Encoding.UTF8.GetBytes(JsonErr("Map hr=0x" + hr.ToString("X")))); return false; }
+            byte[] pixels;
+            try
+            {
+                int pitch = (int)mapped.RowPitch;
+                int bytes = pitch * targetH;
+                pixels = new byte[bytes];
+                Marshal.Copy(mapped.pData, pixels, 0, bytes);
+                lastPitch = pitch;
+            }
+            finally { ctx.Unmap(staging, 0); }
+            while (encodeQueue.Count >= 3) { byte[] drop; encodeQueue.TryDequeue(out drop); }
+            encodeQueue.Enqueue(pixels);
+            return true;
+        }
+        finally { Marshal.Release(tex); }
+    }
+
+    /** Encode thread: pixel -> vẽ con trỏ -> JPEG -> stdout (song song với capture kế). */
+    static void EncodeLoop()
+    {
+        encodeAlive = true;
+        Stopwatch clock = Stopwatch.StartNew();
+        while (!quitting)
+        {
+            byte[] pixels;
+            if (!encodeQueue.TryDequeue(out pixels))
+            {
+                Thread.Sleep(2);
+                continue;
+            }
+            try
+            {
+                bool fromCache = pixels == null;
+                if (fromCache)
+                {
+                    if (lastPixels == null) continue;
+                    pixels = lastPixels;
+                }
+                else if (lastPixels == null || lastPixels.Length != pixels.Length)
+                {
+                    lastPixels = new byte[pixels.Length];
+                }
+                if (!fromCache) Buffer.BlockCopy(pixels, 0, lastPixels, 0, pixels.Length);
+                GCHandle pin = GCHandle.Alloc(lastPixels, GCHandleType.Pinned);
+                try
+                {
+                    using (Bitmap bmp = new Bitmap(targetW, targetH, lastPitch, PixelFormat.Format32bppArgb, pin.AddrOfPinnedObject()))
+                    {
+                        DrawCursor(bmp);
+                        using (MemoryStream ms = new MemoryStream(1 << 16))
+                        {
+                            EncoderParameters ep = new EncoderParameters(1);
+                            ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)quality);
+                            bmp.Save(ms, JpegCodec(), ep);
+                            Send(FRAME_JPEG, ms.ToArray());
+                        }
+                    }
+                }
+                finally { pin.Free(); }
+                lastHeartbeatMs = clock.ElapsedMilliseconds;
+            }
+            catch (Exception ex)
+            {
+                Send(FRAME_ERROR, Encoding.UTF8.GetBytes(JsonErr("encode: " + ex.Message)));
+            }
+        }
+        encodeAlive = false;
+    }
+
+    static long statAcquireMs, statCaptureMs, statFrames;
+    static long statMark = Environment.TickCount;
+    static void DumpStats()
+    {
+        if (Environment.TickCount - statMark >= 1000)
+        {
+            Console.Error.WriteLine("[stat] frames=" + statFrames + " acquire=" + statAcquireMs + "ms capture=" + statCaptureMs + "ms");
+            statFrames = statAcquireMs = statCaptureMs = 0;
+            statMark = Environment.TickCount;
         }
     }
 
@@ -602,61 +719,6 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
         {
             lastHeartbeatMs = now;
             Send(FRAME_UNCHANGED, null);
-        }
-    }
-
-    // contentFromGpu=true: render từ devTexture (màn vừa đổi); false: vẽ từ cache CPU
-    static void RenderAndSend(Stopwatch clock, bool contentFromGpu)
-    {
-        D3D11_MAPPED_SUBRESOURCE mapped;
-        if (contentFromGpu)
-        {
-            try
-            {
-                // Vẽ 3 đỉnh: sample devTexture thu nhỏ vào smallRT
-                ctx.PSSetShaderResources(0, 1, ref devSRV);
-                IntPtr ps = pixelShader; ctx.PSSetShader(ps, IntPtr.Zero, 0);
-                IntPtr vs = vertexShader; ctx.VSSetShader(vs, IntPtr.Zero, 0);
-                IntPtr smp = sampler; ctx.PSSetSamplers(0, 1, ref smp);
-                ctx.IASetPrimitiveTopology(4 /*TRIANGLELIST*/);
-                IntPtr rtv = smallRTV; ctx.OMSetRenderTargets(1, ref rtv, IntPtr.Zero);
-                ctx.Draw(3, 0);
-                IntPtr nullSrv = IntPtr.Zero; ctx.PSSetShaderResources(0, 1, ref nullSrv);
-                // Copy sang staging + Map đọc về CPU
-                ctx.CopyResource(staging, smallRT);
-            }
-            catch (Exception ex) { throw new Exception("render-step: " + ex.Message); }
-        }
-        int hr;
-        try { hr = ctx.Map(staging, 0, 1 /*READ*/, 0, out mapped); } catch (Exception ex) { throw new Exception("map-step: " + ex.Message); }
-        if (hr != S_OK) { Send(FRAME_ERROR, Encoding.UTF8.GetBytes(JsonErr("Map hr=0x" + hr.ToString("X")))); return; }
-        try
-        {
-            int pitch = (int)mapped.RowPitch;
-            int bytes = pitch * targetH;
-            if (contentFromGpu || lastPixels == null || lastPixels.Length != bytes)
-            {
-                if (lastPixels == null || lastPixels.Length != bytes) lastPixels = new byte[bytes];
-                Marshal.Copy(mapped.pData, lastPixels, 0, bytes);
-                lastPitch = pitch;
-            }
-            using (Bitmap bmp = new Bitmap(targetW, targetH, pitch, PixelFormat.Format32bppArgb, mapped.pData))
-            {
-                DrawCursor(bmp);
-                using (MemoryStream ms = new MemoryStream(1 << 16))
-                {
-                    EncoderParameters ep = new EncoderParameters(1);
-                    ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)quality);
-                    bmp.Save(ms, JpegCodec(), ep);
-                    Send(FRAME_JPEG, ms.ToArray());
-                }
-            }
-            lastSentMs = clock.ElapsedMilliseconds;
-            lastHeartbeatMs = lastSentMs;
-        }
-        finally
-        {
-            ctx.Unmap(staging, 0);
         }
     }
 
