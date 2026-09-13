@@ -17,9 +17,22 @@ import { Banner } from "../components/ui.jsx";
 import {
   ClipboardIcon,
   ExpandIcon,
+  Icon,
   KeyboardIcon,
   SendIcon,
 } from "../components/icons.jsx";
+
+// Icon "thu nhỏ" cho nút góc khi đang toàn màn hình (mũi tên gập vào trong)
+function CollapseIcon({ size }) {
+  return (
+    <Icon size={size ?? 20}>
+      <path d="M4 14h6v6" />
+      <path d="M20 10h-6V4" />
+      <path d="M14 10l7-7" />
+      <path d="M3 21l7-7" />
+    </Icon>
+  );
+}
 
 // Thông số stream duy nhất: 880px vừa nét trên màn phone, JPEG 55 đủ đọc chữ —
 // từng có 3 preset chọn tay nhưng không ai đổi (phản hồi user 13/09/2026).
@@ -513,39 +526,46 @@ export function ScreenPage() {
             </div>
           )}
           <span ref={echoRef} class="touch-echo" aria-hidden="true" />
-        </div>
-        {/* Thanh nút nằm DƯỚI khung hình (không đè lên màn hình PC) */}
-        <div class="stage-toolbar">
-          <button
-            class={`stage-btn ${panel === "keys" ? "on" : ""}`}
-            disabled={unavailable}
-            aria-label="Bàn phím"
-            aria-pressed={panel === "keys"}
-            onClick={() => togglePanel("keys")}
-          >
-            <KeyboardIcon size={20} />
-          </button>
-          <button
-            class={`stage-btn ${panel === "text" ? "on" : ""}`}
-            disabled={unavailable}
-            aria-label="Gõ hoặc dán chữ"
-            aria-pressed={panel === "text"}
-            onClick={openClipboard}
-          >
-            <ClipboardIcon size={20} />
-          </button>
-          <button
-            class={`stage-btn ${full ? "on" : ""}`}
-            onClick={toggleFull}
-            aria-label={full ? "Thoát toàn màn hình" : "Toàn màn hình"}
-            aria-pressed={full}
-          >
-            <ExpandIcon size={20} />
-          </button>
+          {/* Cụm nút MỜ góc trên-phải đè lên ảnh: Toàn màn hình luôn có (bấm
+              phóng to — mở rồi đổi thành Thu nhỏ); Bàn phím + Gõ chữ chỉ hiện
+              khi toàn màn hình vì mode thường 2 panel hiển thị SẴN dưới ảnh. */}
+          <div class="stage-corner">
+            {full && (
+              <>
+                <button
+                  class={`corner-btn ${panel === "keys" ? "on" : ""}`}
+                  disabled={unavailable}
+                  aria-label="Bàn phím"
+                  aria-pressed={panel === "keys"}
+                  onClick={() => togglePanel("keys")}
+                >
+                  <KeyboardIcon size={17} />
+                </button>
+                <button
+                  class={`corner-btn ${panel === "text" ? "on" : ""}`}
+                  disabled={unavailable}
+                  aria-label="Gõ hoặc dán chữ"
+                  aria-pressed={panel === "text"}
+                  onClick={openClipboard}
+                >
+                  <ClipboardIcon size={17} />
+                </button>
+              </>
+            )}
+            <button
+              class="corner-btn"
+              onClick={toggleFull}
+              aria-label={full ? "Thu nhỏ" : "Toàn màn hình"}
+              aria-pressed={full}
+            >
+              {full ? <CollapseIcon size={17} /> : <ExpandIcon size={17} />}
+            </button>
+          </div>
         </div>
 
-        {/* Panel trượt ra dưới khung hình — mỗi lần 1 panel, kiểu tab Input 9remote */}
-        {panel === "keys" && (
+        {/* Mode thường: bàn phím + gõ chữ HIỂN THỊ SẴN dưới ảnh (không cần bấm
+            mở box). Toàn màn hình: ẩn đi, bấm icon góc mới trượt ra đè lên. */}
+        {(!full || panel === "keys") && (
           <div class="screen-panel">
             <div class="screen-row">
               {MODS.map((m) => (
@@ -582,7 +602,7 @@ export function ScreenPage() {
           </div>
         )}
 
-        {panel === "text" && (
+        {(!full || panel === "text") && (
           <div class="screen-panel">
             <form
               class="screen-textrow"
@@ -606,9 +626,6 @@ export function ScreenPage() {
           </div>
         )}
       </div>
-      {full && (
-        <button class="btn danger small stage-exit" onClick={toggleFull}>Thoát toàn màn hình</button>
-      )}
 
       <div class="screen-bar">
         <span class={`badge ${status === "live" ? "ok" : status === "error" ? "err" : "busy"}`}>

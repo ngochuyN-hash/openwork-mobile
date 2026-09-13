@@ -1002,27 +1002,25 @@ label.field {
   background: var(--danger);
   box-shadow: 0 0 0 7px color-mix(in srgb, var(--danger) 30%, transparent);
 }
-/* Thanh nút nằm DƯỚI khung hình (yêu cầu: không che màn hình PC) — hàng ngang
-   giữa, phong cách card OpenWork. */
-.stage-toolbar {
+/* Cụm nút MỜ góc trên-phải đè lên ảnh: Toàn màn hình/Thu nhỏ luôn có; Bàn phím
+   + Gõ chữ chỉ hiện khi toàn màn hình (mode thường 2 panel hiển thị sẵn dưới ảnh). */
+.stage-corner {
+  position: absolute;
+  top: 8px;
+  right: 8px;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  width: max-content;
-  margin: 8px auto 10px;
-  padding: 4px;
-  border-radius: 14px;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
+  gap: 6px;
+  z-index: 4;
 }
-.stage-btn {
-  width: 44px;
-  height: 44px;
+.corner-btn {
+  width: 34px;
+  height: 34px;
   border: none;
   border-radius: 10px;
-  background: transparent;
-  color: var(--text);
+  background: rgba(10, 12, 14, 0.5);
+  backdrop-filter: blur(6px);
+  color: rgba(255, 255, 255, 0.92);
+  opacity: 0.72;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1030,24 +1028,33 @@ label.field {
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
-.stage-btn:active {
-  background: var(--bg-hover);
+.corner-btn:active {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.22);
 }
-.stage-btn:disabled {
-  opacity: 0.4;
+.corner-btn:disabled {
+  opacity: 0.3;
 }
-.stage-btn.on {
-  background: var(--primary);
-  color: var(--primary-fg);
+.corner-btn.on {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.26);
 }
 /* Toàn màn hình kiểu faux (Fullscreen API trên iOS chỉ dành cho <video>): cả
-   cụm hình + thanh nút cố định kín màn, ảnh co vừa trong vùng an toàn. */
+   cụm hình + nút góc cố định kín màn, ảnh co vừa trong vùng an toàn. Bấm nút
+   góc là lớp này "mở ra" (hiệu ứng phóng nhẹ), nút góc đổi thành Thu nhỏ. */
 .screen-view.view-full {
   position: fixed;
   inset: 0;
   z-index: 70;
   background: #000;
   padding: calc(8px + var(--sat)) calc(8px + var(--sar)) calc(8px + var(--sab)) calc(8px + var(--sal));
+  animation: stage-in 0.18s ease-out;
+}
+@keyframes stage-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
 }
 .view-full .screen-stage {
   flex: 1;
@@ -1062,26 +1069,6 @@ label.field {
   max-width: 100%;
   max-height: 100%;
   margin: auto;
-}
-/* Nền tối mờ để nổi trên hình (nền đen toàn màn hình), icon trắng cho đều. */
-.view-full .stage-toolbar {
-  margin: 8px auto 0;
-  background: rgba(10, 12, 14, 0.72);
-  border-color: rgba(255, 255, 255, 0.14);
-}
-.view-full .stage-btn {
-  color: #fff;
-}
-.stage-exit {
-  position: fixed;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: calc(16px + var(--sab));
-  z-index: 71;
-}
-/* Toàn màn hình: thanh nút chiếm đáy rồi -> nút thoát dịch lên trên thanh. */
-.screen-view.view-full ~ .stage-exit {
-  bottom: calc(80px + var(--sab));
 }
 /* Panel tự mở (Bàn phím / Gõ chữ) trong toàn màn hình: nổi góc dưới — người
    dùng chủ động bật nên được phép đè hình, tắt là trả lại hình nguyên vẹn. */
@@ -1120,12 +1107,6 @@ label.field {
   inset: 0;
   padding: 24px var(--sp-4);
 }
-.screen-view.vland .stage-toolbar {
-  flex-direction: column;
-  align-self: center;
-  margin: 0 0 0 8px;
-  padding: 6px 4px;
-}
 .screen-view.vland .screen-panel {
   /* Panel bàn phím/gõ chữ XOAY THEO CỬA SỔ MÁY (90° cùng chiều ảnh): lật máy
      là bàn phím nằm ngang dưới chân khung nhìn như app remote thật — world-bottom
@@ -1163,12 +1144,6 @@ label.field {
     height: auto;
     max-width: 100%;
     max-height: calc(100dvh - 185px);
-  }
-  .screen-view .stage-toolbar {
-    flex-direction: column;
-    align-self: center;
-    margin: 0 0 0 8px;
-    padding: 6px 4px;
   }
   .screen-view .screen-panel {
     position: absolute;
