@@ -568,6 +568,10 @@ export class ScreenService {
         this.stopWorker();
         if (this.dxgi) { void this.dxgi.stop(); }
         this.encodedHash = null;
+        // XÓA dimsCache: ensureReady coi "đã sẵn sàng" theo cache này — không xóa
+        // là daemon đã chết mà viewer kế vẫn tin khâu chụp đang chạy (14/09: mọi
+        // lần vào tab sau người đầu tiên chỉ nhận replay crop → màn hình đen).
+        this.dimsCache = null;
         // lastJpegByParams GIỮ NGUYÊN: viewer quay lại thấy ngay khung gần nhất
         // trong lúc daemon sống lại, thay vì màn trống chờ compile/chụp (~50-110KB RAM).
       }
