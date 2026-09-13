@@ -420,7 +420,7 @@ export async function owScreenStream({ w = 880, q = 55, signal, onFrame, onMeta,
       const type = buf[4];
       if (buf.length < 5 + len) break;
       const payload = buf.subarray(5, 5 + len);
-      if (type === 1) onFrame?.(new Blob([payload], { type: "image/jpeg" }));
+      if (type === 1) onFrame?.(payload); // [8B vùng-đổi][JPEG] — pushFrame tự bóc
       else if (type === 2) {
         try { onMeta?.(JSON.parse(text.decode(payload))); } catch {}
       } else if (type === 3) {

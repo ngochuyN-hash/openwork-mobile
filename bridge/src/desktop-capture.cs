@@ -162,7 +162,7 @@ class DesktopCapture
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    struct RECT { public int Left, Top, Right, Bottom; }
+    struct RECT { public int L, T, R, B; }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     struct DXGI_OUTPUT_DESC
@@ -248,11 +248,14 @@ class DesktopCapture
     static IntPtr smallRT, smallRTV, staging;
     // Hàng đợi pixel giữa capture-thread và encode-thread (pipeline song song:
     // acquire+GPU+map ~10ms || encode JPEG ~15ms — từng nối chuỗi giữ fps ở 21).
-    static System.Collections.Concurrent.ConcurrentQueue<byte[]> encodeQueue = new System.Collections.Concurrent.ConcurrentQueue<byte[]>();
+    class EncodeJob { public byte[] Pixels; public RECT? Crop; } // Crop=null → full frame
+    static System.Collections.Concurrent.ConcurrentQueue<EncodeJob> encodeQueue = new System.Collections.Concurrent.ConcurrentQueue<EncodeJob>();
     static volatile bool encodeAlive = false;
     static byte[] lastPixels;   // bản cache (row-pitch layout) để vẽ con trỏ khi màn đứng yên
     static int lastPitch;
     static long lastCursorX = long.MinValue, lastCursorY = long.MinValue;
+    static long lastKeyframeMs; // đầy 2s là ép nén nguyên khung (người vào trễ tự lành)
+    static volatile bool nextFull = true; // khung đầu + lệnh KEY (viewer mới) = full
     static long lastSentMs;     // gate 40fps
     static long lastHeartbeatMs;
     static volatile bool streaming = false;
@@ -315,6 +318,7 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                 streaming = false;
                 continue;
             }
+            if (line == "KEY") { nextFull = true; continue; } // viewer mới vào — khung kế nén full
             if (line.StartsWith("START|"))
             {
                 string[] p = line.Split('|');
@@ -377,14 +381,14 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                 if (hrO != S_OK) break;
                 DXGI_OUTPUT_DESC d;
                 op.GetDesc(out d);
-                trace.Append("[(").Append(d.DesktopCoordinates.Left).Append(",").Append(d.DesktopCoordinates.Top)
-                     .Append(" ").Append(d.DesktopCoordinates.Right - d.DesktopCoordinates.Left).Append("x")
-                     .Append(d.DesktopCoordinates.Bottom - d.DesktopCoordinates.Top)
+                trace.Append("[(").Append(d.DesktopCoordinates.L).Append(",").Append(d.DesktopCoordinates.T)
+                     .Append(" ").Append(d.DesktopCoordinates.R - d.DesktopCoordinates.L).Append("x")
+                     .Append(d.DesktopCoordinates.B - d.DesktopCoordinates.T)
                      .Append(") att=").Append(d.AttachedToDesktop).Append("] ");
                 if (d.AttachedToDesktop != 0)
                 {
                     adapter = ad; output = op;
-                    if (d.DesktopCoordinates.Left == 0 && d.DesktopCoordinates.Top == 0) goto found;
+                    if (d.DesktopCoordinates.L == 0 && d.DesktopCoordinates.T == 0) goto found;
                 }
                 oi++;
             }
@@ -394,8 +398,8 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
     found:
         DXGI_OUTPUT_DESC od;
         output.GetDesc(out od);
-        screenW = od.DesktopCoordinates.Right - od.DesktopCoordinates.Left;
-        screenH = od.DesktopCoordinates.Bottom - od.DesktopCoordinates.Top;
+        screenW = od.DesktopCoordinates.R - od.DesktopCoordinates.L;
+        screenH = od.DesktopCoordinates.B - od.DesktopCoordinates.T;
 
         IntPtr dev, ictx;
         // D3D11_DRIVER_TYPE_UNKNOWN=0 vì có adapter; BGRA_SUPPORT=0x20; SDK 7
@@ -589,7 +593,7 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                 }
                 else if (!contentChanged && cursorMoved && sendDue && lastPixels != null && encodeQueue.Count == 0)
                 {
-                    encodeQueue.Enqueue(null); // marker: encode từ cache + con trỏ mới
+                    Send(FRAME_UNCHANGED, null); // cursor-only không nén lại — heartbeat đủ
                     lastSentMs = now;
                 }
                 else
@@ -606,6 +610,59 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                 Thread.Sleep(500);
             }
         }
+    }
+
+    /**
+     * Vùng ĐỔI giữa 2 frame nhỏ (driver này KHÔNG trả metadata dirty rects —
+     * AMD trả TotalMetadataBufferSize=0, dính thật 13/09 — nên tự so như 9remote,
+     * nhưng trên frame đã thu nhỏ 1.9MB nên rẻ hơn nhiều lần). Trả null = giống hệt.
+     * Con trỏ cũ/mới cộng vào bbox vì cursor vẽ ở encode thread (CPU).
+     */
+    static unsafe RECT DiffBbox(byte[] prev, byte[] cur, int pitch, int w, int h)
+    {
+        RECT box = new RECT();
+        fixed (byte* a = prev, b = cur)
+        {
+            int firstRow = -1, lastRow = -1;
+            int words = (w * 4) / 8;
+            for (int y = 0; y < h; y++)
+            {
+                byte* ra = a + (long)y * pitch, rb = b + (long)y * pitch;
+                bool diff = false;
+                for (int i = 0; i < words; i++) if (((long*)ra)[i] != ((long*)rb)[i]) { diff = true; break; }
+                if (diff) { if (firstRow < 0) firstRow = y; lastRow = y; }
+            }
+            if (firstRow < 0) return new RECT { L = 0, T = 0, R = 0, B = 0 }; // giống hệt
+            int L = w, R = 0;
+            for (int x = 0; x < w; x += 4)
+            {
+                bool diff = false;
+                for (int y = firstRow; y <= lastRow; y++)
+                {
+                    byte* ra = a + (long)y * pitch + x * 4, rb = b + (long)y * pitch + x * 4;
+                    if (ra[0] != rb[0] || ra[1] != rb[1] || ra[2] != rb[2]) { diff = true; break; }
+                }
+                if (diff) { if (x < L) L = x; R = x + 4; }
+            }
+            if (R <= L) { L = 0; R = w; }
+            box = new RECT { L = L, T = firstRow, R = R, B = lastRow + 1 };
+        }
+        // cursor cũ/mới (tọa độ frame nhỏ)
+        double sx = (double)w / screenW, sy = (double)h / screenH;
+        int cw = Math.Max(20, (int)(GetSystemMetrics(SM_CXCURSOR) * sx)) + 6;
+        int ch = Math.Max(20, (int)(GetSystemMetrics(SM_CYCURSOR) * sy)) + 6;
+        long cx = lastCursorX, cy = lastCursorY;
+        if (cx > long.MinValue)
+        {
+            box.L = Math.Max(0, Math.Min(box.L, (int)(cx * sx) - cw));
+            box.T = Math.Max(0, Math.Min(box.T, (int)(cy * sy) - ch));
+            box.R = Math.Min(w, Math.Max(box.R, (int)(cx * sx) + cw));
+            box.B = Math.Min(h, Math.Max(box.B, (int)(cy * sy) + ch));
+        }
+        // đệm 10px mỗi chiều cho ấm áp JPEG block
+        box.L = Math.Max(0, box.L - 10); box.T = Math.Max(0, box.T - 10);
+        box.R = Math.Min(w, box.R + 10); box.B = Math.Min(h, box.B + 10);
+        return box;
     }
 
     /** Capture thread: chụp + render + map, đẩy pixel (hoặc null=cursor-only) vào queue. */
@@ -641,8 +698,37 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                 lastPitch = pitch;
             }
             finally { ctx.Unmap(staging, 0); }
-            while (encodeQueue.Count >= 3) { byte[] drop; encodeQueue.TryDequeue(out drop); }
-            encodeQueue.Enqueue(pixels);
+            while (encodeQueue.Count >= 3) { EncodeJob drop; encodeQueue.TryDequeue(out drop); }
+            RECT? crop = null;
+            long nowMs = Environment.TickCount;
+            if (nextFull || nowMs - lastKeyframeMs >= 2000)
+            {
+                nextFull = false;
+                lastKeyframeMs = nowMs;
+            }
+            else if (prevPixels != null && prevPixels.Length == pixels.Length)
+            {
+                RECT c = DiffBbox(prevPixels, pixels, lastPitch, targetW, targetH);
+                if (c.R > c.L && c.B > c.T)
+                {
+                    // vùng đổi quá lớn (video toàn màn) → full luôn, khỏiCrop overhead
+                    if ((long)(c.R - c.L) * (c.B - c.T) * 10 < 6L * targetW * targetH) crop = c;
+                }
+                // R==L == 0: hai frame giống hệt (chỉ cursor vẽ CPU) — coi như crop cursor
+                else if (lastCursorX > long.MinValue)
+                {
+                    double sx = (double)targetW / screenW, sy = (double)targetH / screenH;
+                    int cw = Math.Max(20, (int)(GetSystemMetrics(SM_CXCURSOR) * sx)) + 6;
+                    int ch = Math.Max(20, (int)(GetSystemMetrics(SM_CYCURSOR) * sy)) + 6;
+                    crop = new RECT
+                    {
+                        L = Math.Max(0, (int)(lastCursorX * sx) - cw), T = Math.Max(0, (int)(lastCursorY * sy) - ch),
+                        R = Math.Min(targetW, (int)(lastCursorX * sx) + cw), B = Math.Min(targetH, (int)(lastCursorY * sy) + ch),
+                    };
+                }
+            }
+            prevPixels = pixels;
+            encodeQueue.Enqueue(new EncodeJob { Pixels = pixels, Crop = crop });
             return true;
         }
         finally { Marshal.Release(tex); }
@@ -655,38 +741,60 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
         Stopwatch clock = Stopwatch.StartNew();
         while (!quitting)
         {
-            byte[] pixels;
-            if (!encodeQueue.TryDequeue(out pixels))
+            EncodeJob job;
+            if (!encodeQueue.TryDequeue(out job))
             {
                 Thread.Sleep(2);
                 continue;
             }
             try
             {
-                bool fromCache = pixels == null;
-                if (fromCache)
-                {
-                    if (lastPixels == null) continue;
-                    pixels = lastPixels;
-                }
-                else if (lastPixels == null || lastPixels.Length != pixels.Length)
-                {
-                    lastPixels = new byte[pixels.Length];
-                }
-                if (!fromCache) Buffer.BlockCopy(pixels, 0, lastPixels, 0, pixels.Length);
+                byte[] pixels = job.Pixels;
+                if (pixels == null) continue;
+                if (lastPixels == null || lastPixels.Length != pixels.Length) lastPixels = new byte[pixels.Length];
+                Buffer.BlockCopy(pixels, 0, lastPixels, 0, pixels.Length);
                 GCHandle pin = GCHandle.Alloc(lastPixels, GCHandleType.Pinned);
                 try
                 {
-                    using (Bitmap bmp = new Bitmap(targetW, targetH, lastPitch, PixelFormat.Format32bppArgb, pin.AddrOfPinnedObject()))
+                    using (Bitmap full = new Bitmap(targetW, targetH, lastPitch, PixelFormat.Format32bppArgb, pin.AddrOfPinnedObject()))
                     {
-                        DrawCursor(bmp);
-                        using (MemoryStream ms = new MemoryStream(1 << 16))
+                        int cx0 = 0, cy0 = 0, cw = targetW, ch = targetH;
+                        RECT? crop = job.Crop;
+                        Bitmap outBmp;
+                        if (crop != null)
                         {
-                            EncoderParameters ep = new EncoderParameters(1);
-                            ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)quality);
-                            bmp.Save(ms, JpegCodec(), ep);
-                            Send(FRAME_JPEG, ms.ToArray());
+                            RECT c = crop.Value;
+                            cx0 = c.L; cy0 = c.T; cw = c.R - c.L; ch = c.B - c.T;
+                            Bitmap small = new Bitmap(cw, ch);
+                            using (Graphics g = Graphics.FromImage(small))
+                            {
+                                // DrawPixelOffset nửa pixel cho nét khi copy nguyên-size
+                                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+                                g.DrawImage(full, new Rectangle(0, 0, cw, ch), new Rectangle(cx0, cy0, cw, ch), GraphicsUnit.Pixel);
+                            }
+                            outBmp = small;
                         }
+                        else outBmp = full;
+                        try
+                        {
+                            DrawCursorOffset(outBmp, cx0, cy0);
+                            using (MemoryStream ms = new MemoryStream(1 << 16))
+                            {
+                                EncoderParameters ep = new EncoderParameters(1);
+                                ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)quality);
+                                outBmp.Save(ms, JpegCodec(), ep);
+                                byte[] head = new byte[8];
+                                head[0] = (byte)cx0; head[1] = (byte)(cx0 >> 8);
+                                head[2] = (byte)cy0; head[3] = (byte)(cy0 >> 8);
+                                head[4] = (byte)cw; head[5] = (byte)(cw >> 8);
+                                head[6] = (byte)ch; head[7] = (byte)(ch >> 8);
+                                byte[] payload = new byte[8 + (int)ms.Length];
+                                System.Buffer.BlockCopy(head, 0, payload, 0, 8);
+                                System.Buffer.BlockCopy(ms.GetBuffer(), 0, payload, 8, (int)ms.Length);
+                                Send(FRAME_JPEG, payload);
+                            }
+                        }
+                        finally { if (outBmp != full) outBmp.Dispose(); }
                     }
                 }
                 finally { pin.Free(); }
@@ -701,6 +809,7 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
     }
 
     static long statAcquireMs, statCaptureMs, statFrames;
+    static byte[] prevPixels; // frame nhỏ trước đó (capture thread) — so vùng đổi
     static long statMark = Environment.TickCount;
     static void DumpStats()
     {
@@ -722,13 +831,14 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
         }
     }
 
-    static void DrawCursor(Bitmap bmp)
+    static void DrawCursor(Bitmap bmp) { DrawCursorOffset(bmp, 0, 0); }
+    static void DrawCursorOffset(Bitmap bmp, int offX, int offY)
     {
         CURSORINFO ci; ci.cbSize = Marshal.SizeOf(typeof(CURSORINFO)); ci.flags = 0; ci.hCursor = IntPtr.Zero; ci.ptScreenPos = new Point();
         if (!GetCursorInfo(ref ci) || ci.flags == 0 || ci.hCursor == IntPtr.Zero) return;
         float scale = (float)targetW / screenW;
-        int cx = (int)(ci.ptScreenPos.X * scale);
-        int cy = (int)(ci.ptScreenPos.Y * scale);
+        int cx = (int)(ci.ptScreenPos.X * scale) - offX;
+        int cy = (int)(ci.ptScreenPos.Y * scale) - offY;
         int w = Math.Max(8, (int)Math.Round(GetSystemMetrics(SM_CXCURSOR) * scale));
         int h = Math.Max(8, (int)Math.Round(GetSystemMetrics(SM_CYCURSOR) * scale));
         using (Graphics g = Graphics.FromImage(bmp))

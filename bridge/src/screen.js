@@ -437,6 +437,7 @@ export class ScreenService {
     // Khung gần nhất cùng tham số -> cho xem ngay không phải đợi nhịp chụp
     const key = `${width}x${quality}`;
     if (this.lastJpegByParams.get(key)) this.sendTo(viewer, FRAME_JPEG, this.lastJpegByParams.get(key));
+    this.dxgi?.requestKey(); // nền nguyên khung cho người vừa vào (khỏi chờ keyframe 2s)
 
     void this.ensureReady().catch((e) => {
       this.sendTo(viewer, FRAME_ERROR, Buffer.from(JSON.stringify({ message: String(e.message ?? e) })));
@@ -469,6 +470,7 @@ export class ScreenService {
     })));
     const key = `${viewer.width}x${viewer.quality}`;
     if (this.lastJpegByParams.get(key)) this.sendTo(viewer, FRAME_JPEG, this.lastJpegByParams.get(key));
+    this.dxgi?.requestKey();
     void this.ensureReady().catch(() => {});
     this.touch();
     return viewer;

@@ -72,7 +72,7 @@ export function ScreenPage() {
   const [status, setStatus] = useState("connecting"); // connecting|live|paused|error|unavailable
   const [errorMsg, setErrorMsg] = useState("");
   const [fps, setFps] = useState(0);
-  const [url, setUrl] = useState("");
+  const [hasFrame, setHasFrame] = useState(false); // canvas đã có khung đầu
   const [text, setText] = useState("");
   const [full, setFull] = useState(false); // toàn màn hình kiểu faux (áp dụng mọi trình duyệt)
   const [capW, setCapW] = useState(880); // bề rộng ảnh stream — tăng theo zoom để giữ nét
@@ -224,14 +224,36 @@ export function ScreenPage() {
     panSX: 0, panSY: 0, plx0: 0, ply0: 0,
     plminX: 0, plmaxX: 0, plminY: 0, plmaxY: 0,
   });
-  const urlRef = useRef("");
-  // Gỡ object URL khung cũ + gắn URL mới — dùng CHUNG cho cả hai đường truyền
-  // (HTTP stream và datachannel WebRTC) để phần hiển thị không phụ thuộc đường.
-  const pushFrame = useCallback((blob) => {
-    const next = URL.createObjectURL(blob);
-    if (urlRef.current) URL.revokeObjectURL(urlRef.current);
-    urlRef.current = next;
-    setUrl(next);
+  const drawChain = useRef(Promise.resolve()); // vẽ tuần tự — crop về sau không nhảy hàng trước crop trước nó
+  // Ghép khung lên canvas — dùng CHUNG cho cả hai đường truyền. Payload từ v4.1:
+  // [2B x][2B y][2B w][2B h] LE + JPEG — vùng đổi vẽ ĐÈ đúng chỗ, vùng đứng yên
+  // giữ nguyên trên canvas (không phải truyền lại như <img> src nguyên khung).
+  const pushFrame = useCallback((data) => {
+    const u8 = data instanceof Uint8Array ? data : new Uint8Array(data);
+    if (u8.length < 9) return;
+    const x = u8[0] | (u8[1] << 8), y = u8[2] | (u8[3] << 8);
+    const w = u8[4] | (u8[5] << 8), h = u8[6] | (u8[7] << 8);
+    if (!w || !h) return;
+    drawChain.current = drawChain.current.then(async () => {
+      try {
+        const bmp = await createImageBitmap(new Blob([u8.subarray(8)], { type: "image/jpeg" }));
+        const c = imgRef.current;
+        if (c) {
+          if (x === 0 && y === 0 && (c.width !== w || c.height !== h)) {
+            c.width = w; // resize tự xóa canvas — chỉ khi đúng khung full từ gốc
+            c.height = h;
+          }
+          c.getContext("2d").drawImage(bmp, x, y, w, h);
+        }
+        bmp.close?.();
+        setHasFrame(true);
+      } catch {}
+    });
+  }, []);
+  // Meta đổi cỡ ảnh (zoom sâu v3.0 / kết nối mới) — canvas theo cỡ mới.
+  const fitCanvas = useCallback((w, h) => {
+    const c = imgRef.current;
+    if (c && w > 0 && h > 0 && (c.width !== w || c.height !== h)) { c.width = w; c.height = h; }
   }, []);
   const ctlRef = useRef(null); // datachannel "control" khi WebRTC active
   const wrtcRef = useRef(null); // mirror của wrtc cho effect (không stale)
@@ -275,13 +297,16 @@ export function ScreenPage() {
             w: capW,
             q,
             signal: abort.signal,
-            onFrame: (blob) => {
+            onFrame: (payload) => {
               frameCount += 1;
               setStatus("live");
-              pushFrame(blob);
+              pushFrame(payload);
             },
             onUnchanged: () => setStatus((s) => (s === "live" ? "live" : s)),
-            onMeta: (meta) => setInfo((i) => (i ? { ...i, screen: { width: meta.screenW, height: meta.screenH } } : i)),
+            onMeta: (meta) => {
+              if (meta.shotW > 0 && meta.shotH > 0) fitCanvas(meta.shotW, meta.shotH);
+              setInfo((i) => (i ? { ...i, screen: { width: meta.screenW, height: meta.screenH } } : i));
+            },
             onError: (m) => setErrorMsg(m),
           });
           if (runIdRef.current !== myRun) return;
@@ -378,7 +403,10 @@ export function ScreenPage() {
         ctl.onmessage = (e) => {
           let m = null;
           try { m = JSON.parse(e.data); } catch { return; }
-          if (m.t === "meta") setInfo((i) => (i ? { ...i, screen: { width: m.screenW, height: m.screenH } } : i));
+          if (m.t === "meta") {
+            if (m.shotW > 0 && m.shotH > 0) fitCanvas(m.shotW, m.shotH);
+            setInfo((i) => (i ? { ...i, screen: { width: m.screenW, height: m.screenH } } : i));
+          }
           else if (m.t === "pong") setPing(Math.max(0, Math.round(performance.now() - m.ts)));
           else if (m.t === "ierr") setErrorMsg(m.m);
         };
@@ -386,7 +414,7 @@ export function ScreenPage() {
           frameCount += 1;
           setStatus("live");
           setErrorMsg("");
-          pushFrame(new Blob([e.data], { type: "image/jpeg" }));
+          pushFrame(e.data);
         };
         pingTimer = setInterval(() => {
           try { ctl.send(JSON.stringify({ t: "ping", ts: performance.now() })); } catch {}
@@ -766,12 +794,10 @@ export function ScreenPage() {
     <div ref={viewRef} class={`screen-view ${full ? "view-full " : ""}${vland ? "vland" : ""}`}>
         {/* stage tự ôm cao đúng ảnh (hết band đen); placeholder tự giữ tỉ lệ */}
         <div ref={stageRef} class="screen-stage">
-          {url ? (
-            <img
+          {hasFrame ? (
+            <canvas
               ref={imgRef}
               class="screen-img control"
-              src={url}
-              alt="Màn hình máy tính"
               draggable={false}
               style={vland && vbox ? {
                 // khung ảnh TRƯỚC xoay: ngang pw'×ph' (sw/sh) — xoay 90° xong

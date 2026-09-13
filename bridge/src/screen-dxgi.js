@@ -65,7 +65,7 @@ export class DxgiCaptureService {
     }
     await writeFile(join(dir, "desktop-capture.cs"), source, "utf8");
     await execFileP(csc, [
-      "/nologo", "/target:exe", "/platform:anycpu",
+      "/nologo", "/unsafe", "/target:exe", "/platform:anycpu",
       "/r:System.Drawing.dll",
       `/out:${exe}`, join(dir, "desktop-capture.cs"),
     ]);
@@ -156,6 +156,11 @@ export class DxgiCaptureService {
       } catch {}
     }, 500);
     this.reconfigTimer.unref?.();
+  }
+
+  /** Xin khung FULL kế tiếp (viewer vừa vào cần nền nguyên khung, đừng chờ keyframe 2s). */
+  requestKey() {
+    try { this.proc?.stdin.write("KEY\n"); } catch {}
   }
 
   async stop() {
