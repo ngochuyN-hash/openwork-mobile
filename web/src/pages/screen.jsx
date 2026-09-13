@@ -499,9 +499,16 @@ export function ScreenPage() {
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [exitFull]);
 
+  // Dọn lúc rời trang. Cleanup unmount TUYỆT ĐỐI không được ném lỗi: Preact
+  // chạy cleanup NGAY GIỮA đường tháo DOM, ném là cả nhánh render chết giữa
+  // chừng — DOM trang cũ thành "ma" đè trang mới, bấm tab kế vẫn thấy trang cũ
+  // (14/09: dòng urlRef — tàn tích đời <img> dùng objectURL, đời canvas đã bỏ —
+  // ném ReferenceError đúng chỗ đó mỗi lần rời tab Screen). Nhân thể: nếu user
+  // lỡ routes đi khi còn toàn màn hình thì nhả khoá xoay + thoát fullscreen.
   useEffect(() => () => {
     clearTimeout(capTimer.current);
-    if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    try { screen.orientation?.unlock?.(); } catch {}
+    try { if (document.fullscreenElement) void document.exitFullscreen(); } catch {}
   }, []);
 
   // Gửi lệnh điều khiển: WebRTC còn sống thì đi datachannel (một chiều, tức
