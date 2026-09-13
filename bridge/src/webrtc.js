@@ -1,15 +1,79 @@
 // WebRTC P2P cho tab Màn hình — phone và PC tự nối trực tiếp qua UDP, bridge
 // chỉ làm mối SDP/ICE đúng MỘT lượt (POST /api/webrtc/signal). Sau đó:
 //   - datachannel "screen"  : JPEG frame nhị phân PC -> phone (1 message = 1 frame)
-//   - datachannel "control" : JSON hai chiều — hello/ping/input/đứng-yêu
-// Đường hình KHÔNG qua tunnel/worker nữa → latency = mạng thật giữa 2 máy
-// (cùng WiFi ~2-10ms; xa xa vẫn tốt hơn đường CF nhiều lần). Cùng thư viện
-// node-datachannel mà 9remote dùng, STUN công khai để xuyên NAT nhẹ.
+//   - datachannel "control" : JSON hai chiều — hello/ping/probe/input/đứng-yêu
+// Đường hình KHÔNG qua tunnel/worker nữa → latency = mạng thật giữa 2 máy.
+// Cùng thư viện node-datachannel mà 9remote dùng.
+//
+// ICE: STUN công khai đục NAT nhẹ. Khi phone ở MẠNG KHÁC (4G/WiFi nhà khác) mà
+// cả hai bên dính NAT đối xứng (CGNAT nhà mạng) thì đục thẳng fail — cần TURN
+// TRUNG CHUYỂN. Chủ máy cấu hình Cloudflare TURN key trong config.json
+// (turnKeyId + turnToken, dashboard → Calls → TURN): bridge tự sinh credential
+// tạm 24h và phát cho phone qua GET /api/webrtc/ice (1 request nhỏ/lượt xem,
+// không ảnh hưởng nhịp hình). CF có node tại VN nên đường relay ~20-60ms —
+// openrelay free đã chết từ VN (test 13/09: 0 relay candidate cả UDP lẫn TCP).
 import { randomBytes } from "node:crypto";
+import { loadConfig } from "./config.js";
 
 const STUN_SERVERS = ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"];
 const GATHER_TIMEOUT_MS = 2500; // chờ gom candidate của mình (non-trickle)
 const SIGNAL_TIMEOUT_MS = 6000; // trần chung của cả lượt làm mối
+const TURN_TTL_S = 86_400; // credential CF sống 24h
+
+let iceCache = null; // { iceServers, expiresAt } — memoize giữa các lượt
+
+/**
+ * Danh sách iceServers (dạng chuẩn browser: {urls, username, credential}).
+ * Có TURN CF khi config có key; không thì STUN thôi (hành vi cũ).
+ */
+export async function webrtcIceServers() {
+  if (iceCache && iceCache.expiresAt > Date.now() + 60_000) return iceCache.iceServers;
+  const config = loadConfig();
+  if (config.turnKeyId && config.turnToken) {
+    try {
+      const res = await fetch(
+        `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(config.turnKeyId)}/credentials/generate-ice-servers`,
+        {
+          method: "POST",
+          headers: { authorization: "Bearer " + config.turnToken, "content-type": "application/json" },
+          body: JSON.stringify({ ttl: TURN_TTL_S }),
+        },
+      );
+      if (res.ok) {
+        const data = await res.json();
+        // CF trả cả URL port 53 — browser chặn, mà mình non-trickle nên URL
+        // chết làm chậm gom candidate: lọc bỏ trước khi phát (docs CF dặn).
+        const iceServers = (Array.isArray(data.iceServers) ? data.iceServers : [])
+          .map((s) => ({ urls: Array.isArray(s.urls) ? s.urls : [s.urls], username: s.username, credential: s.credential }))
+          .map((s) => ({ ...s, urls: s.urls.filter((u) => !/:53([/?]|$)/.test(String(u))) }))
+          .filter((s) => s.urls.length);
+        if (iceServers.length) {
+          iceCache = { iceServers, expiresAt: Date.now() + (TURN_TTL_S - 3600) * 1000 };
+          return iceCache.iceServers;
+        }
+      }
+    } catch {
+      // CF không trả lời → rơi về STUN (đường direct vẫn chạy khi NAT cho phép)
+    }
+  }
+  return [{ urls: [...STUN_SERVERS] }];
+}
+
+/** Đổi iceServers browser-style thành chuỗi url nhúng user:pass cho node-datachannel. */
+function iceServersToNdc(iceServers) {
+  const out = [];
+  for (const s of iceServers) {
+    for (const u of s.urls ?? []) {
+      if (s.username && s.credential) {
+        // credential CF là hex + username hex — an toàn để nhúng thẳng URL
+        out.push(String(u).replace(/^(turn[s]?):/i, `$1:${s.username}:${s.credential}@`));
+      } else {
+        out.push(String(u));
+      }
+    }
+  }
+  return out;
+}
 
 export class WebRtcService {
   constructor(screen) {
@@ -30,7 +94,7 @@ export class WebRtcService {
     }
     const ndc = mod.default ?? mod;
     const pc = new ndc.PeerConnection("owp-" + randomBytes(4).toString("hex"), {
-      iceServers: STUN_SERVERS,
+      iceServers: iceServersToNdc(await webrtcIceServers()),
     });
 
     let localDesc = null;
@@ -92,6 +156,10 @@ export class WebRtcService {
       if (pc._viewer) { pc._viewer.width = pc._hello.w; pc._viewer.quality = pc._hello.q; }
     } else if (m.t === "ping") {
       try { ch.sendMessage(JSON.stringify({ t: "pong", ts: m.ts })); } catch {}
+    } else if (m.t === "probe") {
+      // Đo phản hồi bấm→hình: đánh thức vòng chụp NGAY nhưng KHÔNG có lệnh
+      // input thật (không di chuột trên máy chủ) — phone chặn giờ tới frame kế.
+      this.screen.poke();
     } else if (m.t === "input") {
       // Lệnh điều khiển đi đường trực tiếp — một chiều, không chờ hồi âm; lỗi
       // mới báo lại. poke() nằm trong screen.input() nên hình chụp ngay nhịp kế.

@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 // Tự test đường WebRTC datachannel của bridge KHÔNG cần phone thật: script này
-// đóng vai phone (bên offer), bắt tay qua /api/webrtc/signal, rồi đo thật
-// fps + KB/s + ping trên datachannel "screen"/"control".
+// đóng vai phone (bên offer), lấy ICE server từ /api/webrtc/ice (có TURN CF
+// khi chủ máy gắn key), bắt tay qua /api/webrtc/signal, rồi đo thật:
+//   - fps + KB/s + ping (datachannel "screen"/"control")
+//   - ĐỘ TRỄ PHẢN HỒI: gửi "probe" (đánh thức vòng chụp như một cú bấm) và
+//     chặn giờ tới frame kế — con số "bấm → thấy hình" mà người dùng cảm nhận.
 //   node scripts/screen-webrtc-selftest.mjs <base> <mobileToken> [số giây]
 import NodeDataChannel from "node-datachannel";
 
@@ -12,10 +15,29 @@ if (!TOKEN) {
   console.error("dùng: node scripts/screen-webrtc-selftest.mjs <base> <mobileToken> [giây]");
   process.exit(1);
 }
+const authHeaders = { authorization: "Bearer " + TOKEN, "content-type": "application/json" };
 
-const pc = new NodeDataChannel.PeerConnection("selftest", {
-  iceServers: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"],
-});
+// ICE server đúng như phone thật: hỏi bridge (STUN + TURN CF nếu có key).
+let iceStrings = ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"];
+try {
+  const r = await fetch(BASE + "/api/webrtc/ice", { headers: authHeaders });
+  if (r.ok) {
+    const p = await r.json();
+    const list = [];
+    for (const s of p.iceServers ?? []) {
+      for (const u of Array.isArray(s.urls) ? s.urls : [s.urls]) {
+        list.push(s.username && s.credential ? String(u).replace(/^(turn[s]?):/i, `$1:${s.username}:${s.credential}@`) : String(u));
+      }
+    }
+    if (list.length) {
+      iceStrings = list;
+      const hasTurn = list.some((u) => u.startsWith("turn"));
+      console.log(`ICE: ${list.length} server${hasTurn ? " (CÓ TURN — xuyên NAT được)" : " (chỉ STUN)"}`);
+    }
+  }
+} catch {}
+
+const pc = new NodeDataChannel.PeerConnection("selftest", { iceServers: iceStrings });
 const candidates = [];
 pc.onLocalCandidate((candidate, mid) => candidates.push({ candidate, mid }));
 const scr = pc.createDataChannel("screen");
@@ -31,7 +53,7 @@ await new Promise((res) => {
 
 const res = await fetch(BASE + "/api/webrtc/signal", {
   method: "POST",
-  headers: { authorization: "Bearer " + TOKEN, "content-type": "application/json" },
+  headers: authHeaders,
   body: JSON.stringify({ sdp: pc.localDescription().sdp, type: "offer", candidates }),
 });
 if (!res.ok) {
@@ -46,21 +68,34 @@ for (const c of ans.candidates ?? []) {
 console.log("đã bắt tay signal — chờ datachannel mở...");
 
 let frames = 0, bytes = 0, tick = Date.now(), lastFps = 0, pings = [];
+let probeSentAt = 0; // >0 = đang chờ frame phản hồi probe
+const probeTimes = [];
 scr.onOpen(() => {
   console.log("datachannel screen MỞ — bắt đầu nhận frame");
   ctl.sendMessage(JSON.stringify({ t: "hello", w: 880, q: 55 }));
   setInterval(() => {
     try { ctl.sendMessage(JSON.stringify({ t: "ping", ts: Date.now() })); } catch {}
   }, 2000);
+  // Đo phản hồi bấm→hình: mỗi 4s một probe (đánh thức vòng chụp, không có
+  // lệnh input thật — không làm phiền máy chủ).
+  setInterval(() => {
+    try { probeSentAt = Date.now(); ctl.sendMessage(JSON.stringify({ t: "probe" })); } catch {}
+  }, 4000);
 });
 scr.onMessage((msg) => {
   frames++;
   bytes += msg.length ?? msg.byteLength ?? 0;
+  if (probeSentAt > 0) {
+    probeTimes.push(Date.now() - probeSentAt);
+    probeSentAt = 0;
+  }
   const now = Date.now();
   if (now - tick >= 1000) {
     lastFps = frames;
     const pingAvg = pings.length ? Math.round(pings.reduce((a, b) => a + b, 0) / pings.length) + "ms" : "…";
-    console.log(`fps: ${frames} | ${(bytes / 1024).toFixed(0)} KB/s | ping TB: ${pingAvg}`);
+    const probeAvg = probeTimes.length
+      ? `probe→frame TB ${Math.round(probeTimes.reduce((a, b) => a + b, 0) / probeTimes.length)}ms (min ${Math.min(...probeTimes)})` : "";
+    console.log(`fps: ${frames} | ${(bytes / 1024).toFixed(0)} KB/s | ping TB: ${pingAvg} ${probeAvg}`);
     frames = 0; bytes = 0; tick = now; pings = [];
   }
 });
@@ -78,6 +113,12 @@ setTimeout(() => {
       console.log("candidate pair:", (sp.local.type ?? "?") + " " + sp.local.ip, "<->", (sp.remote.type ?? "?") + " " + sp.remote.ip, "| rtt():", pc.rtt() + "ms");
     }
   } catch {}
+  if (probeTimes.length) {
+    const avg = Math.round(probeTimes.reduce((a, b) => a + b, 0) / probeTimes.length);
+    console.log(`phản hồi bấm→hình (probe): TB ${avg}ms | min ${Math.min(...probeTimes)}ms | max ${Math.max(...probeTimes)}ms | ${probeTimes.length} lần đo`);
+  } else {
+    console.log("phản hồi bấm→hình: không đo được (màn hình đứng yên cả buổi — probe chỉ về frame ĐỔI)");
+  }
   console.log(`xong — fps giây cuối: ${lastFps}`);
   process.exit(0);
 }, DURATION_MS);

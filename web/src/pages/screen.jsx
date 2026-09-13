@@ -34,7 +34,7 @@
 // khóa nút; badge hiện ping thật đo trên datachannel.
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { createPortal } from "preact/compat";
-import { apiScreenInfo, owScreenInput, owScreenStream, owWebrtcSignal } from "../api.js";
+import { apiScreenInfo, owScreenInput, owScreenStream, owWebrtcIce, owWebrtcSignal } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 import {
   ExpandIcon,
@@ -339,9 +339,11 @@ export function ScreenPage() {
     };
     (async () => {
       try {
-        pc = new RTCPeerConnection({
-          iceServers: [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }],
-        });
+        // ICE server (kể cả TURN CF khi chủ máy đã gắn key) lấy từ bridge
+        // TRƯỚC khi dựng offer — cần ngay lúc gom candidate. Bridge không
+        // cấu hình thì STUN công khai như cũ.
+        const ice = (await owWebrtcIce()) ?? [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
+        pc = new RTCPeerConnection({ iceServers: ice });
         const ctl = pc.createDataChannel("control");
         const scr = pc.createDataChannel("screen");
         const candidates = [];

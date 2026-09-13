@@ -438,7 +438,7 @@ async function handleRequest(req, res) {
         return;
       }
       try {
-        await screen.ensureMonitor();
+        await screen.ensureReady();
       } catch (error) {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ available: false, message: String(error.message ?? error) }));
@@ -473,6 +473,21 @@ async function handleRequest(req, res) {
     // WebRTC làm mối (SDP/ICE một lượt, non-trickle): sau khi bắt tay xong,
     // frame + lệnh đi đường trực tiếp phone <-> PC qua datachannel, không qua
     // tunnel/worker — latency bằng mạng thật giữa hai máy (cùng WiFi ~2-10ms).
+    if (req.method === "GET" && pathname === "/api/webrtc/ice") {
+      // Danh sách ICE server cho phone DỰNG offer (gọi trước khi bắt tay —
+      // có TURN Cloudflare khi chủ máy đã cấu hình key, không thì STUN thôi).
+      try {
+        const { webrtcIceServers } = await import("./webrtc.js");
+        const ice = await webrtcIceServers();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ iceServers: ice }));
+      } catch (error) {
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: "ice_error", message: String(error?.message ?? error) }));
+      }
+      return;
+    }
+
     if (req.method === "POST" && pathname === "/api/webrtc/signal") {
       if (!webrtc) {
         const { WebRtcService } = await import("./webrtc.js");

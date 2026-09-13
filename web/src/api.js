@@ -357,6 +357,22 @@ export async function owScreenInput(payload) {
 }
 
 /**
+ * Lấy danh sách ICE server (STUN + TURN nếu chủ máy đã cấu hình Cloudflare
+ * TURN key) — gọi 1 lần trước khi dựng offer, để phone ở mạng khác vẫn đục
+ * được NAT gắt qua relay CF. Lỗi thì trả null, caller dùng STUN mặc định.
+ */
+export async function owWebrtcIce() {
+  try {
+    const res = await fetch("/api/webrtc/ice", { headers: authHeaders() });
+    if (!res.ok) return null;
+    const p = await res.json();
+    return Array.isArray(p?.iceServers) && p.iceServers.length ? p.iceServers : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Làm mối WebRTC: gửi offer + candidate của phone, nhận answer + candidate của
  * bridge. Sau khi bắt tay xong, frame/lệnh đi datachannel trực tiếp phone<->PC.
  */

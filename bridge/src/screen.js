@@ -16,6 +16,7 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { platform } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import { bridgeDataDir } from "./config.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -23,12 +24,15 @@ const IS_WINDOWS = platform() === "win32";
 
 const MAX_VIEWERS = 3; // chặn 1 người mở nhiều tab phá CPU
 const IDLE_STOP_MS = 90_000; // không ai xem 90s -> dừng chụp + kill daemon
-// Nhịp chụp: chụp+nén giờ chỉ ~30ms (đổi hình) / ~20ms (đứng yên) nhờ hash BMP,
-// nên trần hạ 80→55ms; có lệnh điều khiển thì burst 40ms trong ~1.5s cho hiệu
-// ứng bấm hiện gần tức thì rồi tự lùi về nhịp thường.
-const FRAME_MIN_INTERVAL = 55;
-const BURST_INTERVAL = 40;
+// Kiến trúc v3.2: khâu CHỤP chạy trong worker thread riêng (screen-capture.worker.js)
+// nên không còn chặn event loop — nhịp dưới là NHỊP CHỤP; việc nén (sharp) chạy
+// trên threadpool libuv và pipeline chồng với chụp: throughput = max(chụp, nén).
+const CAPTURE_MIN_MS = 25; // hình đang đổi: chụp mỗi 25ms (~40 hình/s trần chụp)
+const CAPTURE_IDLE_MS = 80; // màn đứng yên >=8 khung -> giãn nhịp cho đỡ CPU
+const CAPTURE_BURST_MS = 15; // sau lệnh điều khiển: chụp liên tục 1.5s — hiệu ứng bấm hiện gần tức thì
 const BURST_MS = 1500;
+const IDLE_AFTER_STILLS = 8;
+const MAX_PENDING_FRAMES = 2; // hàng chờ nén đầy thì vứt khung CŨ — luôn nén khung mới nhất
 const MAX_PENDING_BYTES = 3_000_000; // viewer chậm quá thì đá (client tự nối lại)
 
 export const FRAME_UNCHANGED = 0;
@@ -156,30 +160,182 @@ export class ScreenService {
   constructor() {
     this.available = IS_WINDOWS;
     this.setupError = null;
-    this.monitor = null; // { ref, width, height }
     this.viewers = new Set();
-    this.looping = false;
-    this.lastRawHash = null; // hash khung THÔ gần nhất — raw giữ nguyên thì JPEG chắc chắn giống
+    this.dimsCache = null; // {width,height} vật lý — cập nhật từ mỗi lần chụp của worker
+    this.daemonDims = null; // kích thước theo góc nhìn daemon (DPI) — ưu tiên cho tọa độ input
+    this.worker = null; // worker thread chụp màn hình chính (screen-capture.worker.js)
+    this.workers = new Set(); // turbo: tối đa 2 workers khi nội dung động (BitBlt GDI ~85-105ms/khung nhưng KHÔNG serialize — đo thật 1.74× với 2 thread)
+    this.workerWaiters = []; // resolve khi có cap đầu tiên (ensureReady)
+    this.workerStarts = []; // timestamp các lần start — chống vòng restart vô hạn
+    this.changedStreak = 0; // chuỗi khung ĐỔI liên tiếp (bật turbo worker)
+    this.unchangedStreak = 0; // chuỗi khung đứng yên (tắt turbo, tiết kiệm CPU)
+    this.pendingEncode = []; // hàng khung chờ nén, tối đa MAX_PENDING_FRAMES
+    this.encodeBusy = false;
+    this.encodedHash = null; // hash khung mới nhất ĐÃ nén+gửi
+    this.errorStreak = 0;
     this.lastJpegByParams = new Map();
     this.daemon = null; // { proc, pending: Map }
     this.daemonSeq = 0;
     this.idleTimer = null;
-    this._wake = null; // hàm đánh thức waitPoke() sớm — poke() gọi khi có input
-    this.burstUntil = 0; // nhịp BURST_INTERVAL kéo dài đến đây sau mỗi lệnh điều khiển
   }
 
   dims() {
-    return this.monitor ? { width: this.monitor.width, height: this.monitor.height } : null;
+    return this.dimsCache;
   }
 
-  async ensureMonitor() {
-    if (this.monitor) return this.monitor;
-    const mod = await import("node-screenshots");
-    const all = (mod.Monitor ?? mod.default?.Monitor).all() ?? [];
-    const ref = all.find((m) => m.isPrimary?.()) ?? all[0];
-    if (!ref) throw new Error("Không tìm thấy màn hình nào");
-    this.monitor = { ref, width: ref.width(), height: ref.height() };
-    return this.monitor;
+  /** Kích thước cho chuẩn hóa tọa độ input: daemon (DPI-aware) thắng vật lý. */
+  inputDims() {
+    return this.daemonDims ?? this.dimsCache;
+  }
+
+  /**
+   * Bảo đảm khâu chụp đã chạy (worker sống + đã có khung đầu tiên để biết kích
+   * thước màn). Thay ensureMonitor cũ: monitor giờ nằm trong worker.
+   */
+  async ensureReady(timeoutMs = 8000) {
+    if (!this.available) throw new Error(this.setupError ?? "Chỉ hỗ trợ Windows");
+    if (this.dimsCache) return;
+    this.startWorker();
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("worker chụp màn hình không đáp ứng")), timeoutMs);
+      this.workerWaiters.push(() => { clearTimeout(timer); resolve(); });
+    });
+  }
+
+  startWorker() {
+    if (this.workers.size >= 2) return;
+    // Chống vòng restart vô hạn (worker chết ngay lập tức): tối đa 3 lần / 10s.
+    const now = Date.now();
+    this.workerStarts = this.workerStarts.filter((t) => now - t < 10_000);
+    if (this.workerStarts.length >= 3) {
+      this.broadcast(FRAME_ERROR, Buffer.from(JSON.stringify({ message: "Worker chụp màn hình chết lặp lại — bỏ thử" })));
+      return;
+    }
+    this.workerStarts.push(now);
+    this.pendingEncode = [];
+    this.encodedHash = null;
+    const worker = new Worker(new URL("./screen-capture.worker.js", import.meta.url), {
+      workerData: { minMs: CAPTURE_MIN_MS, idleMs: CAPTURE_IDLE_MS, burstMs: CAPTURE_BURST_MS, idleAfter: IDLE_AFTER_STILLS },
+    });
+    this.workers.add(worker);
+    this.worker = worker;
+    worker.on("message", (m) => this.onWorkerMessage(m));
+    worker.on("error", (error) => {
+      this.setupError = String(error?.message ?? error);
+      this.broadcast(FRAME_ERROR, Buffer.from(JSON.stringify({ message: this.setupError })));
+    });
+    worker.on("exit", () => {
+      this.workers.delete(worker);
+      if (this.worker === worker) this.worker = this.workers.size ? [...this.workers][0] : null;
+      if (this.viewers.size > 0 && this.viewers.size && this.workers.size === 0) {
+        // Worker chính chết giữa phiên xem → dựng lại (turbo nếu cần sẽ tự bật).
+        this.startWorker();
+      }
+    });
+  }
+
+  /** Dừng một worker (mặc định con turbo — set còn lại con đầu). */
+  stopWorker(one = false) {
+    const list = [...this.workers];
+    const victims = one && list.length > 1 ? [list[list.length - 1]] : list;
+    for (const worker of victims) {
+      this.workers.delete(worker);
+      if (this.worker === worker) this.worker = this.workers.size ? [...this.workers][0] : null;
+      try { worker.postMessage({ cmd: "stop" }); } catch {}
+      const w = worker;
+      setTimeout(() => { try { void w.terminate(); } catch {} }, 2000).unref();
+    }
+    if (!one || this.workers.size === 0) {
+      this.pendingEncode = [];
+      this.encodeBusy = false;
+      this.encodedHash = null;
+    }
+  }
+
+  onWorkerMessage(m) {
+    if (m?.t === "cap") {
+      this.errorStreak = 0;
+      this.touch();
+      const dimsChanged = !this.dimsCache || this.dimsCache.width !== m.w || this.dimsCache.height !== m.h;
+      this.dimsCache = { width: m.w, height: m.h };
+      if (this.workerWaiters.length) for (const r of this.workerWaiters.splice(0)) r();
+      if (dimsChanged && this.viewers.size > 0) this.broadcastMeta();
+      if (!m.changed) {
+        this.changedStreak = 0;
+        this.unchangedStreak += 1;
+        // Màn tĩnh đủ lâu → ngừng worker turbo (đỡ CPU; worker chính vẫn canh đổi).
+        if (this.unchangedStreak >= IDLE_AFTER_STILLS && this.workers.size > 1) this.stopWorker(true);
+        // Màn đứng yên: chỉ bắn marker "không đổi" khi hết hàng nén (cosmetic,
+        // client dùng để giữ nhịp đếm; khung thật mới quan trọng).
+        if (!this.encodeBusy && this.pendingEncode.length === 0) this.broadcast(FRAME_UNCHANGED);
+        return;
+      }
+      this.changedStreak += 1;
+      this.unchangedStreak = 0;
+      // Nội dung động liên tục → bật worker thứ hai (GDI ~1.74× với 2 thread —
+      // đo thật 13/09); ngưỡng 4 để không bật tắt loạn nhịp khi đổi vừa phải.
+      if (this.changedStreak >= 4 && this.workers.size < 2 && this.viewers.size > 0) this.startWorker();
+      this.pendingEncode.push({ hash: m.hash, raw: m.raw, w: m.w, h: m.h });
+      if (this.pendingEncode.length > MAX_PENDING_FRAMES) this.pendingEncode.shift(); // vứt cũ giữ mới
+      void this.pumpEncode();
+    } else if (m?.t === "err") {
+      this.errorStreak += 1;
+      if (this.errorStreak === 3) {
+        this.broadcast(FRAME_ERROR, Buffer.from(JSON.stringify({
+          message: `Chụp màn hình lỗi: ${m.m} (màn khóa/UAC sẽ như vậy)`,
+        })));
+      }
+    }
+  }
+
+  /** Nén khung trong hàng chờ (sharp chạy threadpool — event loop vẫn rảnh). */
+  async pumpEncode() {
+    if (this.encodeBusy) return;
+    this.encodeBusy = true;
+    try {
+      while (this.pendingEncode.length > 0 && this.viewers.size > 0) {
+        const job = this.pendingEncode.shift();
+        const groups = new Map();
+        for (const v of this.viewers) {
+          const key = `${v.width}x${v.quality}`;
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(v);
+        }
+        if (!groups.size) break;
+        const encoded = await Promise.all([...groups.keys()].map(async (key) => {
+          const [w, q] = key.split("x").map(Number);
+          const jpeg = await sharp(job.raw, { raw: { width: job.w, height: job.h, channels: 4 } })
+            .resize({ width: w, withoutEnlargement: true })
+            .jpeg({ quality: q })
+            .toBuffer();
+          return { key, jpeg };
+        }));
+        if (this.workers.size === 0 && this.pendingEncode.length === 0) break; // worker chết — bỏ dở
+        this.encodedHash = job.hash;
+        for (const { key, jpeg } of encoded) {
+          this.lastJpegByParams.set(key, jpeg);
+          for (const v of groups.get(key)) this.sendTo(v, FRAME_JPEG, jpeg);
+        }
+      }
+    } catch (error) {
+      this.broadcast(FRAME_ERROR, Buffer.from(JSON.stringify({ message: String(error.message ?? error) })));
+    } finally {
+      this.encodeBusy = false;
+      if (this.pendingEncode.length > 0 && this.viewers.size > 0) {
+        setImmediate(() => { void this.pumpEncode(); });
+      }
+    }
+  }
+
+  /** Lệnh điều khiển vừa vào → đánh thức mọi worker chụp NGAY ở nhịp burst. */
+  poke() {
+    this.touch();
+    const until = Date.now() + BURST_MS;
+    this.changedStreak = Math.max(this.changedStreak, 4); // input sắp làm màn đổi — turbo sẵn
+    if (this.viewers.size > 0 && this.workers.size < 2) this.startWorker();
+    for (const w of this.workers) {
+      try { w.postMessage({ cmd: "poke", until }); } catch {}
+    }
   }
 
   // ----------------------------------------------------------------- stream
@@ -208,15 +364,17 @@ export class ScreenService {
     res.on("error", () => this.removeViewer(viewer));
 
     this.sendTo(viewer, FRAME_META, Buffer.from(JSON.stringify({
-      screenW: this.monitor?.width ?? 0,
-      screenH: this.monitor?.height ?? 0,
+      screenW: this.dimsCache?.width ?? 0,
+      screenH: this.dimsCache?.height ?? 0,
       shotW: width, shotH: 0, quality,
     })));
     // Khung gần nhất cùng tham số -> cho xem ngay không phải đợi nhịp chụp
     const key = `${width}x${quality}`;
     if (this.lastJpegByParams.get(key)) this.sendTo(viewer, FRAME_JPEG, this.lastJpegByParams.get(key));
 
-    this.wakeLoop();
+    void this.ensureReady().catch((e) => {
+      this.sendTo(viewer, FRAME_ERROR, Buffer.from(JSON.stringify({ message: String(e.message ?? e) })));
+    });
     this.touch();
   }
 
@@ -239,13 +397,13 @@ export class ScreenService {
     this.viewers.add(viewer);
     scr.onClosed(() => this.removeViewer(viewer));
     this.sendTo(viewer, FRAME_META, Buffer.from(JSON.stringify({
-      screenW: this.monitor?.width ?? 0,
-      screenH: this.monitor?.height ?? 0,
+      screenW: this.dimsCache?.width ?? 0,
+      screenH: this.dimsCache?.height ?? 0,
       shotW: viewer.width, shotH: 0, quality: viewer.quality,
     })));
     const key = `${viewer.width}x${viewer.quality}`;
     if (this.lastJpegByParams.get(key)) this.sendTo(viewer, FRAME_JPEG, this.lastJpegByParams.get(key));
-    this.wakeLoop();
+    void this.ensureReady().catch(() => {});
     this.touch();
     return viewer;
   }
@@ -307,89 +465,7 @@ export class ScreenService {
     for (const v of [...this.viewers]) this.sendTo(v, type, payload);
   }
 
-  wakeLoop() {
-    if (this.looping) return;
-    this.looping = true;
-    (async () => {
-      try {
-        await this.ensureMonitor();
-        this.broadcastMeta();
-        let errorStreak = 0;
-        while (this.viewers.size > 0) {
-          const t0 = Date.now();
-          try {
-            await this.captureOnce();
-            errorStreak = 0;
-          } catch (error) {
-            errorStreak += 1;
-            if (errorStreak === 3) {
-              this.broadcast(FRAME_ERROR, Buffer.from(JSON.stringify({
-                message: `Chụp màn hình lỗi: ${error.message} (màn khóa/UAC sẽ như vậy)`,
-              })));
-            }
-            await this.waitPoke(1000);
-            continue;
-          }
-          const elapsed = Date.now() - t0;
-          const target = elapsed < this.burstUntil ? BURST_INTERVAL : FRAME_MIN_INTERVAL;
-          await this.waitPoke(Math.max(8, target - elapsed));
-        }
-      } catch (error) {
-        this.broadcast(FRAME_ERROR, Buffer.from(JSON.stringify({ message: String(error.message ?? error) })));
-      } finally {
-        this.looping = false;
-      }
-    })();
-  }
-
-  /** Chờ ms nhưng poke() gọi giữa chừng là dậy ngay (input đánh thức vòng chụp). */
-  waitPoke(ms) {
-    return new Promise((resolve) => {
-      let timer = setTimeout(() => { timer = null; this._wake = null; resolve(); }, ms);
-      this._wake = () => { if (timer) { clearTimeout(timer); timer = null; this._wake = null; resolve(); } };
-    });
-  }
-
-  poke() {
-    this.touch();
-    this.burstUntil = Date.now() + BURST_MS;
-    if (this._wake) this._wake();
-  }
-
-  async captureOnce() {
-    // Gom người xem theo tham số (w,q) — encode mỗi nhóm đúng 1 lần.
-    const groups = new Map();
-    for (const v of this.viewers) {
-      const key = `${v.width}x${v.quality}`;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(v);
-    }
-
-    const img = this.monitor.ref.captureImageSync();
-    // Hash BMP thay vì raw RGBA: BMP là chép thuần không đổi kênh (~12ms) còn
-    // toRawSync phải swizzle BGRA->RGBA cả ~20MB (55-104ms — thủ phạm cũ làm
-    // rơi fps từ 12.5 xuống 8.4). Đổi hình thì toRawSync gọi SAU chỉ còn ~2ms
-    // (buffer đã materialize) — khớp pixel 100% với đường cũ, đã đối chiếu.
-    const bmp = img.toBmpSync();
-    const rawHash = contentHash(bmp);
-    if (this.lastRawHash === rawHash) {
-      for (const [, viewers] of groups) {
-        for (const v of viewers) this.sendTo(v, FRAME_UNCHANGED);
-      }
-      return;
-    }
-    this.lastRawHash = rawHash;
-    const raw = img.toRawSync(); // RGBA
-    for (const [key, viewers] of groups) {
-      const [w, q] = key.split("x").map(Number);
-      const jpeg = await sharp(raw, { raw: { width: img.width, height: img.height, channels: 4 } })
-        .resize({ width: w, withoutEnlargement: true })
-        .jpeg({ quality: q })
-        .toBuffer();
-      this.lastJpegByParams.set(key, jpeg);
-      for (const v of viewers) this.sendTo(v, FRAME_JPEG, jpeg);
-    }
-  }
+  // (Vòng chụp + poke cũ đã dời vào screen-capture.worker.js — xem onWorkerMessage/pumpEncode.)
 
   // ------------------------------------------------------------------ input
   touch() {
@@ -404,9 +480,9 @@ export class ScreenService {
     this.idleTimer = setTimeout(() => {
       if (this.viewers.size === 0) {
         this.stopDaemon();
-        this.lastRawHash = null;
+        this.stopWorker();
+        this.encodedHash = null;
         this.lastJpegByParams.clear();
-        this.monitor = null; // lần xem sau dò lại (độ phân giải có thể đã đổi)
       }
     }, IDLE_STOP_MS);
     this.idleTimer.unref();
@@ -414,9 +490,9 @@ export class ScreenService {
 
   async input(body) {
     if (!this.available) throw new Error(this.setupError ?? "Điều khiển chỉ hỗ trợ Windows");
-    await this.ensureMonitor();
+    await this.ensureReady();
     await this.ensureDaemon();
-    const line = normalizeInput(body, this.dims());
+    const line = normalizeInput(body, this.inputDims());
     const reply = await this.sendDaemon(line);
     if (reply.err) throw new Error(reply.err);
     this.poke(); // lệnh vừa ăn -> chụp ngay nhịp kế cho hiệu ứng hiện sớm
@@ -463,10 +539,10 @@ export class ScreenService {
     const ping = await this.sendDaemon("PING").catch((e) => { throw new Error(`daemon không khởi động được: ${e.message}`); });
     if (ping.err) throw new Error(ping.err);
     const m = /(\d+)x(\d+)/.exec(ping.extra ?? "");
-    if (m && this.monitor) {
-      // Nếu DPI/scale khiến daemon thấy khác node-screenshots thì tin daemon
-      // (SendInput phải đúng hệ tọa độ daemon nhìn thấy).
-      this.monitor = { ...this.monitor, width: Number(m[1]), height: Number(m[2]) };
+    if (m) {
+      // Nếu DPI/scale khiến daemon thấy khác khung vật lý thì tin daemon cho
+      // TỌA ĐỘ INPUT (SendInput đúng hệ tọa độ daemon); meta cho web vẫn vật lý.
+      this.daemonDims = { width: Number(m[1]), height: Number(m[2]) };
     }
     return daemon;
   }

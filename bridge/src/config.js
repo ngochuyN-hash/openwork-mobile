@@ -56,6 +56,11 @@ export function loadConfig() {
     // true = mỗi lần bridge khởi động mà chưa thấy server thì tự mở OpenWork.
     // Bật bằng: openpocket autostart --enable --with-openwork
     autoLaunchOpenWork: parsed.autoLaunchOpenWork === true,
+    // Cloudflare TURN key (dashboard → Calls → TURN) cho tab Màn hình khi phone
+    // ở MẠNG KHÁC và NAT đôi bên quá gắt để đục thẳng (CGNAT). Bridge tự sinh
+    // credential tạm 24h; trống = chỉ STUN (đường direct vẫn chạy bình thường).
+    turnKeyId: typeof parsed.turnKeyId === "string" ? parsed.turnKeyId : "",
+    turnToken: typeof parsed.turnToken === "string" ? parsed.turnToken : "",
     ...parsed,
   };
   return config;
