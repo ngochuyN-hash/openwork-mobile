@@ -61,6 +61,7 @@ namespace OpenPocket.Desktop
 
         // UI Controls - Header
         private Label lblAdminBadge;
+        private Panel pnlHeader;
 
         // UI Controls - single page
         private Label lblStatusBridge;
@@ -91,6 +92,9 @@ namespace OpenPocket.Desktop
             lblAdminBadge.Text = isAdmin ? "ADMIN (ELEVATED)" : "THIẾU QUYỀN ADMIN";
             lblAdminBadge.ForeColor = isAdmin ? Color.FromArgb(21, 128, 61) : ColorAmber;
             lblAdminBadge.BackColor = isAdmin ? Color.FromArgb(220, 252, 231) : Color.FromArgb(254, 243, 199);
+            // Text đổi → AutoSize đổi bề rộng → neo lại once lúc mở
+            lblAdminBadge.Left = pnlHeader.Width - lblAdminBadge.Width - 16;
+            lblAdminBadge.Top = (pnlHeader.Height - lblAdminBadge.Height) / 2;
 
             refreshTimer = new System.Windows.Forms.Timer();
             refreshTimer.Interval = 3500;
@@ -128,10 +132,12 @@ namespace OpenPocket.Desktop
         private void InitializeComponent()
         {
             this.Text = "OpenPocket — Điều khiển OpenWork từ điện thoại";
-            // 680x484 = MỘT cột duy nhất, mở ra là đủ khung, không cuộn.
+            // 536x500 = MỘT cột duy nhất, mở ra là đủ khung, không cuộn. Bề rộng
+            // khít nội dung dài nhất (URL tunnel monospace) — form 680px cũ để
+            // thừa cả một góc phải trắng trơn (bắt gặp bằng mắt 13/09).
             // Chữ chính 9.75pt, dòng cách 30px, nút cao 38 — thở, không bị nhòn.
-            this.Size = new Size(680, 484);
-            this.MinimumSize = new Size(680, 484);
+            this.Size = new Size(536, 500);
+            this.MinimumSize = new Size(536, 500);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = ColorBg;
             this.ForeColor = ColorText;
@@ -146,38 +152,40 @@ namespace OpenPocket.Desktop
             pnlContent.Padding = new Padding(20, 16, 20, 16);
 
             int yL = 0;
-            Panel cardStatus = CreateCard(0, ref yL, 600, 272, pnlContent);
+            Panel cardStatus = CreateCard(0, ref yL, 480, 284, pnlContent);
             CreateCardTitle("TRẠNG THÁI KẾT NỐI", cardStatus);
 
             lblStatusBridge = CreateStatusLabel("Bridge: Đang kiểm tra...", 16, 36, cardStatus);
-            lblStatusBridge.Size = new Size(568, 22);
+            lblStatusBridge.Size = new Size(448, 22);
             lblStatusBridge.Font = new Font("Segoe UI", 9.75f);
             lblStatusRoom = CreateStatusLabel("Máy: Đang đọc cấu hình...", 16, 66, cardStatus);
-            lblStatusRoom.Size = new Size(568, 22);
+            lblStatusRoom.Size = new Size(448, 22);
             lblStatusRoom.Font = new Font("Segoe UI", 9.75f);
             lblStatusTunnel = CreateStatusLabel("Cloudflare Tunnel: Đang kiểm tra...", 16, 96, cardStatus);
-            lblStatusTunnel.Size = new Size(568, 22);
+            lblStatusTunnel.Size = new Size(448, 22);
             lblStatusTunnel.Font = new Font("Segoe UI", 9.75f);
             lblStatusTunnelUrl = new Label();
             lblStatusTunnelUrl.Text = "(đang lấy địa chỉ công khai...)";
             lblStatusTunnelUrl.Font = new Font("Consolas", 9f);
             lblStatusTunnelUrl.ForeColor = ColorText;
             lblStatusTunnelUrl.Location = new Point(32, 120);
-            lblStatusTunnelUrl.Size = new Size(552, 18);
+            // Cao 34: URL trycloudflare hiếm khi dài hơn khổ 432px thì tự xuống
+            // dòng thay vì bị cắt cụt (label WordWrap sẵn có)
+            lblStatusTunnelUrl.Size = new Size(432, 34);
             cardStatus.Controls.Add(lblStatusTunnelUrl);
-            lblStatusOpenWork = CreateStatusLabel("OpenWork Desktop: Đang kiểm tra...", 16, 146, cardStatus);
-            lblStatusOpenWork.Size = new Size(568, 22);
+            lblStatusOpenWork = CreateStatusLabel("OpenWork Desktop: Đang kiểm tra...", 16, 162, cardStatus);
+            lblStatusOpenWork.Size = new Size(448, 22);
             lblStatusOpenWork.Font = new Font("Segoe UI", 9.75f);
 
-            btnStartBridge = CreateFlatButton("Bật Bridge", ColorSuccess, 16, 184, 128, 38, cardStatus);
+            btnStartBridge = CreateFlatButton("Bật Bridge", ColorSuccess, 16, 196, 128, 38, cardStatus);
             btnStartBridge.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
             btnStartBridge.Click += delegate { ActionStartBridge(); };
 
-            btnStopBridge = CreateFlatButton("Dừng", ColorDanger, 152, 184, 92, 38, cardStatus);
+            btnStopBridge = CreateFlatButton("Dừng", ColorDanger, 152, 196, 92, 38, cardStatus);
             btnStopBridge.Font = new Font("Segoe UI", 10f);
             btnStopBridge.Click += delegate { ActionStopBridge(); };
 
-            btnRestartBridge = CreateFlatButton("Khởi động lại", ColorSecondary, 252, 184, 150, 38, cardStatus);
+            btnRestartBridge = CreateFlatButton("Khởi động lại", ColorSecondary, 252, 196, 150, 38, cardStatus);
             btnRestartBridge.Font = new Font("Segoe UI", 10f);
             btnRestartBridge.Click += delegate { ActionRestartBridge(); };
 
@@ -185,7 +193,7 @@ namespace OpenPocket.Desktop
             chkAutostart.Text = "Tự khởi động cùng Windows (ngầm, quyền Admin)";
             chkAutostart.ForeColor = ColorText;
             chkAutostart.Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
-            chkAutostart.Location = new Point(16, 234);
+            chkAutostart.Location = new Point(16, 246);
             chkAutostart.AutoSize = true;
             chkAutostart.CheckedChanged += OnAutostartChanged;
             cardStatus.Controls.Add(chkAutostart);
@@ -194,7 +202,7 @@ namespace OpenPocket.Desktop
 
             // Thẻ QR — tính năng DUY NHẤT còn lại ngoài trạng thái: hiện mã/QR
             // cho điện thoại ghép, kiểu 9remote. Nút QR là chủ đạo (đen, to).
-            Panel cardPair = CreateCard(0, ref yL, 600, 74, pnlContent);
+            Panel cardPair = CreateCard(0, ref yL, 480, 74, pnlContent);
             Button btnShowQr = CreateFlatButton("Xem mã ghép (QR)", ColorPrimary, 16, 16, 200, 42, cardPair);
             btnShowQr.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
             btnShowQr.Click += delegate { ActionShowPairingDialog(); };
@@ -205,7 +213,7 @@ namespace OpenPocket.Desktop
 
             // Header thanh mảnh kiểu OpenWork: trắng, tên app + badge bên phải,
             // ngăn với content bằng đường kẻ 1px
-            Panel pnlHeader = new Panel();
+            pnlHeader = new Panel();
             pnlHeader.Dock = DockStyle.Top;
             pnlHeader.Height = 58;
             pnlHeader.BackColor = ColorCard;
@@ -237,8 +245,13 @@ namespace OpenPocket.Desktop
             lblAdminBadge.ForeColor = ColorSuccess;
             lblAdminBadge.BackColor = Color.FromArgb(220, 252, 231);
             lblAdminBadge.Padding = new Padding(8, 4, 8, 4);
-            lblAdminBadge.Location = new Point(524, 18);
             lblAdminBadge.AutoSize = true;
+            // Neo phải động — form 536 không đủ chỗ cho toạ độ cứng x=524 của
+            // bản 680; badge luôn dính mép phải ở mọi bề rộng
+            pnlHeader.Resize += delegate {
+                lblAdminBadge.Left = pnlHeader.Width - lblAdminBadge.Width - 16;
+                lblAdminBadge.Top = (pnlHeader.Height - lblAdminBadge.Height) / 2;
+            };
             pnlHeader.Controls.Add(lblAdminBadge);
 
             this.Controls.Add(pnlContent);
