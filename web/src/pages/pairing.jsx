@@ -3,16 +3,14 @@ import { setToken, apiState, apiPair, apiPairTenant, pairingCodeFromHash, invite
 import { Banner } from "../components/ui.jsx";
 import { OpenWorkMark } from "../components/logo.jsx";
 
-// 3 cách kết nối song song:
-//  TAB "Đăng nhập" — multi-tenant: user+pass do chủ worker cấp, máy của BẠN
-//  phải đã chạy `openpocket edge join`. Nhập 1 lần: khóa vĩnh viễn owd_ được
-//  cấp + lưu luôn trên máy, mật khẩu KHÔNG lưu — lần sau mở app vào thẳng.
-//  TAB "Ghép thiết bị" — nhập mã one-time 8 ký tự (XXXX-XXXX) in trên terminal
-//  bridge (sống 30 phút, dùng 1 lần). Ghép xong thiết bị nhận khóa vĩnh viễn owd_.
-//  TAB "Nhập token" — dành cho token dài hạn đã có (master owm_ từ QR master,
-//  hoặc owd_ của thiết bị): nhập vào là vào thẳng, không cần qua mã.
+// Mở app = duy nhất ô Đăng nhập (user + pass + tên thiết bị + nút) — không
+// placeholder, không chữ giải thích. Hai cách kết nối còn lại (mã ghép 1 lần
+// XXXX-XXXX in trên terminal bridge, và dán token owm_/owd_ dài hạn) nằm sau
+// nút "Cách kết nối khác", bấm mới lộ hàng tab. Link mời #i= và link ghép #p=
+// vẫn tự chạy khi mở, không cần đụng tab nào.
 export function PairingScreen({ onPaired }) {
   const [tab, setTab] = useState("login");
+  const [showAlt, setShowAlt] = useState(false);
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
   const [code, setCode] = useState("");
@@ -109,41 +107,42 @@ export function PairingScreen({ onPaired }) {
       <div class="pair-hero">
         <OpenWorkMark className="pair-logo" />
         <h2 style="margin:0;letter-spacing:-0.01em">OpenWork Mobile</h2>
-        <p class="pair-sub">Quản lý session, workspace và file của OpenWork từ điện thoại</p>
       </div>
 
       <div class="card">
-        <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-          <button
-            class={`btn small ${tab === "login" ? "" : "ghost"}`}
-            onClick={() => {
-              setTab("login");
-              setError("");
-            }}
-          >
-            Đăng nhập
-          </button>
-          <button
-            class={`btn small ${tab === "pair" ? "" : "ghost"}`}
-            onClick={() => {
-              setTab("pair");
-              setCode("");
-              setError("");
-            }}
-          >
-            Ghép thiết bị
-          </button>
-          <button
-            class={`btn small ${tab === "token" ? "" : "ghost"}`}
-            onClick={() => {
-              setTab("token");
-              setCode("");
-              setError("");
-            }}
-          >
-            Nhập token
-          </button>
-        </div>
+        {showAlt && (
+          <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+            <button
+              class={`btn small ${tab === "login" ? "" : "ghost"}`}
+              onClick={() => {
+                setTab("login");
+                setError("");
+              }}
+            >
+              Đăng nhập
+            </button>
+            <button
+              class={`btn small ${tab === "pair" ? "" : "ghost"}`}
+              onClick={() => {
+                setTab("pair");
+                setCode("");
+                setError("");
+              }}
+            >
+              Ghép thiết bị
+            </button>
+            <button
+              class={`btn small ${tab === "token" ? "" : "ghost"}`}
+              onClick={() => {
+                setTab("token");
+                setCode("");
+                setError("");
+              }}
+            >
+              Nhập token
+            </button>
+          </div>
+        )}
 
         {tab === "login" ? (
           <>
@@ -151,7 +150,6 @@ export function PairingScreen({ onPaired }) {
             <input
               id="login-user"
               type="text"
-              placeholder="vd: nam"
               autocomplete="username"
               autocapitalize="none"
               spellcheck={false}
@@ -163,7 +161,6 @@ export function PairingScreen({ onPaired }) {
             <input
               id="login-pass"
               type="password"
-              placeholder="••••••••"
               autocomplete="current-password"
               value={pass}
               onInput={(e) => setPass(e.currentTarget.value)}
@@ -173,7 +170,6 @@ export function PairingScreen({ onPaired }) {
             <input
               id="login-label"
               type="text"
-              placeholder="vd: iPhone của Nam"
               value={label}
               onInput={(e) => setLabel(e.currentTarget.value)}
               onKeyDown={(e) => e.key === "Enter" && submitLogin()}
@@ -185,20 +181,28 @@ export function PairingScreen({ onPaired }) {
             </div>
             {status && !error && busy && <p class="pair-hint">{status}</p>}
             {error && <Banner kind="err">{error}</Banner>}
-            <p class="pair-hint">
-              Tài khoản do chủ máy cấp. Nhập một lần — khóa được lưu luôn trên máy này,
-              mật khẩu không giữ lại; lần sau mở app là vào thẳng.
-            </p>
+            {!showAlt && (
+              <p class="pair-hint" style="margin-top:14px">
+                <button
+                  class="btn small ghost"
+                  onClick={() => {
+                    setShowAlt(true);
+                    setError("");
+                  }}
+                >
+                  Cách kết nối khác: mã ghép · token
+                </button>
+              </p>
+            )}
           </>
         ) : tab === "pair" ? (
           <>
             <label class="field" for="pair-code">
-              Mã ghép (in trên terminal bridge, sống 30 phút — hoặc quét QR trên đó)
+              Mã ghép 8 ký tự (in trên terminal bridge, sống 30 phút — hoặc quét QR trên đó)
             </label>
             <input
               id="pair-code"
               type="text"
-              placeholder="XXXX-XXXX"
               autocomplete="one-time-code"
               spellcheck={false}
               value={code}
@@ -209,7 +213,6 @@ export function PairingScreen({ onPaired }) {
             <input
               id="pair-label"
               type="text"
-              placeholder="vd: iPhone của bạn"
               value={label}
               onInput={(e) => setLabel(e.currentTarget.value)}
               onKeyDown={(e) => e.key === "Enter" && submitPair()}
@@ -221,9 +224,6 @@ export function PairingScreen({ onPaired }) {
             </div>
             {status && !error && busy && <p class="pair-hint">{status}</p>}
             {error && <Banner kind="err">{error}</Banner>}
-            <p class="pair-hint">
-              Ghép xong thiết bị này được cấp khóa vĩnh viễn — lần sau mở app là vào thẳng, không cần mã nữa.
-            </p>
           </>
         ) : (
           <>
@@ -233,7 +233,6 @@ export function PairingScreen({ onPaired }) {
             <input
               id="token-code"
               type="text"
-              placeholder="owm_… hoặc owd_…"
               spellcheck={false}
               value={code}
               onInput={(e) => setCode(e.currentTarget.value)}
@@ -246,12 +245,9 @@ export function PairingScreen({ onPaired }) {
             </div>
             {status && !error && busy && <p class="pair-hint">{status}</p>}
             {error && <Banner kind="err">{error}</Banner>}
-            <p class="pair-hint">Token nhập vào có hiệu lực vĩnh viễn — dùng cho thiết bị tin cậy của bạn.</p>
           </>
         )}
       </div>
-
-      <p class="pair-hint">Mất điện thoại / muốn bỏ quyền truy cập: vào Settings → Thiết bị đã ghép → thu hồi.</p>
     </div>
   );
 }
