@@ -944,6 +944,13 @@ label.field {
 }
 
 /* ---------- Screen (xem + điều khiển máy tính, v1.7 kiểu 9remote) ---------- */
+/* Wrapper gói hình + thanh nút + panel: thường thì chảy dọc như thường, vào
+   toàn màn hình thì cả cụm lên một lớp cố định (trước đây chỉ hình lên lớp,
+   thanh nút bị đè mất — vào toàn màn hình là mù nút). */
+.screen-view {
+  display: flex;
+  flex-direction: column;
+}
 .screen-stage {
   position: relative;
   background: #0b0c0e;
@@ -1033,25 +1040,37 @@ label.field {
   background: var(--primary);
   color: var(--primary-fg);
 }
-/* Toàn màn hình kiểu faux (Fullscreen API trên iOS chỉ dành cho <video>): khung
-   hình cố định đè lên cả nav, ảnh co vừa trong vùng an toàn của màn. */
-.screen-stage.stage-full {
+/* Toàn màn hình kiểu faux (Fullscreen API trên iOS chỉ dành cho <video>): cả
+   cụm hình + thanh nút cố định kín màn, ảnh co vừa trong vùng an toàn. */
+.screen-view.view-full {
   position: fixed;
   inset: 0;
   z-index: 70;
-  height: 100dvh;
-  min-height: 0;
-  border: none;
-  border-radius: 0;
   background: #000;
   padding: calc(8px + var(--sat)) calc(8px + var(--sar)) calc(8px + var(--sab)) calc(8px + var(--sal));
 }
-.screen-stage.stage-full .screen-img {
+.view-full .screen-stage {
+  flex: 1;
+  min-height: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+.view-full .screen-img {
   width: auto;
   height: auto;
   max-width: 100%;
   max-height: 100%;
   margin: auto;
+}
+/* Nền tối mờ để nổi trên hình (nền đen toàn màn hình), icon trắng cho đều. */
+.view-full .stage-toolbar {
+  margin: 8px auto 0;
+  background: rgba(10, 12, 14, 0.72);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.view-full .stage-btn {
+  color: #fff;
 }
 .stage-exit {
   position: fixed;
@@ -1059,6 +1078,44 @@ label.field {
   transform: translateX(-50%);
   bottom: calc(16px + var(--sab));
   z-index: 71;
+}
+/* Toàn màn hình: thanh nút chiếm đáy rồi -> nút thoát dịch lên trên thanh. */
+.screen-view.view-full ~ .stage-exit {
+  bottom: calc(80px + var(--sab));
+}
+/* Panel tự mở (Bàn phím / Gõ chữ) trong toàn màn hình: nổi góc dưới — người
+   dùng chủ động bật nên được phép đè hình, tắt là trả lại hình nguyên vẹn. */
+.view-full .screen-panel {
+  position: absolute;
+  left: calc(8px + var(--sal));
+  right: calc(8px + var(--sar));
+  bottom: calc(76px + var(--sab));
+  max-height: 46%;
+  overflow-y: auto;
+  margin: 0;
+  z-index: 5;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
+}
+/* Điện thoại XOAY NGANG khi toàn màn hình: hình dồn sát trái chiếm hết phần
+   còn lại, thanh phím chức năng xoay đứng dọc bên phải — không đè lên hình. */
+@media (orientation: landscape) {
+  .screen-view.view-full {
+    flex-direction: row;
+    align-items: stretch;
+  }
+  .view-full .stage-toolbar {
+    flex-direction: column;
+    align-self: center;
+    margin: 0 0 0 8px;
+    padding: 6px 4px;
+  }
+  .view-full .screen-panel {
+    left: calc(8px + var(--sal));
+    right: auto;
+    width: min(440px, 62%);
+    bottom: calc(8px + var(--sab));
+    max-height: 72%;
+  }
 }
 .screen-bar {
   display: flex;

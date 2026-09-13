@@ -7,7 +7,10 @@
 // stream), chọn chất lượng (chốt cứng 1 thông số tốt cho màn phone), nút
 // "Chỉ xem".
 // v2.1: bỏ luôn nút khoá (hình luôn nhận điều khiển như 9remote) và nút chụp
-// ảnh; toolbar chỉ còn Bàn phím · Chuột · Clipboard · Toàn màn hình.
+// ảnh; toolbar chỉ còn Bàn phím · Gõ chữ · Toàn màn hình.
+// v2.3: bridge đẩy khung nhanh hơn (trần 4→12 hình/s, màn đứng yên bỏ encode) +
+// toàn màn hình ăn theo xoay NGANG — hình dồn sát trái, thanh phím đứng dọc
+// bên phải; thanh nút nằm trong lớp toàn màn hình nên không còn bị đè mất.
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { apiScreenInfo, owScreenInput, owScreenStream } from "../api.js";
 import { Banner } from "../components/ui.jsx";
@@ -100,7 +103,7 @@ export function ScreenPage() {
     const fpsTimer = setInterval(() => {
       setFps(frameCount);
       frameCount = 0;
-    }, 2000);
+    }, 1000);
 
     (async () => {
       // Vòng nối lại có backoff — mất mạng/tunnel đổi thì tự chờ rồi thử.
@@ -372,30 +375,33 @@ export function ScreenPage() {
         </Banner>
       )}
 
-      <div class={`screen-stage ${full ? "stage-full" : ""}`}>
-        {url ? (
-          <img
-            ref={imgRef}
-            class="screen-img control"
-            src={url}
-            alt="Màn hình máy tính"
-            draggable={false}
-            onContextMenu={(e) => e.preventDefault()}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerCancel={onPointerUp}
-          />
-        ) : (
-          <div class="screen-placeholder" style={`aspect-ratio:${screenRatio}`}>
-            {status === "connecting" && !unavailable ? <span class="spinner" /> : null}
-            <p>{unavailable ? "Không khả dụng" : "Đang nối stream màn hình…"}</p>
-          </div>
-        )}
-        <span ref={echoRef} class="touch-echo" aria-hidden="true" />
-      </div>
-      {/* Thanh nút nằm DƯỚI khung hình (không đè lên màn hình PC) */}
-      <div class="stage-toolbar">
+      {/* .screen-view gói cả hình + thanh nút + panel: khi toàn màn hình thì cả
+          cụm vào một lớp cố định — xoay ngang thì hình sát trái, phím đứng phải. */}
+      <div class={`screen-view ${full ? "view-full" : ""}`}>
+        <div class="screen-stage">
+          {url ? (
+            <img
+              ref={imgRef}
+              class="screen-img control"
+              src={url}
+              alt="Màn hình máy tính"
+              draggable={false}
+              onContextMenu={(e) => e.preventDefault()}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerUp}
+            />
+          ) : (
+            <div class="screen-placeholder" style={`aspect-ratio:${screenRatio}`}>
+              {status === "connecting" && !unavailable ? <span class="spinner" /> : null}
+              <p>{unavailable ? "Không khả dụng" : "Đang nối stream màn hình…"}</p>
+            </div>
+          )}
+          <span ref={echoRef} class="touch-echo" aria-hidden="true" />
+        </div>
+        {/* Thanh nút nằm DƯỚI khung hình (không đè lên màn hình PC) */}
+        <div class="stage-toolbar">
           <button
             class={`stage-btn ${panel === "keys" ? "on" : ""}`}
             disabled={unavailable}
@@ -422,81 +428,82 @@ export function ScreenPage() {
           >
             <ExpandIcon size={20} />
           </button>
+        </div>
+
+        {/* Panel trượt ra dưới khung hình — mỗi lần 1 panel, kiểu tab Input 9remote */}
+        {panel === "keys" && (
+          <div class="screen-panel">
+            <div class="screen-row">
+              {MODS.map((m) => (
+                <button
+                  key={m.id}
+                  class={`screen-key ${mods.includes(m.id) ? "on" : ""}`}
+                  onClick={() => toggleMod(m.id)}
+                  aria-pressed={mods.includes(m.id)}
+                >
+                  {m.label}
+                </button>
+              ))}
+              <span class="screen-row-hint">bật sáng rồi bấm phím = tổ hợp</span>
+            </div>
+            <div class="screen-row">
+              {COMBOS.map((c) => (
+                <button key={c.label} class="screen-key combo" disabled={sending} title={c.hint} onClick={() => tapCombo(c)}>
+                  {c.label}
+                </button>
+              ))}
+            </div>
+            <div class="screen-row">
+              {NAV_KEYS.map((k) => (
+                <button key={k.key} class={`screen-key ${k.label.length === 1 ? "sym" : ""}`} disabled={sending} onClick={() => tapKey(k.key)}>
+                  {k.label}
+                </button>
+              ))}
+            </div>
+            <div class="screen-row">
+              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("enter")}>Enter</button>
+              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("esc")}>Esc</button>
+              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("backspace")}>Bksp</button>
+              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("tab")}>Tab</button>
+            </div>
+          </div>
+        )}
+
+        {panel === "text" && (
+          <div class="screen-panel">
+            <form
+              class="screen-textrow"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!text.trim()) return;
+                await sendInput({ type: "text", text });
+                setText("");
+              }}
+            >
+              <input
+                ref={textInputRef}
+                type="text"
+                value={text}
+                placeholder="Type text (Vietnamese works) then Send"
+                onInput={(e) => setText(e.currentTarget.value)}
+              />
+              <button class="btn small" type="submit" disabled={sending || !text.trim()}>
+                <SendIcon size={16} /> Send
+              </button>
+            </form>
+            <p class="screen-note">Chữ đi qua clipboard của máy (như 9remote) — dấu tiếng Việt nguyên vẹn, tối đa 500 ký tự.</p>
+          </div>
+        )}
       </div>
       <p class="screen-hint">Chạm = click · giữ lâu = Right-click · chạm 2 lần = Double-click · kéo = di chuyển · hai ngón vuốt = cuộn</p>
       {full && (
         <button class="btn danger small stage-exit" onClick={toggleFull}>Thoát toàn màn hình</button>
       )}
 
-      {/* Panel trượt ra dưới khung hình — mỗi lần 1 panel, kiểu tab Input 9remote */}
-      {panel === "keys" && (
-        <div class="screen-panel">
-          <div class="screen-row">
-            {MODS.map((m) => (
-              <button
-                key={m.id}
-                class={`screen-key ${mods.includes(m.id) ? "on" : ""}`}
-                onClick={() => toggleMod(m.id)}
-                aria-pressed={mods.includes(m.id)}
-              >
-                {m.label}
-              </button>
-            ))}
-            <span class="screen-row-hint">bật sáng rồi bấm phím = tổ hợp</span>
-          </div>
-          <div class="screen-row">
-            {COMBOS.map((c) => (
-              <button key={c.label} class="screen-key combo" disabled={sending} title={c.hint} onClick={() => tapCombo(c)}>
-                {c.label}
-              </button>
-            ))}
-          </div>
-          <div class="screen-row">
-            {NAV_KEYS.map((k) => (
-              <button key={k.key} class={`screen-key ${k.label.length === 1 ? "sym" : ""}`} disabled={sending} onClick={() => tapKey(k.key)}>
-                {k.label}
-              </button>
-            ))}
-          </div>
-          <div class="screen-row">
-            <button class="screen-key wide" disabled={sending} onClick={() => tapKey("enter")}>Enter</button>
-            <button class="screen-key wide" disabled={sending} onClick={() => tapKey("esc")}>Esc</button>
-            <button class="screen-key wide" disabled={sending} onClick={() => tapKey("backspace")}>Bksp</button>
-            <button class="screen-key wide" disabled={sending} onClick={() => tapKey("tab")}>Tab</button>
-          </div>
-        </div>
-      )}
-
-      {panel === "text" && (
-        <div class="screen-panel">
-          <form
-            class="screen-textrow"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (!text.trim()) return;
-              await sendInput({ type: "text", text });
-              setText("");
-            }}
-          >
-            <input
-              ref={textInputRef}
-              type="text"
-              value={text}
-              placeholder="Type text (Vietnamese works) then Send"
-              onInput={(e) => setText(e.currentTarget.value)}
-            />
-            <button class="btn small" type="submit" disabled={sending || !text.trim()}>
-              <SendIcon size={16} /> Send
-            </button>
-          </form>
-          <p class="screen-note">Chữ đi qua clipboard của máy (như 9remote) — dấu tiếng Việt nguyên vẹn, tối đa 500 ký tự.</p>
-        </div>
-      )}
-
       <div class="screen-bar">
         <span class={`badge ${status === "live" ? "ok" : status === "error" ? "err" : "busy"}`}>
           {status === "live"
-            ? `Đang xem${fps ? ` · ${fps} hình/2s` : ""}`
+            ? `Đang xem${fps ? ` · ${fps} hình/s` : ""}`
             : status === "connecting"
               ? "Đang nối…"
               : status === "paused"

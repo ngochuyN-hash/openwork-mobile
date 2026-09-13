@@ -289,6 +289,25 @@ async function handleRequest(req, res) {
       return;
     }
 
+    // Mã ghép ĐANG SỐNG cho CLI (`openpocket code`) — không phải parse log nữa.
+    // Auth bắt buộc (master/device): mã ghép là thông tin quản trị, không phát
+    // cho người lạ chưa token. baseUrl = tunnel/worker hiện tại để CLI ghép QR.
+    if (req.method === "GET" && pathname === "/api/pairing-code") {
+      const code = pairing.ensureCode();
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          ok: true,
+          code,
+          codeFormatted: `${code.slice(0, 4)}-${code.slice(4)}`,
+          secondsLeft: pairing.codeSecondsLeft(),
+          baseUrl: currentBase(),
+          tenant: config.lookupTenant || null,
+        })
+      );
+      return;
+    }
+
     if (req.method === "GET" && pathname === "/api/state") {
       const engine = readEngineRegistry();
       res.writeHead(200, { "content-type": "application/json" });
@@ -381,9 +400,16 @@ async function handleRequest(req, res) {
     // Xem màn hình máy tính: bridge đẩy frame JPEG liên tục (binary stream).
     // Ảnh KHÔNG ghi đĩa — RAM giữ đúng 1 khung gần nhất như 9remote.
     if (req.method === "GET" && pathname === "/api/screen/stream") {
+      // Chặn biên server-side: chỉ phone đã pair mới gọi được, nhưng w=99999
+      // vẫn khiến sharp cháy RAM vô ích. Thiếu/số vô lý → dùng mặc định.
+      const clamp = (raw, min, max, fallback) => {
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n <= 0) return fallback;
+        return Math.min(max, Math.max(min, Math.round(n)));
+      };
       screen.addViewer(req, res, {
-        w: Number(url.searchParams.get("w")) || 880,
-        q: Number(url.searchParams.get("q")) || 55,
+        w: clamp(url.searchParams.get("w"), 320, 1920, 880),
+        q: clamp(url.searchParams.get("q"), 30, 90, 55),
       });
       return;
     }

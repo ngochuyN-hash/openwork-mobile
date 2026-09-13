@@ -23,7 +23,7 @@ const IS_WINDOWS = platform() === "win32";
 
 const MAX_VIEWERS = 3; // chặn 1 người mở nhiều tab phá CPU
 const IDLE_STOP_MS = 90_000; // không ai xem 90s -> dừng chụp + kill daemon
-const FRAME_MIN_INTERVAL = 250; // ~3-4 hình/giây tối đa
+const FRAME_MIN_INTERVAL = 80; // trần ~12 hình/s; máy/đường kẹt thì nhịp tự chậm theo elapsed
 const MAX_PENDING_BYTES = 3_000_000; // viewer chậm quá thì đá (client tự nối lại)
 
 export const FRAME_UNCHANGED = 0;
@@ -152,7 +152,7 @@ export class ScreenService {
     this.monitor = null; // { ref, width, height }
     this.viewers = new Set();
     this.looping = false;
-    this.lastHashByParams = new Map(); // "w x q" -> hash JPEG gần nhất
+    this.lastRawHash = null; // hash khung THÔ gần nhất — raw giữ nguyên thì JPEG chắc chắn giống
     this.lastJpegByParams = new Map();
     this.daemon = null; // { proc, pending: Map }
     this.daemonSeq = 0;
@@ -293,20 +293,25 @@ export class ScreenService {
 
     const img = this.monitor.ref.captureImageSync();
     const raw = img.toRawSync(); // RGBA — đã đối chiếu khớp PNG decode
+    // Hash khung THÔ TRƯỚC khi encode: màn đứng yên thì bỏ hẳn bước sharp
+    // (sha1 raw rẻ hơn encode gấp mấy lần) — nhịp chụp tăng mà CPU khi rảnh
+    // lại GIẢM so với bản encode-mỗi-nhịp cũ. Raw đổi mới encode + đẩy JPEG.
+    const rawHash = sha1(raw);
+    if (this.lastRawHash === rawHash) {
+      for (const [, viewers] of groups) {
+        for (const v of viewers) this.sendTo(v, FRAME_UNCHANGED);
+      }
+      return;
+    }
+    this.lastRawHash = rawHash;
     for (const [key, viewers] of groups) {
       const [w, q] = key.split("x").map(Number);
       const jpeg = await sharp(raw, { raw: { width: img.width, height: img.height, channels: 4 } })
         .resize({ width: w, withoutEnlargement: true })
         .jpeg({ quality: q })
         .toBuffer();
-      const hash = sha1(jpeg);
-      const unchanged = this.lastHashByParams.get(key) === hash;
-      this.lastHashByParams.set(key, hash);
       this.lastJpegByParams.set(key, jpeg);
-      for (const v of viewers) {
-        if (unchanged) this.sendTo(v, FRAME_UNCHANGED);
-        else this.sendTo(v, FRAME_JPEG, jpeg);
-      }
+      for (const v of viewers) this.sendTo(v, FRAME_JPEG, jpeg);
     }
   }
 
@@ -323,7 +328,7 @@ export class ScreenService {
     this.idleTimer = setTimeout(() => {
       if (this.viewers.size === 0) {
         this.stopDaemon();
-        this.lastHashByParams.clear();
+        this.lastRawHash = null;
         this.lastJpegByParams.clear();
         this.monitor = null; // lần xem sau dò lại (độ phân giải có thể đã đổi)
       }
