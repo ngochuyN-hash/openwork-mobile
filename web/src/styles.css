@@ -1088,10 +1088,11 @@ label.field {
    máy tính, cột phải dành cho nút chức năng. Xoay máy thật sang ngang thì media
    query landscape bên dưới thắng — ảnh thẳng lại như thường. */
 .screen-view.vland {
+  /* KHÔNG được đặt position/height ở đây — cùng bậc đặc hiệu với
+     .screen-view.view-full nhưng đứng sau sẽ thắng, phá lớp fixed phủ kín màn
+     (bug "toàn màn hình không phủ" trên điện thoại). Chỉ cần hướng flex. */
   flex-direction: row;
   align-items: stretch;
-  position: relative;
-  height: calc(100dvh - 190px);
 }
 .screen-view.vland .screen-stage {
   flex: 1;

@@ -12,6 +12,7 @@
 // toàn màn hình ăn theo xoay NGANG — hình dồn sát trái, thanh phím đứng dọc
 // bên phải; thanh nút nằm trong lớp toàn màn hình nên không còn bị đè mất.
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
+import { createPortal } from "preact/compat";
 import { apiScreenInfo, owScreenInput, owScreenStream } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 import {
@@ -434,16 +435,22 @@ export function ScreenPage() {
   // ngang luôn như YouTube (Android Chrome); iOS Safari không cho fullscreen
   // phần tử thường (chỉ <video>) và không cho lock hướng, nên lùi về faux CSS —
   // người dùng tự xoay máy, bố cục player vẫn ăn theo media query landscape.
-  const toggleFull = async () => {
+  // Gọi trong effect SAU khi portal mount xong (bấm xong element được dời sang
+  // body — fullscreen phần tử cũ rồi tháo ra là tự thoát ngay).
+  const toggleFull = () => {
     if (full) { exitFull(); return; }
     setFull(true);
-    try {
-      await viewRef.current?.requestFullscreen?.();
-      await screen.orientation?.lock?.("landscape");
-    } catch {
-      // Không khoá được hướng (iOS/máy tính) — faux fullscreen vẫn chạy.
-    }
   };
+  useEffect(() => {
+    if (!full) return;
+    let alive = true;
+    (async () => {
+      try { await viewRef.current?.requestFullscreen?.(); } catch {}
+      if (!alive) return;
+      try { await screen.orientation?.lock?.("landscape"); } catch {}
+    })();
+    return () => { alive = false; };
+  }, [full]);
 
   // Thoát fullscreen bằng nút hệ thống (nút back Android/swipe) → đồng bộ state.
   useEffect(() => {
@@ -480,22 +487,12 @@ export function ScreenPage() {
     setTimeout(() => setPaused(false), 50);
   }, []);
 
-  return (
-    <div class="screen-page">
-      {unavailable && (
-        <Banner kind="warn">
-          Máy tính không xem/điều khiển màn hình được: {info.message || "chỉ hỗ trợ Windows"}.
-        </Banner>
-      )}
-      {errorMsg && status === "error" && (
-        <Banner kind="err" actionLabel="Thử lại" onAction={reconnect}>
-          {errorMsg}
-        </Banner>
-      )}
-
-      {/* .screen-view gói cả hình + thanh nút + panel: khi toàn màn hình thì cả
-          cụm vào một lớp cố định — xoay ngang thì hình sát trái, phím đứng phải. */}
-      <div ref={viewRef} class={`screen-view ${full ? "view-full " : ""}${vland ? "vland" : ""}`}>
+  // Layer toàn màn hình render qua PORTAL ra document.body: vài trình duyệt
+  // (iOS Safari…) biến position:fixed thành "absolute" khi tổ tiên có
+  // filter/backdrop-filter — portal thì layer luôn bám viewport, phủ kín máy nào
+  // cũng đúng. Mode thường viewNode nằm nguyên trong trang như cũ.
+  const viewNode = (
+    <div ref={viewRef} class={`screen-view ${full ? "view-full " : ""}${vland ? "vland" : ""}`}>
         <div ref={stageRef} class="screen-stage">
           {url ? (
             <img
@@ -626,6 +623,21 @@ export function ScreenPage() {
           </div>
         )}
       </div>
+  );
+
+  return (
+    <div class="screen-page">
+      {unavailable && (
+        <Banner kind="warn">
+          Máy tính không xem/điều khiển màn hình được: {info.message || "chỉ hỗ trợ Windows"}.
+        </Banner>
+      )}
+      {errorMsg && status === "error" && (
+        <Banner kind="err" actionLabel="Thử lại" onAction={reconnect}>
+          {errorMsg}
+        </Banner>
+      )}
+      {full ? createPortal(viewNode, document.body) : viewNode}
 
       <div class="screen-bar">
         <span class={`badge ${status === "live" ? "ok" : status === "error" ? "err" : "busy"}`}>
