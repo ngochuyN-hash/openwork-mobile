@@ -16,10 +16,8 @@ import { createPortal } from "preact/compat";
 import { apiScreenInfo, owScreenInput, owScreenStream } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 import {
-  ClipboardIcon,
   ExpandIcon,
   Icon,
-  KeyboardIcon,
   SendIcon,
 } from "../components/icons.jsx";
 
@@ -79,7 +77,6 @@ export function ScreenPage() {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [full, setFull] = useState(false); // toàn màn hình kiểu faux (áp dụng mọi trình duyệt)
-  const [panel, setPanel] = useState(null); // null | "keys" | "mouse" | "text" — kiểu 9remote
 
   const imgRef = useRef(null);
   const viewRef = useRef(null); // .screen-view — đối tượng Fullscreen API thật
@@ -459,23 +456,6 @@ export function ScreenPage() {
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, [exitFull]);
 
-  // Nút Clipboard kiểu 9remote: mở panel gõ chữ + nạp clipboard điện thoại vào ô.
-  const openClipboard = async () => {
-    setPanel("text");
-    try {
-      const clip = await navigator.clipboard.readText();
-      if (clip) setText(clip.slice(0, 500));
-    } catch {
-      // Không đọc được (chưa cấp quyền/clipboard trống) — người dùng tự gõ vẫn chạy.
-    }
-    setTimeout(() => textInputRef.current?.focus(), 50);
-  };
-
-  // Bật panel điều khiển nào đó = ý định điều khiển → tự mở khoá.
-  const togglePanel = (name) => {
-    setPanel((p) => (p === name ? null : name));
-  };
-
   const unavailable = info && info.available === false;
   const screenRatio = info?.screen?.width && info?.screen?.height
     ? `${info.screen.width} / ${info.screen.height}`
@@ -523,32 +503,9 @@ export function ScreenPage() {
             </div>
           )}
           <span ref={echoRef} class="touch-echo" aria-hidden="true" />
-          {/* Cụm nút MỜ góc trên-phải đè lên ảnh: Toàn màn hình luôn có (bấm
-              phóng to — mở rồi đổi thành Thu nhỏ); Bàn phím + Gõ chữ chỉ hiện
-              khi toàn màn hình vì mode thường 2 panel hiển thị SẴN dưới ảnh. */}
+          {/* Nút MỜ góc trên-phải: toàn màn hình ↔ thu nhỏ. Bàn phím + gõ chữ
+              KHÔNG cần nút — toàn màn hình thì 2 panel luôn hiển thị ở cột phải. */}
           <div class="stage-corner">
-            {full && (
-              <>
-                <button
-                  class={`corner-btn ${panel === "keys" ? "on" : ""}`}
-                  disabled={unavailable}
-                  aria-label="Bàn phím"
-                  aria-pressed={panel === "keys"}
-                  onClick={() => togglePanel("keys")}
-                >
-                  <KeyboardIcon size={17} />
-                </button>
-                <button
-                  class={`corner-btn ${panel === "text" ? "on" : ""}`}
-                  disabled={unavailable}
-                  aria-label="Gõ hoặc dán chữ"
-                  aria-pressed={panel === "text"}
-                  onClick={openClipboard}
-                >
-                  <ClipboardIcon size={17} />
-                </button>
-              </>
-            )}
             <button
               class="corner-btn"
               onClick={toggleFull}
@@ -560,10 +517,9 @@ export function ScreenPage() {
           </div>
         </div>
 
-        {/* Mode thường: bàn phím + gõ chữ HIỂN THỊ SẴN dưới ảnh (không cần bấm
-            mở box). Toàn màn hình: ẩn đi, bấm icon góc mới trượt ra đè lên. */}
-        {(!full || panel === "keys") && (
-          <div class="screen-panel">
+        {/* Bàn phím + gõ chữ HIỂN THỊ LUÔN ở mọi chế độ: mode thường nằm dưới
+            ảnh, toàn màn hình thì CSS dựng thành cột phải xoay 90°. */}
+        <div class="screen-panel screen-panel-keys">
             <div class="screen-row">
               {MODS.map((m) => (
                 <button
@@ -597,31 +553,28 @@ export function ScreenPage() {
               <button class="screen-key wide" disabled={sending} onClick={() => tapKey("tab")}>Tab</button>
             </div>
           </div>
-        )}
 
-        {(!full || panel === "text") && (
-          <div class="screen-panel">
-            <form
-              class="screen-textrow"
-              onSubmit={async (e) => {
-                e.preventDefault();
-                if (!text.trim()) return;
-                await sendInput({ type: "text", text });
-                setText("");
-              }}
-            >
-              <input
-                ref={textInputRef}
-                type="text"
-                value={text}
-                onInput={(e) => setText(e.currentTarget.value)}
-              />
-              <button class="btn small" type="submit" disabled={sending || !text.trim()}>
-                <SendIcon size={16} /> Send
-              </button>
-            </form>
-          </div>
-        )}
+        <div class="screen-panel screen-panel-text">
+          <form
+            class="screen-textrow"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!text.trim()) return;
+              await sendInput({ type: "text", text });
+              setText("");
+            }}
+          >
+            <input
+              ref={textInputRef}
+              type="text"
+              value={text}
+              onInput={(e) => setText(e.currentTarget.value)}
+            />
+            <button class="btn small" type="submit" disabled={sending || !text.trim()}>
+              <SendIcon size={16} /> Send
+            </button>
+          </form>
+        </div>
       </div>
   );
 

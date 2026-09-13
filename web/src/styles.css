@@ -1109,19 +1109,43 @@ label.field {
   padding: 24px var(--sp-4);
 }
 .screen-view.vland .screen-panel {
-  /* Panel bàn phím/gõ chữ XOAY THEO CỬA SỔ MÁY (90° cùng chiều ảnh): lật máy
-     là bàn phím nằm ngang dưới chân khung nhìn như app remote thật — world-bottom
-     = mép trái portrait, nên panel là cột dọc ôm TRÁI, dài gần hết màn. */
+  /* Bàn phím + gõ chữ XOAY THEO CỬA SỔ MÁY (90°) và LUÔN HIỂN THỊ ở CỘT PHẢI
+     (không ẩn/hiện): lật máy là bàn phím nằm ngang phía trên khung nhìn như
+     app remote thật — portrait-phải = đỉnh khung nhìn ngang. Ô gõ chữ là giải
+     bên trái bàn phím. Cả hai đè lên phần trên của ảnh (kiểu floating bar). */
   position: absolute;
   top: 50%;
-  left: 128px; /* 4px margin + nửa chiều sâu 248px */
-  width: calc(100dvh - 28px); /* chiều dài bàn phím = trục cao khung nhìn */
-  height: 248px; /* chiều sâu bàn phím */
+  width: calc(100dvh - 28px); /* chiều dài = trục cao khung nhìn */
   transform: translate(-50%, -50%) rotate(90deg);
   overflow-y: auto;
   margin: 0;
   z-index: 5;
   box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
+}
+.screen-view.vland .screen-panel-keys {
+  left: calc(100vw - 98px); /* giải sâu 180px ôm phải, cách mép 8px */
+  height: 180px;
+}
+.screen-view.vland .screen-panel-text {
+  left: calc(100vw - 220px); /* giải 56px nằm cạnh trái bàn phím */
+  height: 56px;
+}
+/* Phím gọn lại cho vừa giải 180px (4 hàng không cần cuộn) */
+.screen-view.vland .screen-key {
+  min-height: 34px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+.screen-view.vland .screen-row {
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.screen-view.vland .screen-textrow {
+  margin: 0;
+}
+.screen-view.vland .screen-textrow input {
+  min-height: 36px;
+  font-size: 14px;
 }
 /* Điện thoại XOAY NGANG — trang Màn hình tự thành "player" như YouTube tự lật
    ngang, KHÔNG cần bấm toàn màn hình: hình bên trái, thanh chức năng đứng dọc
@@ -1261,11 +1285,15 @@ a {
   text-underline-offset: 3px;
 }
 
-/* ---------- Tab PCs: chùm chìa nhiều máy ---------- */
-/* Thẻ máy: vùng chính (bấm = chuyển máy) + hàng 2 nút ngắt riêng bên dưới —
-   nút không nằm trong button chính (button lồng button là HTML sai). */
+/* ---------- "Máy của tôi" (trong Settings): chùm chìa nhiều máy ---------- */
+/* Thẻ máy lồng trong card section: nền --bg phân biệt khỏi card raised,
+   vùng chính (bấm = chuyển máy) + hàng nút riêng bên dưới — nút không nằm
+   trong button chính (button lồng button là HTML sai). */
 .pc-card {
-  padding: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  margin: 0 0 var(--sp-2);
   overflow: hidden;
 }
 .pc-main {
