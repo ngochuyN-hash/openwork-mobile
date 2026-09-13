@@ -438,6 +438,7 @@ export function ScreenPage() {
   // cũng đúng. Mode thường viewNode nằm nguyên trong trang như cũ.
   const viewNode = (
     <div ref={viewRef} class={`screen-view ${full ? "view-full " : ""}${vland ? "vland" : ""}`}>
+        {/* stage tự ôm cao đúng ảnh (hết band đen); placeholder tự giữ tỉ lệ */}
         <div ref={stageRef} class="screen-stage">
           {url ? (
             <img

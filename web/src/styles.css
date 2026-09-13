@@ -1124,11 +1124,11 @@ label.field {
   box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
 }
 .screen-view.vland .screen-panel-keys {
-  left: calc(100vw - 98px); /* giải sâu 110px ôm phải, cách mép 8px */
+  left: calc(100vw - 63px); /* tâm = mép phải - 8 - nửa sâu 55 */
   height: 110px;
 }
 .screen-view.vland .screen-panel-text {
-  left: calc(100vw - 220px); /* giải 56px nằm cạnh trái bàn phím */
+  left: calc(100vw - 150px); /* tâm = mép phải - 8 - 110 - 4 - nửa 28 */
   height: 56px;
 }
 /* Phím gọn lại cho vừa giải 180px (4 hàng không cần cuộn) */
@@ -1152,19 +1152,74 @@ label.field {
    trôi theo cuộn trang. Cả trang khớp đúng một màn hình: ảnh PC chiếm phần
    trên (flex), bàn phím + gõ chữ nằm dưới, badge sát đáy — mở tab là thấy hết
    mọi thứ. Màn quá nhỏ thì vẫn cuộn được (overflow auto). */
+/* Trang Màn hình — VIEWER kiểu 9remote: nền tối tràn viền (không phải thẻ đen
+   nổi trên trang trắng), ảnh PC tràn hết bề ngang, bàn phím + gõ chữ là thanh
+   mờ translucent DOCK ĐÁY, badge thành chip nhỏ trên ảnh. Cả cụm CỐ ĐỊNH vừa
+   một màn hình, không cuộn (màn quá nhỏ vẫn cuộn được). */
 .screen-page {
-  height: calc(100dvh - 190px);
+  margin: calc(var(--sp-3) * -1) calc(var(--sp-4) * -1) calc(-108px - var(--sab));
+  max-width: none;
+  width: auto;
+  min-height: calc(100dvh - 72px);
   display: flex;
   flex-direction: column;
+  background: #0b0d10;
+  position: relative;
   overflow-y: auto;
+  padding-bottom: calc(96px + var(--sab)); /* chừa chỗ pill nav nổi đè đáy */
 }
 .screen-page .screen-view {
   flex: 1;
   min-height: 0;
 }
-.screen-page .screen-view .screen-stage {
-  flex: 1;
-  min-height: 0;
+.screen-page .screen-stage {
+  flex: none;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  margin: 0;
+}
+.screen-page .screen-img {
+  width: 100%;
+}
+/* Badge thành chip nhỏ góc trên-trái của ảnh */
+.screen-page .screen-bar {
+  position: absolute;
+  top: calc(10px + var(--sat));
+  left: 12px;
+  margin: 0;
+  z-index: 6;
+}
+/* Thanh chức năng mờ translucent dock đáy — phong cách 9remote */
+.screen-page .screen-panel {
+  background: rgba(22, 26, 32, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.screen-page .screen-panel-keys {
+  margin: auto var(--sp-3) 10px;
+}
+.screen-page .screen-panel-text {
+  margin: 0 var(--sp-3) 10px;
+}
+.screen-page .screen-key {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #eef2f6;
+  border-radius: 10px;
+}
+.screen-page .screen-key:active {
+  background: rgba(255, 255, 255, 0.16);
+}
+.screen-page .screen-textrow input {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+.screen-page .screen-textrow input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
 }
 /* Điện thoại XOAY NGANG — trang Màn hình tự thành "player" như YouTube tự lật
    ngang, KHÔNG cần bấm toàn màn hình: hình bên trái, thanh chức năng đứng dọc
