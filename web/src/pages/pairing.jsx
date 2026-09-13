@@ -116,6 +116,7 @@ export function PairingScreen({ onPaired }) {
       <div class="pair-hero">
         <OpenWorkMark className="pair-logo" />
         <h2 style="margin:0;letter-spacing:-0.01em">OpenWork Mobile</h2>
+        <div class="pair-sub">OpenWork in your pocket</div>
       </div>
 
       <div class="card">
