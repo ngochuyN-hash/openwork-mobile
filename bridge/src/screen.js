@@ -479,7 +479,11 @@ export class ScreenService {
     const key = `${viewer.width}x${viewer.quality}`;
     if (this.lastJpegByParams.get(key)) this.sendTo(viewer, FRAME_JPEG, this.lastJpegByParams.get(key));
     this.dxgi?.requestKey();
-    void this.ensureReady().catch(() => {});
+    // Báo lỗi qua control channel — nuốt câm từng làm phone treo spinner mãi
+    // không biết bridge đang lạnh (daemon phải compile/spawn lại).
+    void this.ensureReady().catch((e) => {
+      try { ctl.sendMessage(JSON.stringify({ t: "ierr", m: String(e.message ?? e) })); } catch {}
+    });
     this.touch();
     return viewer;
   }
@@ -559,7 +563,8 @@ export class ScreenService {
         this.stopWorker();
         if (this.dxgi) { void this.dxgi.stop(); }
         this.encodedHash = null;
-        this.lastJpegByParams.clear();
+        // lastJpegByParams GIỮ NGUYÊN: viewer quay lại thấy ngay khung gần nhất
+        // trong lúc daemon sống lại, thay vì màn trống chờ compile/chụp (~50-110KB RAM).
       }
     }, IDLE_STOP_MS);
     this.idleTimer.unref();

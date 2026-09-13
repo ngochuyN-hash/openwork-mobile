@@ -361,11 +361,14 @@ export function ScreenPage() {
     let pc = null;
     let pingTimer = null;
     let fpsTimer = null;
+    let frameTimer = null;
     let frameCount = 0;
+    let gotFrame = false;
     const fail = () => {
       if (dead) return;
       dead = true;
       clearInterval(pingTimer); clearInterval(fpsTimer);
+      if (frameTimer) { clearTimeout(frameTimer); frameTimer = null; }
       try { pc?.close(); } catch {}
       ctlRef.current = null;
       wrtcRef.current = "failed";
@@ -422,6 +425,8 @@ export function ScreenPage() {
         };
         scr.onmessage = (e) => {
           frameCount += 1;
+          gotFrame = true;
+          if (frameTimer) { clearTimeout(frameTimer); frameTimer = null; }
           setStatus("live");
           setErrorMsg("");
           pushFrame(e.data);
@@ -432,6 +437,12 @@ export function ScreenPage() {
         fpsTimer = setInterval(() => { setFps(frameCount); frameCount = 0; }, 1000);
         wrtcRef.current = "active";
         setWrtc("active");
+        // Datachannel mở mà không có khung nào chảy tới (bridge đang lạnh: daemon
+        // chụp phải compile/spawn lại sau idle-stop) thì KHÔNG được đứng im — coi
+        // như thất bại để tự lùi về stream HTTP, kênh đó gửi khung chờ được.
+        frameTimer = setTimeout(() => {
+          if (!gotFrame) fail();
+        }, 8000);
       } catch {
         fail();
       }
@@ -439,6 +450,7 @@ export function ScreenPage() {
     return () => {
       dead = true;
       clearInterval(pingTimer); clearInterval(fpsTimer);
+      if (frameTimer) { clearTimeout(frameTimer); frameTimer = null; }
       try { pc?.close(); } catch {}
       ctlRef.current = null;
       if (wrtcRef.current !== "failed") {
