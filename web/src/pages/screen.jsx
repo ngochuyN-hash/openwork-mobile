@@ -26,9 +26,15 @@
 // v3.0: ảnh stream NET THEO ZOOM — tay buông khỏi cú véo là tính needed px
 // (880×zoom, trần min(native màn PC, 1600)) rồi nối lại stream với w lớn hơn,
 // về 1x trả lại 880 rẻ cũ (9remote làm 4 bậc cứng, mình tính đúng từng mức).
+// v3.1: WebRTC P2P — frame + lệnh điều khiển đi datachannel NỐI THẲNG
+// phone<->PC (bridge chỉ làm mối 1 lượt qua /api/webrtc/signal), không còn qua
+// tunnel/worker nên latency bằng mạng thật giữa hai máy (cùng WiFi ~2-10ms).
+// STUN công khai giúp xuyên NAT; thất bại thì tự lùi về stream HTTP như cũ.
+// Lệnh gõ phím không còn chờ hồi âm (fire-and-forget) — gõ liền tay không
+// khóa nút; badge hiện ping thật đo trên datachannel.
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { createPortal } from "preact/compat";
-import { apiScreenInfo, owScreenInput, owScreenStream } from "../api.js";
+import { apiScreenInfo, owScreenInput, owScreenStream, owWebrtcSignal } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 import {
   ExpandIcon,
@@ -68,9 +74,11 @@ export function ScreenPage() {
   const [fps, setFps] = useState(0);
   const [url, setUrl] = useState("");
   const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
   const [full, setFull] = useState(false); // toàn màn hình kiểu faux (áp dụng mọi trình duyệt)
   const [capW, setCapW] = useState(880); // bề rộng ảnh stream — tăng theo zoom để giữ nét
+  const [wrtc, setWrtc] = useState(null); // null | trying | active | failed — đường truyền hình
+  const [ping, setPing] = useState(0); // RTT đo trên datachannel (chỉ khi WebRTC active)
+  const [attempt, setAttempt] = useState(0); // tăng = thử lại cả hai đường kết nối
 
   const imgRef = useRef(null);
   const viewRef = useRef(null); // .screen-view — đối tượng Fullscreen API thật
@@ -217,6 +225,16 @@ export function ScreenPage() {
     plminX: 0, plmaxX: 0, plminY: 0, plmaxY: 0,
   });
   const urlRef = useRef("");
+  // Gỡ object URL khung cũ + gắn URL mới — dùng CHUNG cho cả hai đường truyền
+  // (HTTP stream và datachannel WebRTC) để phần hiển thị không phụ thuộc đường.
+  const pushFrame = useCallback((blob) => {
+    const next = URL.createObjectURL(blob);
+    if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    urlRef.current = next;
+    setUrl(next);
+  }, []);
+  const ctlRef = useRef(null); // datachannel "control" khi WebRTC active
+  const wrtcRef = useRef(null); // mirror của wrtc cho effect (không stale)
   const runIdRef = useRef(0); // hủy vòng nối lại khi pause/unmount đổi
   const textInputRef = useRef(null);
   const echoRef = useRef(null); // chấm phản hồi cục bộ: cho biết cú chạm đã ăn, khỏi đoán qua mạng
@@ -232,10 +250,11 @@ export function ScreenPage() {
     };
   }, []);
 
-  // ---- vòng stream: nối lại khi đứt, dừng khi app ẩn/unmount, ĐỔI ĐỘ NÉT khi
-  // zoom sâu quá ảnh hiện tại (capW đổi là nối vòng mới với w mới)
+  // ---- vòng stream HTTP (DỰ PHÒNG khi WebRTC thất bại): nối lại khi đứt,
+  // dừng khi app ẩn/unmount, đổi độ nét khi zoom sâu (capW đổi là nối vòng mới)
   useEffect(() => {
     if (!info?.available || paused) return;
+    if (wrtcRef.current !== "failed") return; // WebRTC đang thử/đã chạy — HTTP chờ
     const myRun = ++runIdRef.current;
     const { q } = STREAM_PARAMS;
     const abort = new AbortController();
@@ -248,7 +267,7 @@ export function ScreenPage() {
 
     (async () => {
       // Vòng nối lại có backoff — mất mạng/tunnel đổi thì tự chờ rồi thử.
-      for (let attempt = 0; ; attempt++) {
+      for (let retry = 0; ; retry++) {
         if (runIdRef.current !== myRun) return;
         try {
           setStatus((s) => (s === "live" ? s : "connecting"));
@@ -259,10 +278,7 @@ export function ScreenPage() {
             onFrame: (blob) => {
               frameCount += 1;
               setStatus("live");
-              const next = URL.createObjectURL(blob);
-              if (urlRef.current) URL.revokeObjectURL(urlRef.current);
-              urlRef.current = next;
-              setUrl(next);
+              pushFrame(blob);
             },
             onUnchanged: () => setStatus((s) => (s === "live" ? "live" : s)),
             onMeta: (meta) => setInfo((i) => (i ? { ...i, screen: { width: meta.screenW, height: meta.screenH } } : i)),
@@ -282,7 +298,7 @@ export function ScreenPage() {
           setErrorMsg(String(error.message || error));
         }
         // backoff: 1s, 2s, 3.5s... tối đa 6s
-        await new Promise((r) => setTimeout(r, Math.min(6000, 1000 + attempt * 500)));
+        await new Promise((r) => setTimeout(r, Math.min(6000, 1000 + retry * 500)));
         if (runIdRef.current !== myRun) return;
         setErrorMsg("");
       }
@@ -294,7 +310,113 @@ export function ScreenPage() {
       clearInterval(fpsTimer);
       setStatus("paused");
     };
-  }, [info?.available, paused, capW]);
+  }, [info?.available, paused, capW, wrtc, pushFrame]);
+
+  // ---- WebRTC P2P: frame + lệnh đi datachannel NỐI THẲNG phone<->PC — bridge
+  // chỉ làm mối SDP/ICE đúng một lượt, sau đó đường hình không qua tunnel/worker
+  // nữa nên latency bằng mạng thật giữa hai máy (cùng WiFi ~2-10ms). STUN công
+  // khai để phone tìm thấy PC sau NAT; NAT gắt/chặn UDP → lùi về stream HTTP.
+  useEffect(() => {
+    if (!info?.available || paused) return;
+    if (wrtcRef.current === "active" || wrtcRef.current === "failed") return;
+    wrtcRef.current = "trying";
+    setWrtc("trying");
+    setStatus("connecting");
+    let dead = false;
+    let pc = null;
+    let pingTimer = null;
+    let fpsTimer = null;
+    let frameCount = 0;
+    const fail = () => {
+      if (dead) return;
+      dead = true;
+      clearInterval(pingTimer); clearInterval(fpsTimer);
+      try { pc?.close(); } catch {}
+      ctlRef.current = null;
+      wrtcRef.current = "failed";
+      setWrtc("failed");
+      setPing(0);
+    };
+    (async () => {
+      try {
+        pc = new RTCPeerConnection({
+          iceServers: [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }],
+        });
+        const ctl = pc.createDataChannel("control");
+        const scr = pc.createDataChannel("screen");
+        const candidates = [];
+        pc.onicecandidate = (e) => {
+          if (e.candidate) candidates.push({ candidate: e.candidate.candidate, mid: String(e.candidate.sdpMid ?? "0") });
+        };
+        pc.onconnectionstatechange = () => {
+          if (["failed", "closed", "disconnected"].includes(pc.connectionState)) fail();
+        };
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        // Gom candidate ~2.5s — non-trickle: offer lẫn candidate gửi đúng 1 lượt.
+        await new Promise((res) => {
+          if (pc.iceGatheringState === "complete") return res();
+          const t = setTimeout(res, 2500);
+          pc.addEventListener("icegatheringstatechange", () => {
+            if (pc.iceGatheringState === "complete") { clearTimeout(t); res(); }
+          });
+        });
+        const ans = await owWebrtcSignal({ sdp: pc.localDescription.sdp, type: "offer", candidates });
+        if (dead) return;
+        await pc.setRemoteDescription({ type: ans.type, sdp: ans.sdp });
+        for (const c of ans.candidates ?? []) {
+          try { await pc.addIceCandidate({ candidate: c.candidate, sdpMid: c.mid }); } catch {}
+        }
+        await Promise.race([
+          Promise.all([new Promise((r) => { scr.onopen = r; }), new Promise((r) => { ctl.onopen = r; })]),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("datachannel không mở")), 6000)),
+        ]);
+        if (dead) return;
+        ctlRef.current = ctl;
+        ctl.onmessage = (e) => {
+          let m = null;
+          try { m = JSON.parse(e.data); } catch { return; }
+          if (m.t === "meta") setInfo((i) => (i ? { ...i, screen: { width: m.screenW, height: m.screenH } } : i));
+          else if (m.t === "pong") setPing(Math.max(0, Math.round(performance.now() - m.ts)));
+          else if (m.t === "ierr") setErrorMsg(m.m);
+        };
+        scr.onmessage = (e) => {
+          frameCount += 1;
+          setStatus("live");
+          setErrorMsg("");
+          pushFrame(new Blob([e.data], { type: "image/jpeg" }));
+        };
+        pingTimer = setInterval(() => {
+          try { ctl.send(JSON.stringify({ t: "ping", ts: performance.now() })); } catch {}
+        }, 2000);
+        fpsTimer = setInterval(() => { setFps(frameCount); frameCount = 0; }, 1000);
+        wrtcRef.current = "active";
+        setWrtc("active");
+      } catch {
+        fail();
+      }
+    })();
+    return () => {
+      dead = true;
+      clearInterval(pingTimer); clearInterval(fpsTimer);
+      try { pc?.close(); } catch {}
+      ctlRef.current = null;
+      if (wrtcRef.current !== "failed") {
+        wrtcRef.current = null;
+        setWrtc(null);
+        setStatus("paused");
+      }
+    };
+  }, [info?.available, paused, attempt, pushFrame]);
+
+  // Zoom sâu đổi độ nét (capW) → báo bridge đổi cỡ ảnh trên datachannel luôn,
+  // không phải dựng lại kết nối như đường HTTP.
+  useEffect(() => {
+    const ctl = ctlRef.current;
+    if (wrtc === "active" && ctl?.readyState === "open") {
+      try { ctl.send(JSON.stringify({ t: "hello", w: capW, q: STREAM_PARAMS.q })); } catch {}
+    }
+  }, [wrtc, capW]);
 
   // Thoát toàn màn hình: nhả khoá xoay + thoát fullscreen gốc + tắt lớp CSS.
   // (Khai báo TRƯỚC effect bên dưới — deps [exitFull] không được chạm TDZ.)
@@ -319,16 +441,18 @@ export function ScreenPage() {
     if (urlRef.current) URL.revokeObjectURL(urlRef.current);
   }, []);
 
-  // ---- gửi lệnh điều khiển
-  const sendInput = useCallback(async (payload) => {
-    setSending(true);
-    try {
-      await owScreenInput(payload);
-    } catch (e) {
-      setErrorMsg(String(e.message || e));
-    } finally {
-      setSending(false);
+  // Gửi lệnh điều khiển: WebRTC còn sống thì đi datachannel (một chiều, tức
+  // thì); chưa có/thất bại thì POST qua worker như cũ. Fire-and-forget — gõ
+  // phím không còn bị chờ giữa hai lần gửi, lỗi chỉ hiện banner.
+  const sendInput = useCallback((payload) => {
+    const ctl = ctlRef.current;
+    if (ctl && ctl.readyState === "open") {
+      try { ctl.send(JSON.stringify(payload)); } catch {}
+      return;
     }
+    owScreenInput(payload).catch((e) => {
+      if (e.message !== "UNPAIRED") setErrorMsg(String(e.message || e));
+    });
   }, []);
 
   // Local echo: phản hồi tức thời tại ngón tay (không chờ mạng) — chấm trắng
@@ -621,10 +745,15 @@ export function ScreenPage() {
     ? `${info.screen.width} / ${info.screen.height}`
     : "16 / 9";
 
-  // Ép nối lại stream ngay: tắt pause 1 nhịp để effect stream chạy vòng mới.
+  // Ép nối lại cả hai đường: tăng attempt là WebRTC thử lại từ đầu; WebRTC
+  // thất bại hẳn thì vòng HTTP dự phòng tự chạy.
   const reconnect = useCallback(() => {
-    setPaused(true);
-    setTimeout(() => setPaused(false), 50);
+    setErrorMsg("");
+    setStatus("connecting");
+    setWrtc(null);
+    wrtcRef.current = null;
+    setPing(0);
+    setAttempt((a) => a + 1);
   }, []);
 
   // Layer toàn màn hình render qua PORTAL ra document.body: vài trình duyệt
@@ -693,24 +822,24 @@ export function ScreenPage() {
         <div class="screen-panel screen-panel-main">
             <div class="screen-row">
               {COMBOS.map((c) => (
-                <button key={c.label} class="screen-key combo" disabled={sending} onClick={() => tapCombo(c)}>
+                <button key={c.label} class="screen-key combo" onClick={() => tapCombo(c)}>
                   {c.label}
                 </button>
               ))}
             </div>
             <div class="screen-row">
-              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("enter")}>Enter</button>
-              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("esc")}>Esc</button>
-              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("backspace")}>Bksp</button>
-              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("tab")}>Tab</button>
+              <button class="screen-key wide" onClick={() => tapKey("enter")}>Enter</button>
+              <button class="screen-key wide" onClick={() => tapKey("esc")}>Esc</button>
+              <button class="screen-key wide" onClick={() => tapKey("backspace")}>Bksp</button>
+              <button class="screen-key wide" onClick={() => tapKey("tab")}>Tab</button>
             </div>
           {/* Ô nhập ở ĐÁY khung — sát ngay trên thanh trạng thái/nav */}
           <form
             class="screen-textrow"
-            onSubmit={async (e) => {
+            onSubmit={(e) => {
               e.preventDefault();
               if (!text.trim()) return;
-              await sendInput({ type: "text", text });
+              sendInput({ type: "text", text }); // fire-and-forget — xoá ô ngay
               setText("");
             }}
           >
@@ -720,7 +849,7 @@ export function ScreenPage() {
               value={text}
               onInput={(e) => setText(e.currentTarget.value)}
             />
-            <button class="btn small" type="submit" disabled={sending || !text.trim()}>
+            <button class="btn small" type="submit" disabled={!text.trim()}>
               <SendIcon size={16} /> Send
             </button>
           </form>
@@ -745,7 +874,7 @@ export function ScreenPage() {
       <div class="screen-bar">
         <span class={`badge ${status === "live" ? "ok" : status === "error" ? "err" : "busy"}`}>
           {status === "live"
-            ? `Đang xem${fps ? ` · ${fps} hình/s` : ""}`
+            ? `Đang xem${fps ? ` · ${fps} hình/s` : ""}${wrtc === "active" && ping ? ` · ${ping}ms` : ""}`
             : status === "connecting"
               ? "Đang nối…"
               : status === "paused"

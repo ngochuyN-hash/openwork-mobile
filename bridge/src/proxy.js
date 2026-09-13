@@ -82,6 +82,16 @@ export async function proxyToOpenWork(req, res, upstreamPath, { baseUrl, ownerTo
   const query = req.url?.split("?")[1];
   if (query) upstream.search = `?${query}`;
 
+  // SSRF guard: proxy này CHỈ được nói chuyện với openwork-server cục bộ.
+  // baseUrl đến từ discovery trên chính máy này, nhưng khoá cứng protocol +
+  // hostname loopback để fetch không bao giờ trỏ ra ngoài kể cả khi discovery
+  // / engine registry trả thứ gì lạ.
+  if (upstream.protocol !== "http:" || !/^(127\.0\.0\.1|localhost|\[::1\]|::1)$/.test(upstream.hostname)) {
+    res.writeHead(502, { "content-type": "application/json" });
+    res.end(JSON.stringify({ code: "upstream_unsafe", message: "openwork-server must be local (loopback http)." }));
+    return;
+  }
+
   const controller = new AbortController();
   // CHỈ abort khi client thật sự ngắt kết nối. Lưu ý: trong Node 18+,
   // req 'close' phát cả khi request kết thúc bình thường - dùng res + guard.

@@ -93,6 +93,7 @@ function wakeRateLimited(ip) {
 // Xem/điều khiển màn hình (v1.7, học cơ chế 9remote). Drag từ phone phát lệnh
 // move liên tục nên limiter theo GIÂY, không theo phút như các route khác.
 const screen = new ScreenService();
+let webrtc = null; // WebRtcService — nạp lười khi có phone gọi /api/webrtc/signal
 const screenInputRateLimited = createRateLimiter(40, 1_000);
 
 async function readJsonBody(req, limit = 1_000_000) {
@@ -465,6 +466,26 @@ async function handleRequest(req, res) {
       } catch (error) {
         res.writeHead(400, { "content-type": "application/json" });
         res.end(JSON.stringify({ code: "input_error", message: String(error?.message ?? error) }));
+      }
+      return;
+    }
+
+    // WebRTC làm mối (SDP/ICE một lượt, non-trickle): sau khi bắt tay xong,
+    // frame + lệnh đi đường trực tiếp phone <-> PC qua datachannel, không qua
+    // tunnel/worker — latency bằng mạng thật giữa hai máy (cùng WiFi ~2-10ms).
+    if (req.method === "POST" && pathname === "/api/webrtc/signal") {
+      if (!webrtc) {
+        const { WebRtcService } = await import("./webrtc.js");
+        webrtc = new WebRtcService(screen);
+      }
+      try {
+        const body = await readJsonBody(req, 200_000);
+        const result = await webrtc.handleSignal(body);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(result));
+      } catch (error) {
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: "webrtc_error", message: String(error?.message ?? error) }));
       }
       return;
     }

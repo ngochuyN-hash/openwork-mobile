@@ -23,7 +23,12 @@ const IS_WINDOWS = platform() === "win32";
 
 const MAX_VIEWERS = 3; // chặn 1 người mở nhiều tab phá CPU
 const IDLE_STOP_MS = 90_000; // không ai xem 90s -> dừng chụp + kill daemon
-const FRAME_MIN_INTERVAL = 80; // trần ~12 hình/s; máy/đường kẹt thì nhịp tự chậm theo elapsed
+// Nhịp chụp: chụp+nén giờ chỉ ~30ms (đổi hình) / ~20ms (đứng yên) nhờ hash BMP,
+// nên trần hạ 80→55ms; có lệnh điều khiển thì burst 40ms trong ~1.5s cho hiệu
+// ứng bấm hiện gần tức thì rồi tự lùi về nhịp thường.
+const FRAME_MIN_INTERVAL = 55;
+const BURST_INTERVAL = 40;
+const BURST_MS = 1500;
 const MAX_PENDING_BYTES = 3_000_000; // viewer chậm quá thì đá (client tự nối lại)
 
 export const FRAME_UNCHANGED = 0;
@@ -130,8 +135,10 @@ export function normalizeInput(body, dims) {
 function delay(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
-function sha1(buf) {
-  return createHash("sha1").update(buf).digest("hex");
+// SHA-256 cho vân tay khung hình + cache exe (không phải mục đích bảo mật,
+// chỉ là hàm băm nội dung — OpenSSL SHA-NI đủ nhanh ~10ms/trên 20MB).
+function contentHash(buf) {
+  return createHash("sha256").update(buf).digest("hex");
 }
 function execFileP(cmd, args) {
   return new Promise((resolve, reject) => {
@@ -157,6 +164,8 @@ export class ScreenService {
     this.daemon = null; // { proc, pending: Map }
     this.daemonSeq = 0;
     this.idleTimer = null;
+    this._wake = null; // hàm đánh thức waitPoke() sớm — poke() gọi khi có input
+    this.burstUntil = 0; // nhịp BURST_INTERVAL kéo dài đến đây sau mỗi lệnh điều khiển
   }
 
   dims() {
@@ -211,6 +220,36 @@ export class ScreenService {
     this.touch();
   }
 
+  /**
+   * Viewer qua WebRTC datachannel (đường trực tiếp phone<->PC, không qua HTTP):
+   * "screen" chỉ nhận JPEG nhị phân, "control" nhận meta/đứng-yêu/lỗi dạng JSON.
+   * Tham số w/q do phone gửi trước bằng hello trên "control".
+   */
+  addDcViewer(ctl, scr, { w, q }) {
+    if (this.viewers.size >= MAX_VIEWERS) {
+      try { ctl.sendMessage(JSON.stringify({ t: "err", m: `Tối đa ${MAX_VIEWERS} người xem cùng lúc` })); } catch {}
+      return null;
+    }
+    const viewer = {
+      dc: true, ctl, scr,
+      width: Math.min(1600, Math.max(320, Math.round(Number(w) || 880))),
+      quality: Math.min(85, Math.max(30, Math.round(Number(q) || 55))),
+      alive: true,
+    };
+    this.viewers.add(viewer);
+    scr.onClosed(() => this.removeViewer(viewer));
+    this.sendTo(viewer, FRAME_META, Buffer.from(JSON.stringify({
+      screenW: this.monitor?.width ?? 0,
+      screenH: this.monitor?.height ?? 0,
+      shotW: viewer.width, shotH: 0, quality: viewer.quality,
+    })));
+    const key = `${viewer.width}x${viewer.quality}`;
+    if (this.lastJpegByParams.get(key)) this.sendTo(viewer, FRAME_JPEG, this.lastJpegByParams.get(key));
+    this.wakeLoop();
+    this.touch();
+    return viewer;
+  }
+
   broadcastMeta() {
     const dims = this.dims();
     if (!dims) return;
@@ -229,6 +268,26 @@ export class ScreenService {
   sendTo(viewer, type, payload) {
     if (!viewer.alive) return;
     try {
+      if (viewer.dc) {
+        // Datachannel: kiểm tra backlog riêng (SCTP tự kiểm soát lưu lượng, chỉ
+        // cần đá viewer chậm quá để khỏi phình buffer), frame = 1 message nhị phân.
+        if (viewer.scr.bufferedAmount() > MAX_PENDING_BYTES) {
+          viewer.alive = false;
+          this.viewers.delete(viewer);
+          if (this.viewers.size === 0) this.scheduleIdleStop();
+          return;
+        }
+        if (type === FRAME_JPEG) {
+          if (viewer.scr.isOpen()) viewer.scr.sendMessageBinary(payload);
+        } else if (type === FRAME_META) {
+          viewer.ctl.sendMessage(JSON.stringify({ t: "meta", ...JSON.parse(payload.toString("utf8")) }));
+        } else if (type === FRAME_ERROR) {
+          viewer.ctl.sendMessage(JSON.stringify({ t: "err", m: JSON.parse(payload.toString("utf8")).message }));
+        } else if (type === FRAME_UNCHANGED) {
+          viewer.ctl.sendMessage(JSON.stringify({ t: "u" }));
+        }
+        return;
+      }
       if (viewer.res.writableLength > MAX_PENDING_BYTES) {
         // Người xem chậm/kẹt đường truyền — ngắt cho client tự nối lại, đừng
         // để memory phình (9remote làm tương tự khi tile ack không về).
@@ -268,11 +327,12 @@ export class ScreenService {
                 message: `Chụp màn hình lỗi: ${error.message} (màn khóa/UAC sẽ như vậy)`,
               })));
             }
-            await delay(1000);
+            await this.waitPoke(1000);
             continue;
           }
           const elapsed = Date.now() - t0;
-          await delay(Math.max(30, FRAME_MIN_INTERVAL - elapsed));
+          const target = elapsed < this.burstUntil ? BURST_INTERVAL : FRAME_MIN_INTERVAL;
+          await this.waitPoke(Math.max(8, target - elapsed));
         }
       } catch (error) {
         this.broadcast(FRAME_ERROR, Buffer.from(JSON.stringify({ message: String(error.message ?? error) })));
@@ -280,6 +340,20 @@ export class ScreenService {
         this.looping = false;
       }
     })();
+  }
+
+  /** Chờ ms nhưng poke() gọi giữa chừng là dậy ngay (input đánh thức vòng chụp). */
+  waitPoke(ms) {
+    return new Promise((resolve) => {
+      let timer = setTimeout(() => { timer = null; this._wake = null; resolve(); }, ms);
+      this._wake = () => { if (timer) { clearTimeout(timer); timer = null; this._wake = null; resolve(); } };
+    });
+  }
+
+  poke() {
+    this.touch();
+    this.burstUntil = Date.now() + BURST_MS;
+    if (this._wake) this._wake();
   }
 
   async captureOnce() {
@@ -292,11 +366,12 @@ export class ScreenService {
     }
 
     const img = this.monitor.ref.captureImageSync();
-    const raw = img.toRawSync(); // RGBA — đã đối chiếu khớp PNG decode
-    // Hash khung THÔ TRƯỚC khi encode: màn đứng yên thì bỏ hẳn bước sharp
-    // (sha1 raw rẻ hơn encode gấp mấy lần) — nhịp chụp tăng mà CPU khi rảnh
-    // lại GIẢM so với bản encode-mỗi-nhịp cũ. Raw đổi mới encode + đẩy JPEG.
-    const rawHash = sha1(raw);
+    // Hash BMP thay vì raw RGBA: BMP là chép thuần không đổi kênh (~12ms) còn
+    // toRawSync phải swizzle BGRA->RGBA cả ~20MB (55-104ms — thủ phạm cũ làm
+    // rơi fps từ 12.5 xuống 8.4). Đổi hình thì toRawSync gọi SAU chỉ còn ~2ms
+    // (buffer đã materialize) — khớp pixel 100% với đường cũ, đã đối chiếu.
+    const bmp = img.toBmpSync();
+    const rawHash = contentHash(bmp);
     if (this.lastRawHash === rawHash) {
       for (const [, viewers] of groups) {
         for (const v of viewers) this.sendTo(v, FRAME_UNCHANGED);
@@ -304,6 +379,7 @@ export class ScreenService {
       return;
     }
     this.lastRawHash = rawHash;
+    const raw = img.toRawSync(); // RGBA
     for (const [key, viewers] of groups) {
       const [w, q] = key.split("x").map(Number);
       const jpeg = await sharp(raw, { raw: { width: img.width, height: img.height, channels: 4 } })
@@ -343,7 +419,7 @@ export class ScreenService {
     const line = normalizeInput(body, this.dims());
     const reply = await this.sendDaemon(line);
     if (reply.err) throw new Error(reply.err);
-    this.touch();
+    this.poke(); // lệnh vừa ăn -> chụp ngay nhịp kế cho hiệu ứng hiện sớm
     return this.dims();
   }
 
@@ -429,7 +505,7 @@ export class ScreenService {
     const exe = join(dir, "desktop-input.exe");
     const verFile = join(dir, "desktop-input.ver");
     const source = await readFile(join(__dirname, "desktop-input.cs"), "utf8");
-    const digest = sha1(source);
+    const digest = contentHash(source);
 
     try {
       const [exeOk, ver] = await Promise.all([access(exe).then(() => true, () => false), readFile(verFile, "utf8").catch(() => "")]);

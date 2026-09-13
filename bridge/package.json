@@ -15,8 +15,9 @@
     "openpocket": "./bin/openpocket.js"
   },
   "dependencies": {
+    "node-datachannel": "^0.33.4",
     "node-screenshots": "^0.2.8",
     "qrcode-terminal": "^0.12.0",
-    "sharp": "^0.33.5"
+    "sharp": "^0.35.4"
   }
 }

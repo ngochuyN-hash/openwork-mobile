@@ -357,6 +357,24 @@ export async function owScreenInput(payload) {
 }
 
 /**
+ * Làm mối WebRTC: gửi offer + candidate của phone, nhận answer + candidate của
+ * bridge. Sau khi bắt tay xong, frame/lệnh đi datachannel trực tiếp phone<->PC.
+ */
+export async function owWebrtcSignal(payload) {
+  const res = await fetch("/api/webrtc/signal", {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  if (res.status === 401) throw new Error("UNPAIRED");
+  if (!res.ok) {
+    const p = await res.json().catch(() => null);
+    throw new Error(p?.message ?? `webrtc signal ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
  * Nối stream frame màn hình từ bridge. Mỗi frame trên đường truyền là
  * [4 byte độ dài][1 byte type][payload]: 0 = màn đứng yên, 1 = JPEG,
  * 2 = meta JSON, 3 = lỗi JSON. Promise kết thúc khi server ngắt hoặc signal abort.
