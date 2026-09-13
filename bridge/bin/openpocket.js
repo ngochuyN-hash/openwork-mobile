@@ -6,13 +6,13 @@
 //   openpocket logs     xem log bridge
 //   openpocket code     in mã ghép hiện tại (30 phút) + QR
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { bridgeDataDir, loadConfig, saveConfig } from "../src/config.js";
-import { AUTOSTART_TASK_NAME, buildAutostartAction } from "../src/autostart.js";
+import { AUTOSTART_TASK_NAME, bridgeEntryPath, buildAutostartAction } from "../src/autostart.js";
 
 const BIN_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -120,14 +120,21 @@ if (cmd === "status") {
 
 if (cmd === "logs") {
   const { spawnSync } = await import("node:child_process");
-  if (!existsSync(logFile())) {
+  // Task elevated (VBS) ghi bridge-task.log; openpocket start ghi bridge.log —
+  // đọc file MỚI HƠN để luôn thấy log của instance đang chạy.
+  let logTarget = logFile();
+  try {
+    const taskLog = join(bridgeDataDir(), "bridge-task.log");
+    if (existsSync(taskLog) && statSync(taskLog).mtimeMs > statSync(logTarget).mtimeMs) logTarget = taskLog;
+  } catch {}
+  if (!existsSync(logTarget)) {
     console.log("Chưa có log.");
     process.exit(0);
   }
   if (process.platform === "win32") {
-    spawnSync("powershell", ["-NoProfile", "-Command", `Get-Content -Tail 50 -Wait "${logFile()}"`], { stdio: "inherit" });
+    spawnSync("powershell", ["-NoProfile", "-Command", `Get-Content -Tail 50 -Wait "${logTarget}"`], { stdio: "inherit" });
   } else {
-    spawnSync("tail", ["-n", "50", "-f", logFile()], { stdio: "inherit" });
+    spawnSync("tail", ["-n", "50", "-f", logTarget], { stdio: "inherit" });
   }
   process.exit(0);
 }
@@ -147,9 +154,23 @@ if (cmd === "autostart") {
     // quyền admin — SendInput mới chạm được vào app đang chạy Administrator
     // (UIPI chặn input chiều thường -> admin). Đánh đổi: lệnh từ điện thoại
     // cũng mang quyền admin, bù bằng khóa thiết bị/phòng sẵn có.
+    // Task chay qua wrapper VBS AN CUA SO: task ONLOGON interactive bat buoc
+    // (SendInput phai nam trong desktop cua user), nhung node truc tiep se co
+    // cua so console den - user dong nham la bridge chet mat log (da gap that).
+    // VBS chay node khong console + gom stdout/stderr vao bridge-task.log.
+    const vbsPath = join(bridgeDataDir(), "bridge-task.vbs");
+    writeFileSync(
+      vbsPath,
+      [
+        'Set sh = CreateObject("WScript.Shell")',
+        `sh.CurrentDirectory = "${join(BIN_DIR, "..")}"`,
+        `sh.Run "cmd /c """""${process.execPath}"" ""${bridgeEntryPath()}"" >> ""${join(bridgeDataDir(), "bridge-task.log")}" 2>&1""", 0, False`,
+      ].join("\r\n") + "\r\n",
+      "utf8"
+    );
     const created = spawnSync(
       "schtasks",
-      ["/Create", "/TN", AUTOSTART_TASK_NAME, "/SC", "ONLOGON", "/TR", buildAutostartAction(), "/RL", "HIGHEST", "/F"],
+      ["/Create", "/TN", AUTOSTART_TASK_NAME, "/SC", "ONLOGON", "/TR", `"wscript.exe" "${vbsPath}"`, "/RL", "HIGHEST", "/F"],
       { stdio: "inherit" }
     );
     if (created.status !== 0) {
