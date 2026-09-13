@@ -33,3 +33,4 @@ worker/.wrangler/
 
 # GUI test build manifest (asInvoker copy for runtime testing)
 desktop/src/app-test.manifest
+OpenPocket-Setup.cmd

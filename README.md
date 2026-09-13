@@ -169,7 +169,7 @@ A phone is not limited to one machine anymore. The app keeps a **keychain** (`lo
 
 Build: `desktop\build.bat` → `desktop\bin\OpenPocket.exe` (`desktop/bin/` is gitignored — the exe embeds the real worker URL and binaries can't go through the pre-push washer, so rebuild locally). Unsigned exe = SmartScreen warns once ("More info → Run anyway"). Node.js 20+ must already be installed (the GUI finds node.exe and runs npm from next to it).
 
-**Handing the whole thing to a friend:** `openwork-bridge-friend.zip` (built locally, gitignored) = `bridge/` (src + bin + package files, no node_modules — the exe installs it on first Start) + `web/dist/` + `OpenPocket.exe` + `HUONG-DAN.txt`. The friend installs Node.js LTS, double-clicks the exe, clicks Start, scans the QR — no terminal, no forms, no accounts.
+**Handing the whole thing to a friend:** the installer is **`OpenPocket-Setup.cmd`** — ONE file (276KB), built by `node desktop/build-setup.js`, gitignored like all binaries. The friend double-clicks it: it checks Node.js (opens the nodejs.org page by itself if missing), installs into `%LOCALAPPDATA%\OpenPocket`, drops Start-Menu + Desktop shortcuts, and opens the app (UAC: Yes once). The app does the rest (bridge `npm install`, identity provisioning, the QR). Internals: a batch wrapper around an embedded base64 zip (certutil + Expand-Archive — both built into Windows). `openwork-bridge-friend.zip` (same content, plain zip) stays available as a manual fallback — rebuild both after every change.
 
 ## Project layout
 
