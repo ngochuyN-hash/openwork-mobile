@@ -20,6 +20,9 @@
 // ảnh trên điện thoại (CSS transform): tọa độ bấm tính qua rect ảnh đã phóng
 // nên vẫn trúng đích, stream không tốn thêm băng thông. Chip "1.5×" góc
 // dưới-trái chỉ hiện khi đang phóng, bấm là về vừa khung.
+// v2.9.1: vuốt 1 NGÓN cũng cuộn máy PC (hai ngón giữ nguyên) — kéo chuột
+// (drag) dời thành GIỮ ~nửa giây rồi kéo, giữ rồi nhả không di = Right-click
+// (rung + vành đỏ báo lúc giữ, lệnh gửi lúc nhả để còn dành ngón cho drag).
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { apiScreenInfo, owScreenInput, owScreenStream } from "../api.js";
@@ -162,19 +165,24 @@ export function ScreenPage() {
     zoomRef.current = { s: 1, x: 0, y: 0 };
     applyZoom();
   }, []);
+  // Biên dời pan theo 1 trục: ảnh DÀI hơn khung thì được trượt tới khi mép ảnh
+  // chạm mép khung (không lộ nền), ảnh NGẮN hơn thì kẹp giữa không cho trôi.
+  const panBounds = (sz, st, bc) =>
+    sz >= st ? [st - sz / 2 - bc, sz / 2 - bc] : [sz / 2 - bc, st - sz / 2 - bc];
   // Đổi bố cục (bật/tắt toàn màn hình, xoay ảo, đo lại khung) là pan/zoom tính
   // theo bố cục cũ — trả về vừa khung cho khỏi lệch chết chỗ lạ.
   useEffect(() => { resetZoom(); }, [full, portraitMobile, vbox, resetZoom]);
 
-  // Gesture trên hình, kiểu màn cảm ứng: chạm = click · giữ lâu = Right-click ·
-  // chạm đôi = Double-click · kéo = di chuyển · hai ngón vuốt = cuộn · véo = zoom.
+  // Gesture trên hình, kiểu màn cảm ứng: chạm = click · giữ lâu rồi nhả =
+  // Right-click · GIỮ RỒI KÉO = kéo chuột (drag) · vuốt 1 ngón = cuộn PC ·
+  // hai ngón vuốt = cuộn · véo 2 ngón = zoom (đang zoom thì vuốt = dời khung).
   const pointers = useRef(new Map()); // pointerId -> {x, y} (client px)
   const g = useRef({
-    // idle | press (đã gửi down, đang kéo) | scroll (hai ngón cuộn)
+    // idle | press (đang kéo chuột PC) | scroll (vuốt cuộn, 1 hay 2 ngón đều được)
     // | wait2 (2 ngón, chờ phân loại véo/cuộn) | pinch (đang véo)
     // | pinch-end (ngón còn lại sau véo, bỏ qua) | pan (1 ngón dời khung nhìn)
     mode: "idle",
-    scx: 0, scy: 0, startT: 0, sentDown: false, longFired: false,
+    scx: 0, scy: 0, startT: 0, sentDown: false, held: false,
     lpTimer: null, lastSendT: 0, accY: 0, lastMidY: 0,
     // véo: khoảng cách/điểm giữa 2 ngón lúc đặt xuống, độ phóng lúc đầu (s0),
     // tâm neo nội dung (fa* — tỉ lệ chỗ ngón kẹp trên khung ảnh), khung ảnh
@@ -330,10 +338,10 @@ export function ScreenPage() {
     };
   };
 
-  const SLOP = 10; // px: quá ngưỡng mới tính là kéo (không thì là chạm/giữ)
+  const SLOP = 10; // px: quá ngưỡng mới tính là vuốt (không thì là chạm/giữ)
   const TAP_MS = 260;
-  const LP_MS = 550; // giữ lâu -> Right-click
-  const WHEEL_STEP = 24; // hai ngón đi được từng này px thì cuộn một nấc
+  const LP_MS = 550; // giữ lâu -> "đã giữ": nhả = Right-click, kéo = drag
+  const WHEEL_STEP = 24; // ngón đi được từng này px thì cuộn một nấc
   const PINCH_PX = 12; // hai ngón nở/thu được từng này px thì tính là véo (zoom)
   const SCROLL_GATE = 14; // hai ngón trượt được từng này px thì tính là cuộn
   const ZOOM_MAX = 3; // trần zoom — ảnh gốc 880px, phóng quá là vỡ nét
@@ -347,28 +355,28 @@ export function ScreenPage() {
     if (pointers.current.size === 1) {
       st.mode = "idle";
       st.scx = e.clientX; st.scy = e.clientY;
-      st.startT = Date.now(); st.sentDown = false; st.longFired = false; st.accY = 0;
+      st.startT = Date.now(); st.sentDown = false; st.held = false; st.accY = 0;
       clearTimeout(st.lpTimer);
       posEcho(e.clientX, e.clientY);
       st.lpTimer = setTimeout(() => {
-        // Giữ lâu không rời -> Right-click tại điểm chạm
+        // Giữ đứng yên đúng hạn: rung + vành đỏ báo "đã giữ" — nhả tay không di
+        // là Right-click, kéo tiếp là kéo chuột. Gửi Right-click NGAY LÚC NÀY thì
+        // không còn đường nào cho drag, nên dời sang lúc nhả tay (finishPointer).
         if (st.mode === "idle" && !st.sentDown) {
-          st.longFired = true;
-          buzz(40); // rung ngay: chắc chắn đây là Right-click, không đoán
+          st.held = true;
+          buzz(40);
           posEcho(st.scx, st.scy, "rc");
-          const n2 = normXY(st.scx, st.scy);
-          if (n2) sendInput({ type: "rclick", ...n2 });
         }
       }, LP_MS);
     } else if (pointers.current.size === 2) {
-      // Ngón thứ hai đặt xuống: huỷ long-press, nhả nút nếu đang kéo, rồi CHỜ
+      // Ngón thứ hai đặt xuống: huỷ "đã giữ", nhả nút nếu đang kéo, rồi CHỜ
       // PHÂN LOẠI — véo (khoảng cách 2 ngón nở/thu) hay cuộn (2 ngón trượt).
       clearTimeout(st.lpTimer);
       if (st.mode === "press") {
         const n2 = normXY(e.clientX, e.clientY);
         if (n2) sendInput({ type: "up", ...n2 });
       }
-      st.sentDown = false;
+      st.sentDown = false; st.held = false;
       st.mode = "wait2";
       const pts = [...pointers.current.values()];
       st.d0 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
@@ -424,23 +432,23 @@ export function ScreenPage() {
       // không tuột khỏi cửa sổ xem (trục nào chưa đủ rộng thì kẹp giữa)
       let px = (mx - st.slx) - st.bcx - (st.fax - 0.5) * w;
       let py = (my - st.sly) - st.bcy - (st.fay - 0.5) * h;
-      px = w >= st.stw
-        ? Math.min(Math.max(px, st.stw - w / 2 - st.bcx), w / 2 - st.bcx)
-        : Math.min(Math.max(px, w / 2 - st.bcx), st.stw - w / 2 - st.bcx);
-      py = h >= st.sth
-        ? Math.min(Math.max(py, st.sth - h / 2 - st.bcy), h / 2 - st.bcy)
-        : Math.min(Math.max(py, h / 2 - st.bcy), st.sth - h / 2 - st.bcy);
+      const [x0, x1] = panBounds(w, st.stw, st.bcx);
+      const [y0, y1] = panBounds(h, st.sth, st.bcy);
+      px = Math.min(Math.max(px, x0), x1);
+      py = Math.min(Math.max(py, y0), y1);
       zoomRef.current = { s, x: px, y: py };
       applyZoom();
       return;
     }
     if (st.mode === "pinch-end") return; // ngón còn lại sau véo: bỏ tới khi nhấc hết
     if (st.mode === "scroll") {
-      if (pointers.current.size >= 2) {
-        const pts = [...pointers.current.values()];
-        const mid = (pts[0].y + pts[1].y) / 2;
-        st.accY += mid - st.lastMidY;
-        st.lastMidY = mid;
+      // 1 hay 2 ngón đều cuộn cùng nhịp: điểm dò = ngón một (1 ngón) / điểm
+      // giữa hai ngón (2 ngón)
+      const pts = [...pointers.current.values()];
+      const refY = pts.length >= 2 ? (pts[0].y + pts[1].y) / 2 : pts[0]?.y;
+      if (refY != null) {
+        st.accY += refY - st.lastMidY;
+        st.lastMidY = refY;
         while (Math.abs(st.accY) >= WHEEL_STEP) {
           // ngón vuốt lên (accY âm) = cuộn xem nội dung dưới = wheel âm
           sendInput({ type: "wheel", dy: st.accY > 0 ? 2 : -2 });
@@ -466,8 +474,8 @@ export function ScreenPage() {
       if (n) sendInput({ type: "move", ...n });
       return;
     }
-    // idle: nếu đi quá ngưỡng — đang zoom thì 1 ngón dời khung nhìn (kéo chuột
-    // PC thì thu về vừa khung đã), chưa zoom thì bắt đầu kéo (gửi down tại chỗ chạm)
+    // idle: đi quá ngưỡng — đang zoom thì vuốt = dời khung nhìn; đã "giữ" thì
+    // kéo tiếp = kéo chuột PC (down tại điểm giữ); thường thì vuốt = cuộn PC.
     const dist = Math.hypot(e.clientX - st.scx, e.clientY - st.scy);
     if (dist > SLOP) {
       clearTimeout(st.lpTimer);
@@ -481,16 +489,25 @@ export function ScreenPage() {
           const z = zoomRef.current;
           const bcx = R.left + R.width / 2 - S.left - z.x;
           const bcy = R.top + R.height / 2 - S.top - z.y;
-          st.plminX = R.width / 2 - bcx; st.plmaxX = S.width - R.width / 2 - bcx;
-          st.plminY = R.height / 2 - bcy; st.plmaxY = S.height - R.height / 2 - bcy;
+          const [x0, x1] = panBounds(R.width, S.width, bcx);
+          const [y0, y1] = panBounds(R.height, S.height, bcy);
+          st.plminX = x0; st.plmaxX = x1;
+          st.plminY = y0; st.plmaxY = y1;
         } else { st.plminX = 0; st.plmaxX = 0; st.plminY = 0; st.plmaxY = 0; }
         return;
       }
-      const n = normXY(st.scx, st.scy);
-      if (n) sendInput({ type: "down", ...n });
-      st.sentDown = true;
-      st.mode = "press";
-      st.lastSendT = Date.now();
+      if (st.held) {
+        const n = normXY(st.scx, st.scy);
+        if (n) sendInput({ type: "down", ...n });
+        st.sentDown = true;
+        st.mode = "press";
+        st.lastSendT = Date.now();
+        posEcho(e.clientX, e.clientY);
+        return;
+      }
+      st.mode = "scroll";
+      st.lastMidY = e.clientY;
+      st.accY = e.clientY - st.scy; // tính cả đoạn vừa vuốt, khỏi bỏ sót nấc đầu
     }
   };
 
@@ -513,11 +530,16 @@ export function ScreenPage() {
       if (pointers.current.size === 0) st.mode = "idle";
       return; // ngón còn lại sau cuộn: bỏ qua tới khi nhấc hết
     }
-    if (st.longFired) { st.mode = "idle"; return; } // Right-click đã xử lý
     clearTimeout(st.lpTimer);
     const n = normXY(e.clientX, e.clientY);
     if (st.sentDown) {
       if (n) sendInput({ type: "up", ...n });
+      st.mode = "idle";
+      return;
+    }
+    if (st.held) {
+      // giữ rồi nhả, chưa kéo = Right-click tại điểm giữ (báo rung từ lúc giữ)
+      if (n) sendInput({ type: "rclick", ...n });
       st.mode = "idle";
       return;
     }
