@@ -24,7 +24,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const IS_WINDOWS = platform() === "win32";
 
 const MAX_VIEWERS = 3; // chặn 1 người mở nhiều tab phá CPU
-const IDLE_STOP_MS = 90_000; // không ai xem 90s -> dừng chụp + kill daemon
+const IDLE_STOP_MS = 0; // hết người xem là dừng chụp + kill daemon NGAY (tick kế tiếp) — đổi lại: viewer quay lại đợi daemon khởi động ~1-2s
 // Kiến trúc v3.2: khâu CHỤP chạy trong worker thread riêng (screen-capture.worker.js)
 // nên không còn chặn event loop — nhịp dưới là NHỊP CHỤP; việc nén (sharp) chạy
 // trên threadpool libuv và pipeline chồng với chụp: throughput = max(chụp, nén).
