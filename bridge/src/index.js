@@ -1,5 +1,5 @@
 import http from "node:http";
-import { watch } from "node:fs";
+import { watch, writeFileSync, unlinkSync } from "node:fs";
 import qrcode from "qrcode-terminal";
 import { loadConfig, saveConfig, bridgeDataDir } from "./config.js";
 import { ensureOwnerToken } from "./bootstrap.js";
@@ -515,6 +515,13 @@ function printPairing(base, note, { withMaster = false } = {}) {
 
 server.listen(config.port, "127.0.0.1", () => {
   const local = `http://127.0.0.1:${config.port}`;
+  // Ghi pid NGAY TRONG bridge: mọi đường khởi động (task admin, openpocket
+  // start, tay) đều hiện diện với `openpocket status/stop/ensure`. Trước đây
+  // chỉ `openpocket start` ghi, instance từ task VBS là vô hình với CLI — hai
+  // bên cùng start thì EADDRINUSE chồng nhau (sự cố sáng 13/09).
+  try {
+    writeFileSync(join(bridgeDataDir(), "bridge.pid"), String(process.pid));
+  } catch {}
   console.log("");
   console.log(`OpenWork Mobile bridge v${BRIDGE_VERSION}`);
   console.log(`listening on ${local} (localhost only - remote đi qua tunnel bên dưới)`);
@@ -559,6 +566,9 @@ server.listen(config.port, "127.0.0.1", () => {
 
 process.on("SIGINT", () => {
   console.log("\n[bridge] bye");
+  try {
+    unlinkSync(join(bridgeDataDir(), "bridge.pid"));
+  } catch {}
   process.exit(0);
 });
 

@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 import { bridgeDataDir, loadConfig, saveConfig } from "../src/config.js";
-import { AUTOSTART_TASK_NAME, bridgeEntryPath, buildAutostartAction } from "../src/autostart.js";
+import { AUTOSTART_TASK_NAME, WATCHDOG_TASK_NAME, bridgeEntryPath, buildAutostartAction } from "../src/autostart.js";
 
 const BIN_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -143,9 +143,12 @@ function readPid() {
       // Chỉ tin khi đúng là tiến trình node (tránh nhầm pid đã tái sử dụng).
       if (process.platform === "win32") {
         try {
-          const { execSync } = require("node:child_process");
-          const out = execSync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`, { encoding: "utf8", timeout: 5000 });
-          if (new RegExp(`"node(\\.exe)?","${pid}"`).test(out)) return pid;
+          // File này là ESM — không có `require`; dùng spawnSync đã import trên đầu.
+          const probe = spawnSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], {
+            encoding: "utf8",
+            timeout: 5000,
+          });
+          if (new RegExp(`"node(\\.exe)?","${pid}"`).test(probe.stdout || "")) return pid;
         } catch {}
       }
       return 0;
@@ -153,6 +156,25 @@ function readPid() {
   } catch {
     return 0;
   }
+}
+
+// Cổng bridge còn ai nghe không — phép thử nối TCP nhanh. Dùng để tôn trọng
+// instance chạy NGOÀI CLI (chưa kịp ghi pid file): cổng còn người nghe là
+// KHÔNG start thêm bản nữa đè lên nhau (EADDRINUSE — sự cố sáng 13/09).
+async function portBusy(port) {
+  const net = await import("node:net");
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: "127.0.0.1", port, timeout: 800 });
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => resolve(false));
+    socket.once("timeout", () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
 }
 
 if (cmd === "start") {
@@ -202,10 +224,45 @@ if (cmd === "stop") {
   process.exit(0);
 }
 
+if (cmd === "ensure") {
+  // Cho máy canh (task hẹn giờ gọi định kỳ): bridge sống thì thôi, chết thì
+  // dựng lại — im lặng, không hỏi gì, an toàn để chạy mỗi 5 phút.
+  const pid = readPid();
+  const port = loadConfig().port || 8788;
+  if (pid) {
+    console.log(`[${new Date().toISOString()}] bridge sống (pid ${pid}) — không làm gì.`);
+    process.exit(0);
+  }
+  if (await portBusy(port)) {
+    console.log(
+      `[${new Date().toISOString()}] cổng ${port} có người nghe nhưng không pid — instance ngoài CLI vẫn sống, không start thêm.`
+    );
+    process.exit(0);
+  }
+  const { spawn } = await import("node:child_process");
+  const { openSync } = await import("node:fs");
+  const logFd = openSync(logFile(), "a");
+  const entry = join(BIN_DIR, "..", "src", "index.js");
+  const child = spawn(process.execPath, [entry], {
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    windowsHide: true,
+  });
+  child.unref();
+  writeFileSync(pidFile(), String(child.pid));
+  console.log(`[${new Date().toISOString()}] bridge đã chết — máy canh dựng lại (pid ${child.pid}).`);
+  process.exit(0);
+}
+
 if (cmd === "status") {
   const pid = readPid();
   if (!pid) {
-    console.log("❌ Bridge KHÔNG chạy. Chạy: openpocket start");
+    if (await portBusy(loadConfig().port || 8788)) {
+      console.log("⚠️ Có instance bridge chạy NGOÀI CLI (chưa ghi pid file — init bản cũ).");
+      console.log("   Cổng vẫn phục vụ bình thường; muốn CLI quản được thì restart instance đó 1 lần.");
+    } else {
+      console.log("❌ Bridge KHÔNG chạy. Chạy: openpocket start");
+    }
     process.exit(1);
   }
   console.log(`✅ Bridge đang chạy (pid ${pid}).`);
@@ -312,6 +369,57 @@ if (cmd === "autostart") {
   } else {
     console.log(`❌ Tự chạy đang TẮT. Bật bằng: openpocket autostart --enable`);
   }
+  process.exit(0);
+}
+
+if (cmd === "watchdog") {
+  // Máy canh: task hẹn giờ 5 PHÚT chạy `openpocket ensure` (ẩn, cùng quyền
+  // admin với task autostart) — bridge bị kill ngoài CLI/crash ngầm là tự
+  // hồi sinh trong 5 phút, không phải đợi reboot hay ai đó mở tay (bài học
+  // đêm 13/09: bridge chết lúc 08:03, cả nhà tưởng "Cloudflare chặn").
+  if (process.platform !== "win32") {
+    console.log("watchdog hiện chỉ hỗ trợ Windows (Task Scheduler).");
+    process.exit(1);
+  }
+  const sub = (args[1] || "--status").toLowerCase();
+  if (sub === "--install" || sub === "--enable") {
+    const vbsPath = join(bridgeDataDir(), "bridge-watchdog.vbs");
+    const self = fileURLToPath(import.meta.url);
+    writeFileSync(
+      vbsPath,
+      [
+        'Set sh = CreateObject("WScript.Shell")',
+        `sh.CurrentDirectory = "${join(BIN_DIR, "..")}"`,
+        `sh.Run "cmd /c """""${process.execPath}"" ""${self}"" ensure >> ""${join(bridgeDataDir(), "watchdog.log")}" 2>&1""", 0, False`,
+      ].join("\r\n") + "\r\n",
+      "utf8"
+    );
+    const created = spawnSync(
+      "schtasks",
+      ["/Create", "/TN", WATCHDOG_TASK_NAME, "/SC", "MINUTE", "/MO", "5", "/TR", `"wscript.exe" "${vbsPath}"`, "/RL", "HIGHEST", "/F"],
+      { stdio: "inherit" }
+    );
+    if (created.status !== 0) {
+      console.log("");
+      console.log("Không tạo được task — mở terminal Run as Administrator rồi chạy lại:");
+      console.log("  openpocket watchdog --install");
+      process.exit(1);
+    }
+    console.log(`✅ Máy canh đã BẬT: mỗi 5 phút tự chạy "openpocket ensure" (task "${WATCHDOG_TASK_NAME}").`);
+    console.log("   Tắt bằng: openpocket watchdog --uninstall");
+    process.exit(0);
+  }
+  if (sub === "--uninstall" || sub === "--disable") {
+    spawnSync("schtasks", ["/Delete", "/TN", WATCHDOG_TASK_NAME, "/F"], { stdio: "inherit" });
+    console.log("🛑 Đã tắt máy canh.");
+    process.exit(0);
+  }
+  const queried = spawnSync("schtasks", ["/Query", "/TN", WATCHDOG_TASK_NAME], { stdio: "pipe", encoding: "utf8" });
+  console.log(
+    queried.status === 0
+      ? `✅ Máy canh đang BẬT (task "${WATCHDOG_TASK_NAME}", 5 phút/lần).`
+      : `❌ Máy canh đang TẮT. Bật bằng: openpocket watchdog --install`
+  );
   process.exit(0);
 }
 
@@ -543,5 +651,9 @@ Dùng:
   openpocket tenant revoke <user>         Xóa phòng
   openpocket autostart --enable [--with-openwork]   Tự chạy bridge khi đăng nhập Windows
   openpocket autostart --status                     Xem tự chạy đang bật hay tắt
-  openpocket autostart --disable                    Tắt tự chạy`);
+  openpocket autostart --disable                    Tắt tự chạy
+  openpocket watchdog --install   Máy canh: mỗi 5 phút tự dựng lại bridge nếu nó chết (cần admin 1 lần)
+  openpocket watchdog --status    Xem máy canh bật hay tắt
+  openpocket watchdog --uninstall Tắt máy canh
+  openpocket ensure               Chạy thầm lặng: bridge sống thì thôi, chết thì dựng (lệnh của máy canh)`);
 process.exit(0);

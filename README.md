@@ -101,6 +101,14 @@ openpocket autostart --disable                  # disable
 ```
 Without `--with-openwork`, only the bridge auto-starts (you open OpenWork manually — the bridge re-probes the server every 5s, so order doesn't matter).
 
+**Watchdog (recommended):** a scheduled task that runs `openpocket ensure` every 5 minutes — if the bridge dies silently (killed by another tool, crash, ...) it is brought back automatically, no reboot or manual start needed:
+```bash
+openpocket watchdog --install     # needs admin once (same elevation as autostart)
+openpocket watchdog --status      # enabled or not
+openpocket watchdog --uninstall   # disable
+```
+`ensure` is safe to run any time: if the bridge is alive it does nothing; if the port is held by an instance started outside the CLI it does NOT start a duplicate (no EADDRINUSE pile-ups). The bridge also writes its own pid file since this version, so `openpocket status/stop` see every start path (Task Scheduler task, `openpocket start`, manual).
+
 **Launch OpenWork from the phone:** computer on + bridge running but the OpenWork app closed → the phone app shows a **"Launch OpenWork on the computer"** button (on the red banner + in Settings → Bridge status). Tap → wait ~20s → tap Re-check. Note: a fully shut down or deep-sleeping computer can't be woken — turn it on first.
 
 ### Watch & control the computer's screen ("Screen" tab)
