@@ -76,7 +76,7 @@ namespace OpenPocket.Desktop
         // Ngôn ngữ theo skill UI: Primary = nền đen chữ trắng; Ghost = nền
         // trắng viền đậm mảnh; DangerGhost = nền trắng viền đỏ chữ đỏ; khóa
         // = nhạt hẳn mất màu vai (đèn trạng thái mới giữ màu).
-        internal enum ButtonKind { Primary, Ghost, DangerGhost }
+        internal enum ButtonKind { Primary, Ghost, DangerGhost, SuccessGhost }
 
         internal class RoundedButton : Control
         {
@@ -92,6 +92,8 @@ namespace OpenPocket.Desktop
             private static readonly Color CFaint = Color.FromArgb(139, 141, 152);    // #8B8D98
             private static readonly Color CDanger = Color.FromArgb(214, 69, 69);     // #D64545
             private static readonly Color CDangerHover = Color.FromArgb(252, 240, 240);
+            private static readonly Color CSuccess = Color.FromArgb(48, 164, 108);   // #30A46C
+            private static readonly Color CSuccessHover = Color.FromArgb(240, 250, 245);
 
             private readonly ButtonKind kind;
             private Color fill, stroke, textColor;
@@ -121,11 +123,23 @@ namespace OpenPocket.Desktop
             {
                 if (on)
                 {
-                    fill = kind == ButtonKind.Primary ? CPrimary : CCard;
-                    stroke = kind == ButtonKind.Primary ? CPrimary :
-                        (kind == ButtonKind.DangerGhost ? CDanger : CStroke);
-                    textColor = kind == ButtonKind.Primary ? Color.White :
-                        (kind == ButtonKind.DangerGhost ? CDanger : CText);
+                    fill = CCard;
+                    if (kind == ButtonKind.Primary)
+                    {
+                        fill = CPrimary; stroke = CPrimary; textColor = Color.White;
+                    }
+                    else if (kind == ButtonKind.DangerGhost)
+                    {
+                        stroke = CDanger; textColor = CDanger;
+                    }
+                    else if (kind == ButtonKind.SuccessGhost)
+                    {
+                        stroke = CSuccess; textColor = CSuccess;
+                    }
+                    else
+                    {
+                        stroke = CStroke; textColor = CText;
+                    }
                 }
                 else
                 {
@@ -169,6 +183,7 @@ namespace OpenPocket.Desktop
             {
                 if (kind == ButtonKind.Primary) return CPrimaryHover;
                 if (kind == ButtonKind.DangerGhost) return CDangerHover;
+                if (kind == ButtonKind.SuccessGhost) return CSuccessHover;
                 return CHover;
             }
         }
@@ -334,11 +349,11 @@ namespace OpenPocket.Desktop
             cardStatus = CreateCard(0, ref yL, 496, 178, pnlContent, false);
             CreateCardTitle("TRẠNG THÁI KẾT NỐI", cardStatus);
 
-            lblStatusBridge = CreateStatusLabel("Bridge: Đang kiểm tra...", 16, 39, cardStatus);
+            lblStatusBridge = CreateStatusLabel("● Bridge: Đang kiểm tra...", 16, 39, cardStatus);
             lblStatusBridge.Size = new Size(448, 22);
             lblStatusBridge.Font = new Font("Segoe UI", 9.75f);
 
-            lblStatusTunnel = CreateStatusLabel("Cloudflare Tunnel: Đang kiểm tra...", 16, 71, cardStatus);
+            lblStatusTunnel = CreateStatusLabel("● Cloudflare Tunnel: Đang kiểm tra...", 16, 71, cardStatus);
             lblStatusTunnel.Size = new Size(448, 22);
             lblStatusTunnel.Font = new Font("Segoe UI", 9.75f);
             lblStatusTunnelUrl = new Label();
@@ -366,7 +381,7 @@ namespace OpenPocket.Desktop
             // nút lên đỉnh để không bao giờ bị nền label che
             btnTunnelRestart.BringToFront();
 
-            lblStatusOpenWork = CreateStatusLabel("OpenWork Desktop: Đang kiểm tra...", 16, 141, cardStatus);
+            lblStatusOpenWork = CreateStatusLabel("● OpenWork Desktop: Đang kiểm tra...", 16, 141, cardStatus);
             lblStatusOpenWork.Size = new Size(448, 22);
             lblStatusOpenWork.Font = new Font("Segoe UI", 9.75f);
 
@@ -395,7 +410,7 @@ namespace OpenPocket.Desktop
             // viền đỏ chữ đỏ trên nền trắng, khoá thì về xám như mọi nút.
             cardPair = CreateCard(0, ref yL, 496, 120, pnlContent, false);
 
-            btnStartBridge = CreateButton("Bật Bridge", ButtonKind.Primary, 16, 14, 149, 40, cardPair);
+            btnStartBridge = CreateButton("Bật Bridge", ButtonKind.SuccessGhost, 16, 14, 149, 40, cardPair);
             btnStartBridge.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
             btnStartBridge.Click += delegate { ActionStartBridge(); };
 
@@ -531,7 +546,7 @@ namespace OpenPocket.Desktop
             lblStatusTunnel.Width = inner - 132;
             lblStatusOpenWork.Width = inner;
             lblStatusTunnelUrl.Width = inner;
-            btnTunnelRestart.SetBounds(cw - 16 - 30, 68, 30, 30);
+            PlaceTunnelRestart();
 
             int gap = 8;
             int bw = (inner - 2 * gap) / 3;
@@ -652,6 +667,16 @@ namespace OpenPocket.Desktop
         {
             btn.Enabled = on;
             btn.ApplyLook(on);
+        }
+
+        // Icon restart ↻ ngồi SÁT sau chữ dòng tunnel (owner 13/09: "nút
+        // restart đặt sát vô") — chữ đổi theo trạng thái nên đo lại bằng
+        // MeasureText mỗi lần chạy, canh giữa dọc với dòng chữ
+        private void PlaceTunnelRestart()
+        {
+            int w = TextRenderer.MeasureText(lblStatusTunnel.Text, lblStatusTunnel.Font).Width;
+            btnTunnelRestart.Left = lblStatusTunnel.Left + w + 8;
+            btnTunnelRestart.Top = lblStatusTunnel.Top + (lblStatusTunnel.Height - btnTunnelRestart.Height) / 2;
         }
 
         // ================= CONFIG & LOGIC =================
@@ -900,7 +925,7 @@ namespace OpenPocket.Desktop
             tunnelUrl = ReadTunnelUrlFromLog();
             if (backoffMin > 0)
             {
-                lblStatusTunnel.Text = "Cloudflare: đang chờ mở lại đường hầm (429)";
+                lblStatusTunnel.Text = "● Cloudflare: đang chờ mở lại đường hầm (429)";
                 // Bỏ đuôi "bấm [Restart tunnel]" — nút thật đang đứng kế bên,
                 // ghi lại tên nút là chữ thừa (audit 13/09).
                 lblStatusTunnelUrl.Text = "Tự thử lại sau ~" + backoffMin + " phút.";
@@ -908,19 +933,19 @@ namespace OpenPocket.Desktop
             }
             else if (!string.IsNullOrEmpty(tunnelUrl))
             {
-                lblStatusTunnel.Text = "Cloudflare Tunnel:";
+                lblStatusTunnel.Text = "● Cloudflare Tunnel:";
                 lblStatusTunnelUrl.Text = tunnelUrl;
                 lblStatusTunnel.ForeColor = ColorSuccess;
             }
             else if (isBridgeRunning)
             {
-                lblStatusTunnel.Text = "Cloudflare Tunnel: Đang thiết lập kết nối...";
+                lblStatusTunnel.Text = "● Cloudflare Tunnel: Đang thiết lập kết nối...";
                 lblStatusTunnelUrl.Text = "";
                 lblStatusTunnel.ForeColor = ColorAmber;
             }
             else
             {
-                lblStatusTunnel.Text = "Cloudflare Tunnel: Chưa kết nối";
+                lblStatusTunnel.Text = "○ Cloudflare Tunnel: Chưa kết nối";
                 lblStatusTunnelUrl.Text = "";
                 lblStatusTunnel.ForeColor = ColorMuted;
             }
@@ -936,14 +961,18 @@ namespace OpenPocket.Desktop
             }
             if (openworkRunning)
             {
-                lblStatusOpenWork.Text = "OpenWork Desktop: Đang mở";
+                lblStatusOpenWork.Text = "● OpenWork Desktop: Đang mở";
                 lblStatusOpenWork.ForeColor = ColorSuccess;
             }
             else
             {
-                lblStatusOpenWork.Text = "OpenWork Desktop: Chưa mở (Sẽ tự mở khi điện thoại kết nối)";
+                lblStatusOpenWork.Text = "○ OpenWork Desktop: Chưa mở (Sẽ tự mở khi điện thoại kết nối)";
                 lblStatusOpenWork.ForeColor = ColorMuted;
             }
+
+            // Chấm ● / ○ giờ có trên cả 3 dòng, icon restart lại ngồi sát sau
+            // chữ tunnel — text đổi thì phải xếp lại vị trí icon
+            PlaceTunnelRestart();
         }
 
         private bool IsPortOpen(string host, int port, int timeoutMs)
