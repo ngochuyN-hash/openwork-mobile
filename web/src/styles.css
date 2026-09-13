@@ -988,21 +988,19 @@ label.field {
   font-family: inherit;
   cursor: pointer;
 }
-/* Thanh icon nổi ĐÁY KHUNG HÌNH — bố cục học y chang 9remote (1 bar, icon
-   translucent trên hình), nhưng phông OpenWork: nền tối mờ, bo góc token. */
+/* Thanh nút nằm DƯỚI khung hình (yêu cầu: không che màn hình PC) — hàng ngang
+   giữa, phong cách card OpenWork. */
 .stage-toolbar {
-  position: absolute;
-  bottom: 10px;
-  left: 50%;
-  transform: translateX(-50%);
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
+  width: max-content;
+  margin: 8px auto 10px;
   padding: 4px;
   border-radius: 14px;
-  background: rgba(10, 12, 14, 0.62);
-  backdrop-filter: blur(8px);
-  z-index: 2;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
 }
 .stage-btn {
   width: 44px;
@@ -1010,7 +1008,7 @@ label.field {
   border: none;
   border-radius: 10px;
   background: transparent;
-  color: #fff;
+  color: var(--text);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1019,20 +1017,20 @@ label.field {
   -webkit-tap-highlight-color: transparent;
 }
 .stage-btn:active {
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--bg-hover);
 }
 .stage-btn:disabled {
   opacity: 0.4;
 }
 .stage-btn.on {
-  background: var(--bg-raised);
-  color: var(--text);
+  background: var(--primary);
+  color: var(--primary-fg);
 }
 .stage-sep {
   width: 1px;
   height: 22px;
   margin: 0 3px;
-  background: rgba(255, 255, 255, 0.28);
+  background: var(--border-strong);
   flex: none;
 }
 /* Toàn màn hình kiểu faux (Fullscreen API trên iOS chỉ dành cho <video>): khung

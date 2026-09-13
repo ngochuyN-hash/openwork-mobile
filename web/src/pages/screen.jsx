@@ -16,8 +16,8 @@ import {
   ExpandIcon,
   KeyboardIcon,
   LockIcon,
-  MouseIcon,
   MousePointerIcon,
+  SendIcon,
   UnlockIcon,
 } from "../components/icons.jsx";
 
@@ -314,9 +314,9 @@ export function ScreenPage() {
             <p>{unavailable ? "Không khả dụng" : "Đang nối stream màn hình…"}</p>
           </div>
         )}
-        {/* Thanh icon nổi phía dưới khung hình — bố cục học y chang 9remote.
-            Khoá mở = điều khiển hình (chống bấm nhầm lên PC thật khi khoá). */}
-        <div class="stage-toolbar">
+      </div>
+      {/* Thanh nút nằm DƯỚI khung hình (không đè lên màn hình PC) */}
+      <div class="stage-toolbar">
           <button
             class={`stage-btn ${panel === "keys" ? "on" : ""}`}
             disabled={unavailable}
@@ -365,10 +365,6 @@ export function ScreenPage() {
           >
             <ExpandIcon size={20} />
           </button>
-        </div>
-        {paused && url && (
-          <button class="screen-paused" onClick={() => setPaused(false)}>Đang nối lại — bấm nếu máy âm thầm</button>
-        )}
       </div>
       {full && (
         <button class="btn danger small stage-exit" onClick={toggleFull}>Thoát toàn màn hình</button>
@@ -444,7 +440,7 @@ export function ScreenPage() {
               onInput={(e) => setText(e.currentTarget.value)}
             />
             <button class="btn small" type="submit" disabled={sending || !text.trim()}>
-              <MouseIcon size={16} /> Send
+              <SendIcon size={16} /> Send
             </button>
           </form>
           <p class="screen-note">Chữ đi qua clipboard của máy (như 9remote) — dấu tiếng Việt nguyên vẹn, tối đa 500 ký tự.</p>
