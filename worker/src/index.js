@@ -218,11 +218,16 @@ export default {
       if (tenant && !TENANT_RE.test(tenant)) {
         return json({ code: "bridge_offline", message: "Mã máy (phòng) không hợp lệ." }, 503);
       }
-      // Gõ mã ghép tay thì web chưa biết phòng nào (chỉ link QR mới mang &m=),
-      // mà machine:main đã không còn. Dạo qua các phòng còn đăng ký máy, phòng
-      // nào nhận mã thì lấy đáp án của phòng đó — thường chỉ có đúng 1 máy
-      // live. Sai mã ở mọi phòng vẫn về 1 câu 401 của bridge như cũ.
-      if (!tenant && url.pathname === "/api/pair" && request.method === "POST") {
+      // Gõ mã ghép tay hay dán khóa trần (owd_/owt_ không kèm phòng) thì web
+      // chưa biết phòng nào (chỉ link QR/master mới mang &m=), mà machine:main
+      // đã không còn. Dạo qua các phòng còn đăng ký máy, phòng nào nhận mã/khóa
+      // thì lấy đáp án của phòng đó — thường chỉ có đúng 1 máy live. Sai ở mọi
+      // phòng vẫn về 1 câu 401 của bridge như cũ. /api/state trả edge.tenant
+      // nên web đọc luôn phòng từ thân phản hồi.
+      const bootstrap =
+        (url.pathname === "/api/pair" && request.method === "POST") ||
+        (url.pathname === "/api/state" && request.method === "GET");
+      if (!tenant && bootstrap) {
         const slots = await env.OWM_STATE.list({ prefix: "machine:" });
         let wrongCode = null;
         let noneOnline = null;

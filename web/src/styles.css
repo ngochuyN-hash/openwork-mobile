@@ -955,6 +955,31 @@ label.field {
   font-size: 16px;
   font-weight: 650;
 }
+/* Hàng khóa vĩnh viễn: dán link/khóa dài nên cỡ chữ chuẩn, căn trái, mono,
+   KHÔNG giãn chữ như ô mã 8 ký tự ở trên */
+.pair-key-input {
+  font-size: 16px;
+  letter-spacing: normal;
+  text-align: left;
+  text-transform: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+/* Gạch "hoặc" ngăn hai đường vào */
+.pair-or {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0 14px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+.pair-or::before,
+.pair-or::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
 .pair-hint {
   color: var(--text-dim);
   font-size: 12.5px;
