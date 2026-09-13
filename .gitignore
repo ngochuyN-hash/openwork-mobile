@@ -1,6 +1,9 @@
 node_modules/
 web/dist/
 *.log
+
+# scratch files from one-off test scripts (they self-declare "temporary")
+_tmp-*
 .DS_Store
 Thumbs.db
 .zcode/

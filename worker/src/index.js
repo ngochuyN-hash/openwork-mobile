@@ -46,6 +46,24 @@ async function readJson(request) {
   return request.json().catch(() => null);
 }
 
+// Rate-limit đăng nhập phòng: 10 lần/phút/IP. Đếm qua Cache API (caches.default)
+// — KHÔNG tốn KV write quota; nếu không có cửa này, mỗi lần dò mật khẩu đều
+// đốt 1 KV read (hạn mức free 100k/ngày chung cả tòa nhà).
+async function tenantLoginLimited(request) {
+  const ip = request.headers.get("cf-connecting-ip") ?? "?";
+  const bucket = Math.floor(Date.now() / 60_000);
+  const key = new Request(`https://owm-ratelimit/pair-tenant/${encodeURIComponent(ip)}/${bucket}`);
+  const hit = await caches.default.match(key);
+  const count = hit ? Number(await hit.text()) : 0;
+  if (count >= 10) return true;
+  // TTL 119s cho key bucket cũ tự rác bay khỏi edge cache.
+  await caches.default.put(
+    key,
+    new Response(String(count + 1), { headers: { "cache-control": "public, max-age=119" } })
+  );
+  return false;
+}
+
 /** Relay request tới slot `slotKey`; bodyJson khác null thì gửi lại body đó. */
 async function relay(env, slotKey, request, url, bodyJson = null) {
   let machine = null;
@@ -128,6 +146,9 @@ export default {
       // Worker tự so secret TRƯỚC khi relay: phòng lạ và sai mật khẩu cùng một câu
       // 401 — người lạ không dò ra được phòng nào tồn tại (bridge vẫn so lại lần 2).
       if (url.pathname === "/api/pair/tenant" && request.method === "POST") {
+        if (await tenantLoginLimited(request)) {
+          return json({ code: "rate_limited", message: "Đăng nhập quá nhiều lần — đợi khoảng 1 phút rồi thử lại." }, 429);
+        }
         const body = await readJson(request);
         const tenant = String(body?.user ?? "").trim().toLowerCase();
         if (!TENANT_RE.test(tenant)) {
