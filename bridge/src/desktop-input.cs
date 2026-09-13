@@ -158,13 +158,17 @@ class DesktopInput
     // thường hết sau ~200ms nên thử tối đa 5 lần.
     for (int attempt = 0; ; attempt++)
     {
-      try { System.Windows.Forms.Clipboard.SetText(s); break; }
+      // SetDataObject(copy:true) = FLUSH dữ liệu lên clipboard NGAY. Xài
+      // Clipboard.SetText (delayed render) thì Notepad Win11 dán được 1 cách
+      // ngẫu nhiên: nó xin dữ liệu lúc daemon không pump message → bỏ tay.
+      try { System.Windows.Forms.Clipboard.SetDataObject(s, true); break; }
       catch (Exception)
       {
         if (attempt >= 5) throw new Exception("Clipboard đang bận (app khác giữ)");
         System.Threading.Thread.Sleep(200);
       }
     }
+    System.Threading.Thread.Sleep(80); // nhịp cho clipboard ổn định trước khi dán
     DoCombo(new string[] { "ctrl" }, "v");
   }
 
