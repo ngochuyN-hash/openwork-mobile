@@ -704,7 +704,9 @@ namespace OpenPocket.Desktop
                     lblStatusTunnel.Font, Size.Empty, TextFormatFlags.NoPadding).Width + 6;
             }
             btnTunnelRestart.Left = x;
-            btnTunnelRestart.Top = lblStatusTunnel.Top - 5;
+            // Owner 14/09: nâng 5px thì quá cao — hạ lại còn -2 để mặt chữ
+            // xuyên đúng qua tâm icon
+            btnTunnelRestart.Top = lblStatusTunnel.Top - 2;
         }
 
         // ================= CONFIG & LOGIC =================
