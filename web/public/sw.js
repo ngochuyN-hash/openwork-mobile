@@ -1,6 +1,6 @@
 // Service worker: app-shell precache so the PWA opens instantly / offline.
 // Chỉ cache tài nguyên tĩnh cùng origin; không bao giờ cache /api/* (REST+SSE).
-const CACHE = "owm-shell-v23";
+const CACHE = "owm-shell-v24";
 // Asset hash Vite đổi mỗi build nên không precache cứng — runtime cache ở lần
 // load đầu. Riêng "/" (index.html) PHẢI precache: navigate-fallback offline
 // đọc từ cache, trước đây "/" không bao giờ được cache nên offline mở app

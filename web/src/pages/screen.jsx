@@ -444,7 +444,6 @@ export function ScreenPage() {
                   {m.label}
                 </button>
               ))}
-              <span class="screen-row-hint">bật sáng rồi bấm phím = tổ hợp</span>
             </div>
             <div class="screen-row">
               {COMBOS.map((c) => (
@@ -484,18 +483,15 @@ export function ScreenPage() {
                 ref={textInputRef}
                 type="text"
                 value={text}
-                placeholder="Type text (Vietnamese works) then Send"
                 onInput={(e) => setText(e.currentTarget.value)}
               />
               <button class="btn small" type="submit" disabled={sending || !text.trim()}>
                 <SendIcon size={16} /> Send
               </button>
             </form>
-            <p class="screen-note">Chữ đi qua clipboard của máy (như 9remote) — dấu tiếng Việt nguyên vẹn, tối đa 500 ký tự.</p>
           </div>
         )}
       </div>
-      <p class="screen-hint">Chạm = click · giữ lâu = Right-click · chạm 2 lần = Double-click · kéo = di chuyển · hai ngón vuốt = cuộn</p>
       {full && (
         <button class="btn danger small stage-exit" onClick={toggleFull}>Thoát toàn màn hình</button>
       )}
