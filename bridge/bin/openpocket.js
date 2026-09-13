@@ -135,8 +135,21 @@ function readPid() {
   try {
     const pid = Number(readFileSync(pidFile(), "utf8").trim());
     if (!Number.isInteger(pid) || pid <= 0) return 0;
-    process.kill(pid, 0);
-    return pid;
+    try {
+      process.kill(pid, 0);
+      return pid;
+    } catch {
+      // Process khác session/quyền (vd: task elevated) — kiểm tra qua tasklist.
+      // Chỉ tin khi đúng là tiến trình node (tránh nhầm pid đã tái sử dụng).
+      if (process.platform === "win32") {
+        try {
+          const { execSync } = require("node:child_process");
+          const out = execSync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`, { encoding: "utf8", timeout: 5000 });
+          if (new RegExp(`"node(\\.exe)?","${pid}"`).test(out)) return pid;
+        } catch {}
+      }
+      return 0;
+    }
   } catch {
     return 0;
   }
@@ -446,52 +459,72 @@ if (cmd === "add") {
 }
 
 if (cmd === "code") {
-  if (!existsSync(logFile())) {
-    console.log("Bridge chưa chạy. Chạy: openpocket start");
-    process.exit(1);
-  }
-  const text = readFileSync(logFile(), "utf8");
-  // Tìm khối QR ghép MỚI NHẤT trong log (sau lần tunnel/code đổi gần nhất)
-  const blocks = text.split(/Mã ghép:/);
-  if (blocks.length < 2) {
-    console.log("Chưa thấy mã ghép trong log — bridge đang khởi động, đợi ~10s rồi thử lại.");
-    process.exit(1);
-  }
-  const latest = blocks[blocks.length - 1];
-  const codeMatch = latest.match(/([A-Z2-9]{4}-[A-Z2-9]{4})/);
-  // Tìm URL pair tương ứng (worker hoặc tunnel mới nhất, có thể kèm &m=phòng)
-  const urls = [...text.matchAll(/https:\/\/[^\s]+\/#p=[A-Z2-9]+/gi)];
-  const lastUrl = urls.length ? urls[urls.length - 1][0] : null;
-  console.log("");
-  console.log(`📱 Mã ghép hiện tại: ${codeMatch ? codeMatch[1] : "(không đọc được)"}`);
-  if (lastUrl) {
-    console.log(`🔗 Link mở trên điện thoại:`);
-    console.log(`   ${lastUrl}`);
-    console.log("");
-    console.log("QR quét trực tiếp:");
-    const { default: qrcode } = await import("qrcode-terminal");
-    qrcode.generate(lastUrl, { small: true });
-  }
-  console.log("");
-  // Mã vĩnh viễn: đọc thẳng từ config (file local, an toàn vì lệnh chạy tại máy)
+  const { default: qrcode } = await import("qrcode-terminal");
+  const config = loadConfig();
+  const port = config.port || 8788;
+  const baseFixed = (config.lookupUrl || "").replace(/\/+$/, ""); // worker = địa chỉ cố định (ưu tiên)
+  const mSuffix = config.lookupTenant ? `&m=${encodeURIComponent(config.lookupTenant)}` : "";
+
+  // 1) Lấy mã ĐANG SỐNG từ API của bridge (đúng nhất — log có thể stale).
+  let live = null;
   try {
-    const config = loadConfig();
-    // Ưu tiên worker (địa chỉ cố định) nếu máy đã join phòng; kèm &m= để web tự điền
-    const base = (config.lookupUrl || `http://127.0.0.1:${config.port || 8788}`).replace(/\/+$/, "");
-    const mSuffix = config.lookupTenant ? `&m=${encodeURIComponent(config.lookupTenant)}` : "";
-    const masterUrl = `${base}/#t=${config.mobileToken}${mSuffix}`;
-    console.log("⭐ Mã VĨNH VIỄN (có hiệu lực mãi, chỉ dùng tại máy — đừng chia sẻ):");
+    const res = await fetch(`http://127.0.0.1:${port}/api/pairing-code`, {
+      headers: { authorization: `Bearer ${config.mobileToken}` },
+      signal: AbortSignal.timeout(4000),
+    });
+    if (res.ok) live = await res.json();
+  } catch {}
+
+  // 2) Fallback: bridge cũ (chưa có endpoint) hoặc chưa chạy — parse log.
+  if (!live) {
+    if (!existsSync(logFile())) {
+      console.log("Bridge chưa chạy. Chạy: openpocket start");
+      process.exit(1);
+    }
+    const text = readFileSync(logFile(), "utf8");
+    const blocks = text.split(/Mã ghép:/);
+    const latest = blocks[blocks.length - 1];
+    const codeMatch = latest?.match(/([A-Z2-9]{4}-?[A-Z2-9]{4})/);
+    const urls = [...text.matchAll(/https:\/\/[^\s]+\/#p=([A-Z2-9]+)/gi)];
+    if (!codeMatch && !urls.length) {
+      console.log("Không đọc được mã ghép — bridge đang khởi động, đợi ~10s rồi thử lại.");
+      process.exit(1);
+    }
+    const raw = codeMatch ? codeMatch[1].replace(/-/g, "") : urls[urls.length - 1][1];
+    const urlBase = (urls.length ? new URL(urls[urls.length - 1][0]).origin : `http://127.0.0.1:${port}`);
+    live = {
+      code: raw,
+      codeFormatted: `${raw.slice(0, 4)}-${raw.slice(4)}`,
+      baseUrl: urlBase === `http://127.0.0.1:${port}` && baseFixed ? baseFixed : urlBase,
+      secondsLeft: null,
+    };
+  }
+
+  // Base cho QR: worker cố định (nếu có) > tunnel hiện tại > localhost.
+  const pairBase = baseFixed || live.baseUrl || `http://127.0.0.1:${port}`;
+  const pairUrl = `${pairBase}/#p=${live.code}${mSuffix}`;
+  const minutesLeft = live.secondsLeft != null ? Math.ceil(live.secondsLeft / 60) : null;
+
+  console.log("");
+  console.log(`📱 MÃ GHÉP (1 lần${minutesLeft != null ? `, còn ~${minutesLeft} phút` : ", sống 30 phút"}): ${live.codeFormatted}`);
+  console.log(`🔗 Mở trên điện thoại: ${pairUrl}`);
+  console.log("");
+  console.log("QR ghép thiết bị — quét để vào:");
+  qrcode.generate(pairUrl, { small: true });
+
+  // 3) Mã vĩnh viễn — đọc từ config máy này (chỉ in tại máy, đừng chia sẻ).
+  if (config.mobileToken) {
+    const masterUrl = `${baseFixed || `http://127.0.0.1:${port}`}/#t=${config.mobileToken}${mSuffix}`;
+    console.log("");
+    console.log("⭐ MÃ VĨNH VIỄN (không hết hạn, chỉ dùng tại máy — đừng chụp/chia sẻ):");
     console.log(`   ${config.mobileToken}`);
     console.log("");
-    console.log("QR master (quét 1 lần, dùng mãi — mở bằng camera, hoặc gõ mã trên):");
-    const { default: qrcode } = await import("qrcode-terminal");
+    console.log("QR master — quét 1 lần, dùng mãi:");
     qrcode.generate(masterUrl, { small: true });
-  } catch {
-    console.log("(không đọc được master token từ config)");
   }
+
   console.log("");
-  console.log("Mã ghép sống 30 phút, dùng 1 lần. Master vĩnh viễn.");
-  console.log("Địa chỉ cố định (bookmark 1 lần, dùng mãi): https://YOUR-WORKER.workers.dev");
+  console.log(`Địa chỉ cố định (bookmark 1 lần, dùng mãi): ${baseFixed || "chưa cấu hình (openpocket edge join)"}`);
   process.exit(0);
 }
 
