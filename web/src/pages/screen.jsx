@@ -23,6 +23,9 @@
 // v2.9.1: vuốt 1 NGÓN cũng cuộn máy PC (hai ngón giữ nguyên) — kéo chuột
 // (drag) dời thành GIỮ ~nửa giây rồi kéo, giữ rồi nhả không di = Right-click
 // (rung + vành đỏ báo lúc giữ, lệnh gửi lúc nhả để còn dành ngón cho drag).
+// v3.0: ảnh stream NET THEO ZOOM — tay buông khỏi cú véo là tính needed px
+// (880×zoom, trần min(native màn PC, 1600)) rồi nối lại stream với w lớn hơn,
+// về 1x trả lại 880 rẻ cũ (9remote làm 4 bậc cứng, mình tính đúng từng mức).
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { apiScreenInfo, owScreenInput, owScreenStream } from "../api.js";
@@ -45,9 +48,10 @@ function CollapseIcon({ size }) {
   );
 }
 
-// Thông số stream duy nhất: 880px vừa nét trên màn phone, JPEG 55 đủ đọc chữ —
-// từng có 3 preset chọn tay nhưng không ai đổi (phản hồi user 13/09/2026).
-const STREAM_PARAMS = { w: 880, q: 55 };
+// Chất lượng stream: JPEG 55 đủ đọc chữ, KHÔNG đổi tay (từng có 3 preset chọn
+// nhưng không ai đổi — phản hồi user 13/09/2026). Bề rộng 880px là MỐC ĐỘNG:
+// zoom sâu thì phone tự nối lại stream với ảnh lớn hơn (capW state) để giữ nét.
+const STREAM_PARAMS = { q: 55 };
 // Tổ hợp hay dùng bấm 1 phát — nhãn tiếng Anh dễ hiểu, không ra phím tắt thô.
 const COMBOS = [
   { label: "Copy", mods: ["ctrl"], key: "c" },
@@ -66,6 +70,7 @@ export function ScreenPage() {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [full, setFull] = useState(false); // toàn màn hình kiểu faux (áp dụng mọi trình duyệt)
+  const [capW, setCapW] = useState(880); // bề rộng ảnh stream — tăng theo zoom để giữ nét
 
   const imgRef = useRef(null);
   const viewRef = useRef(null); // .screen-view — đối tượng Fullscreen API thật
@@ -79,9 +84,10 @@ export function ScreenPage() {
   const [portraitMobile, setPortraitMobile] = useState(false);
   const [vbox, setVbox] = useState(null); // {sw, sh} — kích thước ảnh TRƯỚC khi xoay
   const ratioRef = useRef(16 / 9); // pw/ph màn PC — cập nhật theo meta stream
+  const nativeWRef = useRef(1920); // bề rộng thật màn PC — trần nét cho ảnh zoom sâu
   useEffect(() => {
     const w = info?.screen?.width, h = info?.screen?.height;
-    if (w && h) ratioRef.current = w / h;
+    if (w && h) { ratioRef.current = w / h; nativeWRef.current = w; }
   }, [info?.screen?.width, info?.screen?.height]);
   useEffect(() => {
     const mq = window.matchMedia("(orientation: portrait) and ((pointer: coarse) or (max-width: 520px))");
@@ -161,10 +167,27 @@ export function ScreenPage() {
       if (on) chipRef.current.textContent = z.s.toFixed(1) + "×";
     }
   };
+  // ---- ẢNH STREAM NET THEO ZOOM (học 9remote nhưng tính mịn hơn): tay vừa buông
+  // khỏi cú véo là tính "cần bao nhiêu px để nét ở mức zoom này" (880 × zoom,
+  // trần là bề rộng thật màn PC và 1600 cho đỡ tốn đường) rồi nối lại stream với
+  // ảnh to hơn; về 1x là trả lại 880 rẻ cũ. Chỉ đổi khi lệch >15% + làm tròn
+  // 80px + chờ 350ms sau tay buông — chống nhảy cấp liên tục (9remote dùng 4 bậc
+  // cứng + van 5%, mình tính đúng theo zoom từng phút).
+  const capTimer = useRef(0);
+  const syncCapture = useCallback(() => {
+    clearTimeout(capTimer.current);
+    capTimer.current = setTimeout(() => {
+      const s = zoomRef.current.s;
+      if (s <= 1.02) { setCapW((w) => (w === 880 ? w : 880)); return; }
+      const need = Math.min(1600, nativeWRef.current, Math.round((880 * s) / 80) * 80);
+      setCapW((w) => (need > w * 1.15 || need < w * 0.8 ? Math.max(880, need) : w));
+    }, 350);
+  }, []);
   const resetZoom = useCallback(() => {
     zoomRef.current = { s: 1, x: 0, y: 0 };
     applyZoom();
-  }, []);
+    syncCapture();
+  }, [syncCapture]);
   // Biên dời pan theo 1 trục: ảnh DÀI hơn khung thì được trượt tới khi mép ảnh
   // chạm mép khung (không lộ nền), ảnh NGẮN hơn thì kẹp giữa không cho trôi.
   const panBounds = (sz, st, bc) =>
@@ -209,11 +232,12 @@ export function ScreenPage() {
     };
   }, []);
 
-  // ---- vòng stream: nối lại khi đứt, dừng khi app ẩn/unmount
+  // ---- vòng stream: nối lại khi đứt, dừng khi app ẩn/unmount, ĐỔI ĐỘ NÉT khi
+  // zoom sâu quá ảnh hiện tại (capW đổi là nối vòng mới với w mới)
   useEffect(() => {
     if (!info?.available || paused) return;
     const myRun = ++runIdRef.current;
-    const { w, q } = STREAM_PARAMS;
+    const { q } = STREAM_PARAMS;
     const abort = new AbortController();
     setStatus("connecting");
     let frameCount = 0;
@@ -229,7 +253,7 @@ export function ScreenPage() {
         try {
           setStatus((s) => (s === "live" ? s : "connecting"));
           await owScreenStream({
-            w,
+            w: capW,
             q,
             signal: abort.signal,
             onFrame: (blob) => {
@@ -270,7 +294,7 @@ export function ScreenPage() {
       clearInterval(fpsTimer);
       setStatus("paused");
     };
-  }, [info?.available, paused]);
+  }, [info?.available, paused, capW]);
 
   // Thoát toàn màn hình: nhả khoá xoay + thoát fullscreen gốc + tắt lớp CSS.
   // (Khai báo TRƯỚC effect bên dưới — deps [exitFull] không được chạm TDZ.)
@@ -291,6 +315,7 @@ export function ScreenPage() {
   }, [exitFull]);
 
   useEffect(() => () => {
+    clearTimeout(capTimer.current);
     if (urlRef.current) URL.revokeObjectURL(urlRef.current);
   }, []);
 
@@ -518,6 +543,7 @@ export function ScreenPage() {
       if (pointers.current.size === 0) {
         // véo về ~1x là về nguyên vị trí giữa, khỏi lệch nửa chừng
         if (zoomRef.current.s <= 1.02) { zoomRef.current = { s: 1, x: 0, y: 0 }; applyZoom(); }
+        syncCapture(); // tay vừa buông: cân lại độ nét ảnh stream theo zoom
         st.mode = "idle";
       } else st.mode = "pinch-end"; // ngón còn lại: bỏ qua tới khi nhấc hết
       return;
