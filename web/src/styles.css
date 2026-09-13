@@ -1096,6 +1096,48 @@ label.field {
   z-index: 5;
   box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
 }
+/* Virtual landscape — mobile màn DỌNG xoay sẵn ảnh PC 90° (user lật máy tay là
+   đọc được, không đợi OS xoay viewport): ảnh thành CỘT SÁT TRÁI giữ đúng tỉ lệ
+   máy tính, cột phải dành cho nút chức năng. Xoay máy thật sang ngang thì media
+   query landscape bên dưới thắng — ảnh thẳng lại như thường. */
+.screen-view.vland {
+  flex-direction: row;
+  align-items: stretch;
+  position: relative;
+  height: calc(100dvh - 190px);
+}
+.screen-view.vland .screen-stage {
+  flex: 1;
+  min-width: 0;
+}
+.screen-view.vland .screen-img {
+  position: absolute;
+  max-width: none;
+  max-height: none;
+}
+.screen-view.vland .screen-placeholder {
+  position: absolute;
+  inset: 0;
+  padding: 24px var(--sp-4);
+}
+.screen-view.vland .stage-toolbar {
+  flex-direction: column;
+  align-self: center;
+  margin: 0 0 0 8px;
+  padding: 6px 4px;
+}
+.screen-view.vland .screen-panel {
+  position: absolute;
+  left: calc(8px + var(--sal));
+  right: auto;
+  bottom: calc(8px + var(--sab));
+  width: min(440px, 62%);
+  max-height: 72%;
+  overflow-y: auto;
+  margin: 0;
+  z-index: 5;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
+}
 /* Điện thoại XOAY NGANG — trang Màn hình tự thành "player" như YouTube tự lật
    ngang, KHÔNG cần bấm toàn màn hình: hình bên trái, thanh chức năng đứng dọc
    bên phải, panel tự mở nổi góc dưới-trái (chủ động mở mới có, tắt là hết).

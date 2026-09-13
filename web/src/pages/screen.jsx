@@ -69,6 +69,75 @@ export function ScreenPage() {
 
   const imgRef = useRef(null);
   const viewRef = useRef(null); // .screen-view — đối tượng Fullscreen API thật
+  const stageRef = useRef(null); // .screen-stage — đo kích thước cho ảnh xoay
+
+  // ---- VIRTUAL LANDSCAPE: CHỈ trong TOÀN MÀN HÌNH trên máy DỌNG — ảnh PC xoay
+  // sẵn 90°, user lật máy tay là đọc được, không đợi OS xoay viewport. Ngoài
+  // fullscreen vẫn xem dọc như thường (PC vốn không xoay). Máy cảm ứng (coarse)
+  // hoặc màn hẹp (<=520px) = "phiên bản web mobile". Khi máy xoay thật sang
+  // ngang (Android lock được hướng) thì media query landscape thắng, ảnh thẳng.
+  const [portraitMobile, setPortraitMobile] = useState(false);
+  const [vbox, setVbox] = useState(null); // {sw, sh} — kích thước ảnh TRƯỚC khi xoay
+  const ratioRef = useRef(16 / 9); // pw/ph màn PC — cập nhật theo meta stream
+  useEffect(() => {
+    const w = info?.screen?.width, h = info?.screen?.height;
+    if (w && h) ratioRef.current = w / h;
+  }, [info?.screen?.width, info?.screen?.height]);
+  useEffect(() => {
+    const mq = window.matchMedia("(orientation: portrait) and ((pointer: coarse) or (max-width: 520px))");
+    // Đừng chỉ trông mq "change" (vài môi trường bắn thiếu) — dò lại cả khi
+    // resize và khi bật/tắt fullscreen.
+    const sync = () => setPortraitMobile(mq.matches);
+    sync();
+    if (mq.addEventListener) mq.addEventListener("change", sync);
+    else mq.addListener(sync);
+    window.addEventListener("resize", sync);
+    document.addEventListener("fullscreenchange", sync);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener("change", sync);
+      else mq.removeListener(sync);
+      window.removeEventListener("resize", sync);
+      document.removeEventListener("fullscreenchange", sync);
+    };
+  }, []);
+  const vland = full && portraitMobile; // chỉ fullscreen mới xoay ảnh
+  const vlandRef = useRef(false); // mirror cho pointer handler (không stale)
+  vlandRef.current = vland;
+  useEffect(() => {
+    if (!vland) { setVbox(null); return; }
+    // rAF bị throttle trên vài môi trường (PWA nền/IAB) — đo bằng ResizeObserver
+    // + cụm timer bù lúc chuyển trạng thái cho chắc ăn dù layout đổi trễ.
+    let last = "";
+    const timers = [];
+    const measure = () => {
+      const stage = stageRef.current;
+      if (!stage) return;
+      const R = ratioRef.current || 16 / 9;
+      // sw = chiều DÀI ảnh (PC width) chạy dọc trục cao stage; chừa 20px làm
+      // margin trái/phải của cột ảnh cho khỏi đè thanh nút bên phải.
+      const sw = Math.min(stage.clientHeight, (stage.clientWidth - 20) * R);
+      const sh = sw / R;
+      const sig = Math.round(sw) + "x" + Math.round(sh);
+      if (sig !== last) {
+        last = sig;
+        setVbox({ sw: Math.round(sw), sh: Math.round(sh) });
+      }
+    };
+    measure();
+    for (const ms of [50, 150, 350, 700]) timers.push(setTimeout(measure, ms));
+    let ro;
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(measure);
+      ro.observe(stageRef.current);
+    } else {
+      window.addEventListener("resize", measure);
+    }
+    return () => {
+      for (const t of timers) clearTimeout(t);
+      if (ro) ro.disconnect();
+      else window.removeEventListener("resize", measure);
+    };
+  }, [vland]);
   // Gesture trên hình, kiểu màn cảm ứng: chạm = click · giữ lâu = Right-click ·
   // chạm đôi = Double-click · kéo = di chuyển · hai ngón vuốt = cuộn.
   const pointers = useRef(new Map()); // pointerId -> {x, y} (client px)
@@ -207,9 +276,18 @@ export function ScreenPage() {
   const normXY = (cx, cy) => {
     const rect = imgRef.current?.getBoundingClientRect();
     if (!rect || !rect.width) return null;
+    const clamp01 = (v) => Math.min(1, Math.max(0, v));
+    if (vlandRef.current) {
+      // Ảnh xoay sẵn 90° CW: đỉnh PC chỉ về PHẢI máy — lật máy ngược kim đồng
+      // hồ là thẳng. PC-x chạy từ trên xuống, PC-y chạy từ phải sang trái.
+      return {
+        x: clamp01((cy - rect.top) / rect.height),
+        y: clamp01((rect.right - cx) / rect.width),
+      };
+    }
     return {
-      x: Math.min(1, Math.max(0, (cx - rect.left) / rect.width)),
-      y: Math.min(1, Math.max(0, (cy - rect.top) / rect.height)),
+      x: clamp01((cx - rect.left) / rect.width),
+      y: clamp01((cy - rect.top) / rect.height),
     };
   };
 
@@ -404,8 +482,8 @@ export function ScreenPage() {
 
       {/* .screen-view gói cả hình + thanh nút + panel: khi toàn màn hình thì cả
           cụm vào một lớp cố định — xoay ngang thì hình sát trái, phím đứng phải. */}
-      <div ref={viewRef} class={`screen-view ${full ? "view-full" : ""}`}>
-        <div class="screen-stage">
+      <div ref={viewRef} class={`screen-view ${full ? "view-full " : ""}${vland ? "vland" : ""}`}>
+        <div ref={stageRef} class="screen-stage">
           {url ? (
             <img
               ref={imgRef}
@@ -413,6 +491,15 @@ export function ScreenPage() {
               src={url}
               alt="Màn hình máy tính"
               draggable={false}
+              style={vland && vbox ? {
+                // khung ảnh TRƯỚC xoay: ngang pw'×ph' (sw/sh) — xoay 90° xong
+                // thành cột đứng rộng sh, cao sw, tâm neo tại (sh/2+m, giữa)
+                width: `${vbox.sw}px`,
+                height: `${vbox.sh}px`,
+                left: `${Math.round(vbox.sh / 2) + 10}px`,
+                top: "50%",
+                transform: "translate(-50%, -50%) rotate(90deg)",
+              } : undefined}
               onContextMenu={(e) => e.preventDefault()}
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}
