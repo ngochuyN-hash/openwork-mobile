@@ -316,8 +316,8 @@ namespace OpenPocket.Desktop
         {
             this.Text = "OpenPocket — Điều khiển OpenWork từ điện thoại";
             // MỘT cột, nền trắng toàn phần: TRẠNG THÁI (đèn kết nối) → tự khởi
-            // động (cấu hình duy nhất còn lại) → hành động. Client 496x396 =
-            // header 48 + trạng thái 178 + kẽ 8 + hàng tự-khởi-động 24 + kẽ 8
+            // động (cấu hình duy nhất còn lại) → hành động. Client 496x372 =
+            // header 48 + trạng thái 164 + kẽ 8 + hàng tự-khởi-động 24 + kẽ 8
             // + hành động 120. BỀ RỘNG giữ khổ 512 cũ (owner 13/09 tối: không
             // thu hẹp, phải CÂN ĐỐI 2 bên). Lưới spacing 8px: 8px trong nhóm,
             // 12px giữa dòng, 24px giữa nhóm, lề 16 hai bên, nút đồng nhất
@@ -326,7 +326,7 @@ namespace OpenPocket.Desktop
             // phân như vậy làm gì đâu"; nút theo skill UI (Primary đen /
             // Ghost viền / viền đỏ cho Dừng), tự vẽ AntiAlias hết răng cưa.
             // Mọi hàng nút/ô dàn ĐẦY bề ngang bằng RelayoutContent().
-            this.ClientSize = new Size(496, 396);
+            this.ClientSize = new Size(496, 372);
             this.MinimumSize = this.Size;
             this.StartPosition = FormStartPosition.CenterScreen;
             // Nền TRẮNG toàn phần (owner 13/09: "gọt sạch hết còn nền trắng
@@ -346,7 +346,7 @@ namespace OpenPocket.Desktop
             this.pnlContent = pnlContent;
 
             int yL = 0;
-            cardStatus = CreateCard(0, ref yL, 496, 178, pnlContent, false);
+            cardStatus = CreateCard(0, ref yL, 496, 164, pnlContent, false);
             CreateCardTitle("TRẠNG THÁI KẾT NỐI", cardStatus);
 
             lblStatusBridge = CreateStatusLabel("● Bridge: Đang kiểm tra...", 16, 39, cardStatus);
@@ -360,10 +360,11 @@ namespace OpenPocket.Desktop
             lblStatusTunnelUrl.Text = "(đang lấy địa chỉ công khai...)";
             lblStatusTunnelUrl.Font = new Font("Consolas", 9f);
             lblStatusTunnelUrl.ForeColor = ColorText;
-            lblStatusTunnelUrl.Location = new Point(32, 99);
-            // Cao 34: URL trycloudflare hiếm khi dài hơn khổ 432px thì tự xuống
-            // dòng thay vì bị cắt cụt (label WordWrap sẵn có)
-            lblStatusTunnelUrl.Size = new Size(432, 34);
+            lblStatusTunnelUrl.Location = new Point(32, 97);
+            // Cao 18 (1 dòng): khổ full-width 464px chứa thoải mái URL ~57 ký
+            // tự và hint 429 — lỡ dành 2 dòng là hở một băng trắng lớn giữa
+            // các dòng trạng thái (owner 13/09: "khoảng trống lệch nhau quá")
+            lblStatusTunnelUrl.Size = new Size(432, 18);
             cardStatus.Controls.Add(lblStatusTunnelUrl);
 
             // Restart tunnel CHỦ ĐỘNG (owner 13/09: bộ đếm backoff 429 "hên xui"):
@@ -372,16 +373,16 @@ namespace OpenPocket.Desktop
             // Nút restart tunnel = ICON TRÒN (owner 13/09 đêm: "đẩy nút restart
             // tunnel thành kiểu logo hình nút restart") — glyph ↻ của Segoe
             // MDL2 Assets, 30x30 bo tròn, tooltip nêu nghĩa thay cho chữ
-            btnTunnelRestart = CreateButton("\uE72C", ButtonKind.Ghost, 360, 68, 30, 30, cardStatus);
-            btnTunnelRestart.Font = new Font("Segoe MDL2 Assets", 12f);
-            btnTunnelRestart.Radius = 15;
+            btnTunnelRestart = CreateButton("\uE72C", ButtonKind.Ghost, 360, 68, 24, 24, cardStatus);
+            btnTunnelRestart.Font = new Font("Segoe MDL2 Assets", 10f);
+            btnTunnelRestart.Radius = 12;
             btnTunnelRestart.Click += delegate { ActionRestartTunnel(); };
             // Label tunnel tạo TRƯỚC nút nên nằm TRÊN (z-order theo thứ tự add,
             // index 0 đỉnh) — bề rộng 448 ban đầu của label đè trắng nút; kéo
             // nút lên đỉnh để không bao giờ bị nền label che
             btnTunnelRestart.BringToFront();
 
-            lblStatusOpenWork = CreateStatusLabel("● OpenWork Desktop: Đang kiểm tra...", 16, 141, cardStatus);
+            lblStatusOpenWork = CreateStatusLabel("● OpenWork Desktop: Đang kiểm tra...", 16, 127, cardStatus);
             lblStatusOpenWork.Size = new Size(448, 22);
             lblStatusOpenWork.Font = new Font("Segoe UI", 9.75f);
 
