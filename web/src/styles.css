@@ -1110,26 +1110,27 @@ label.field {
   padding: 24px var(--sp-4);
 }
 .screen-view.vland .screen-panel {
-  /* Bàn phím + gõ chữ XOAY THEO CỬA SỔ MÁY (90°) và LUÔN HIỂN THỊ ở CỘT PHẢI
-     (không ẩn/hiện): lật máy là bàn phím nằm ngang phía trên khung nhìn như
-     app remote thật — portrait-phải = đỉnh khung nhìn ngang. Ô gõ chữ là giải
-     bên trái bàn phím. Cả hai đè lên phần trên của ảnh (kiểu floating bar). */
+  /* Khung gộp XOAY THEO CỬA SỔ MÁY (90°) LUÔN HIỂN THỊ ở CỘT PHẢI: lật máy là
+     ô gõ chữ + phím nằm ngang phía trên khung nhìn — portrait-phải = đỉnh
+     khung nhìn ngang. Đè nổi phần trên của ảnh (floating bar kiểu app remote). */
   position: absolute;
   top: 50%;
-  width: calc(100dvh - 28px); /* chiều dài = trục cao khung nhìn */
+  left: calc(100vw - 96px); /* tâm = mép phải - 8 - nửa giải 176 */
+  width: calc(100dvh - 28px);
+  height: 176px;
   transform: translate(-50%, -50%) rotate(90deg);
   overflow-y: auto;
   margin: 0;
+  padding: 8px 10px;
   z-index: 5;
-  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.35);
 }
-.screen-view.vland .screen-panel-keys {
-  left: calc(100vw - 63px); /* tâm = mép phải - 8 - nửa sâu 55 */
-  height: 110px;
+.screen-view.vland .screen-textrow {
+  margin: 0 0 6px;
 }
-.screen-view.vland .screen-panel-text {
-  left: calc(100vw - 150px); /* tâm = mép phải - 8 - 110 - 4 - nửa 28 */
-  height: 56px;
+.screen-view.vland .screen-textrow input {
+  min-height: 34px;
+  font-size: 14px;
 }
 /* Phím gọn lại cho vừa giải 180px (4 hàng không cần cuộn) */
 .screen-view.vland .screen-key {
@@ -1152,21 +1153,15 @@ label.field {
    trôi theo cuộn trang. Cả trang khớp đúng một màn hình: ảnh PC chiếm phần
    trên (flex), bàn phím + gõ chữ nằm dưới, badge sát đáy — mở tab là thấy hết
    mọi thứ. Màn quá nhỏ thì vẫn cuộn được (overflow auto). */
-/* Trang Màn hình — VIEWER kiểu 9remote: nền tối tràn viền (không phải thẻ đen
-   nổi trên trang trắng), ảnh PC tràn hết bề ngang, bàn phím + gõ chữ là thanh
-   mờ translucent DOCK ĐÁY, badge thành chip nhỏ trên ảnh. Cả cụm CỐ ĐỊNH vừa
-   một màn hình, không cuộn (màn quá nhỏ vẫn cuộn được). */
+/* Trang Màn hình (mode thường): KHUNG XEM + CHỨC NĂNG CỐ ĐỊNH vừa một màn
+   hình, nền TRẮNG như app (user chốt: đen chìm quá). Ảnh là thẻ tối trên
+   trắng, gõ chữ + bàn phím GỘP MỘT KHUNG trắng gọn dock dưới đáy. */
 .screen-page {
-  margin: calc(var(--sp-3) * -1) calc(var(--sp-4) * -1) calc(-108px - var(--sab));
-  max-width: none;
-  width: auto;
-  min-height: calc(100dvh - 72px);
+  height: calc(100dvh - 190px);
   display: flex;
   flex-direction: column;
-  background: #0b0d10;
-  position: relative;
   overflow-y: auto;
-  padding-bottom: calc(96px + var(--sab)); /* chừa chỗ pill nav nổi đè đáy */
+  position: relative;
 }
 .screen-page .screen-view {
   flex: 1;
@@ -1174,13 +1169,7 @@ label.field {
 }
 .screen-page .screen-stage {
   flex: none;
-  border: none;
-  border-radius: 0;
-  background: transparent;
   margin: 0;
-}
-.screen-page .screen-img {
-  width: 100%;
 }
 /* Badge thành chip nhỏ góc trên-trái của ảnh */
 .screen-page .screen-bar {
@@ -1190,36 +1179,23 @@ label.field {
   margin: 0;
   z-index: 6;
 }
-/* Thanh chức năng mờ translucent dock đáy — phong cách 9remote */
-.screen-page .screen-panel {
-  background: rgba(22, 26, 32, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: none;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+/* Khung chức năng GỘP (gõ chữ + phím) trắng gọn, dock đáy */
+.screen-page .screen-panel-main {
+  margin: 10px var(--sp-3) 8px;
+  margin-top: auto;
+  padding: 10px;
 }
-.screen-page .screen-panel-keys {
-  margin: auto var(--sp-3) 10px;
+.screen-page .screen-panel-main .screen-textrow {
+  margin: 0 0 8px;
 }
-.screen-page .screen-panel-text {
-  margin: 0 var(--sp-3) 10px;
+.screen-page .screen-panel-main .screen-row {
+  margin-bottom: 6px;
 }
-.screen-page .screen-key {
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #eef2f6;
-  border-radius: 10px;
+.screen-page .screen-panel-main .screen-row:last-of-type {
+  margin-bottom: 0;
 }
-.screen-page .screen-key:active {
-  background: rgba(255, 255, 255, 0.16);
-}
-.screen-page .screen-textrow input {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #fff;
-}
-.screen-page .screen-textrow input::placeholder {
-  color: rgba(255, 255, 255, 0.35);
+.screen-page .screen-panel-main .screen-key {
+  min-height: 38px;
 }
 /* Điện thoại XOAY NGANG — trang Màn hình tự thành "player" như YouTube tự lật
    ngang, KHÔNG cần bấm toàn màn hình: hình bên trái, thanh chức năng đứng dọc

@@ -14,6 +14,12 @@
 // v2.3: bridge đẩy khung nhanh hơn (trần 4→12 hình/s, màn đứng yên bỏ encode) +
 // toàn màn hình ăn theo xoay NGANG — hình dồn sát trái, thanh phím đứng dọc
 // bên phải; thanh nút nằm trong lớp toàn màn hình nên không còn bị đè mất.
+// v2.9: zoom xem cục bộ kiểu app remote desktop — véo 2 ngón phóng/thu
+// (1x..3x, điểm giữa 2 ngón là tâm, nội dung bám theo ngón), đang zoom thì
+// kéo 1 ngón = dời khung nhìn; vuốt 2 ngón vẫn cuộn máy PC. Zoom CHỈ phóng
+// ảnh trên điện thoại (CSS transform): tọa độ bấm tính qua rect ảnh đã phóng
+// nên vẫn trúng đích, stream không tốn thêm băng thông. Chip "1.5×" góc
+// dưới-trái chỉ hiện khi đang phóng, bấm là về vừa khung.
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { apiScreenInfo, owScreenInput, owScreenStream } from "../api.js";
@@ -483,26 +489,9 @@ export function ScreenPage() {
           </div>
         </div>
 
-        {/* Bàn phím gọn: Copy/Paste/Undo/Redo + Enter/Esc/Bksp/Tab — HIỂN THỊ
-            LUÔN ở mọi chế độ: mode thường nằm dưới ảnh, toàn màn hình thì CSS
-            dựng thành cột phải xoay 90°. */}
-        <div class="screen-panel screen-panel-keys">
-            <div class="screen-row">
-              {COMBOS.map((c) => (
-                <button key={c.label} class="screen-key combo" disabled={sending} onClick={() => tapCombo(c)}>
-                  {c.label}
-                </button>
-              ))}
-            </div>
-            <div class="screen-row">
-              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("enter")}>Enter</button>
-              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("esc")}>Esc</button>
-              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("backspace")}>Bksp</button>
-              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("tab")}>Tab</button>
-            </div>
-          </div>
-
-        <div class="screen-panel screen-panel-text">
+        {/* Gõ chữ + bàn phím GỘP MỘT KHUNG luôn hiển thị: mode thường nằm dưới
+            ảnh, toàn màn hình thì CSS dựng thành cột phải xoay 90°. */}
+        <div class="screen-panel screen-panel-main">
           <form
             class="screen-textrow"
             onSubmit={async (e) => {
@@ -522,6 +511,19 @@ export function ScreenPage() {
               <SendIcon size={16} /> Send
             </button>
           </form>
+            <div class="screen-row">
+              {COMBOS.map((c) => (
+                <button key={c.label} class="screen-key combo" disabled={sending} onClick={() => tapCombo(c)}>
+                  {c.label}
+                </button>
+              ))}
+            </div>
+            <div class="screen-row">
+              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("enter")}>Enter</button>
+              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("esc")}>Esc</button>
+              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("backspace")}>Bksp</button>
+              <button class="screen-key wide" disabled={sending} onClick={() => tapKey("tab")}>Tab</button>
+            </div>
         </div>
       </div>
   );
