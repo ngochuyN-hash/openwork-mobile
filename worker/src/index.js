@@ -46,16 +46,17 @@ async function readJson(request) {
   return request.json().catch(() => null);
 }
 
-// Rate-limit đăng nhập phòng: 10 lần/phút/IP. Đếm qua Cache API (caches.default)
-// — KHÔNG tốn KV write quota; nếu không có cửa này, mỗi lần dò mật khẩu đều
-// đốt 1 KV read (hạn mức free 100k/ngày chung cả tòa nhà).
-async function tenantLoginLimited(request) {
+// Rate-limit các cửa mở cho người lạ (đăng nhập phòng 10 lần/phút/IP, tự tạo
+// phòng 5 lần/phút/IP). Đếm qua Cache API (caches.default) — KHÔNG tốn KV write
+// quota; nếu không có cửa này, mỗi lần dò mật khẩu đều đốt 1 KV read (hạn mức
+// free 100k/ngày chung cả tòa nhà).
+async function rateLimited(request, kind, limit) {
   const ip = request.headers.get("cf-connecting-ip") ?? "?";
   const bucket = Math.floor(Date.now() / 60_000);
-  const key = new Request(`https://owm-ratelimit/pair-tenant/${encodeURIComponent(ip)}/${bucket}`);
+  const key = new Request(`https://owm-ratelimit/${kind}/${encodeURIComponent(ip)}/${bucket}`);
   const hit = await caches.default.match(key);
   const count = hit ? Number(await hit.text()) : 0;
-  if (count >= 10) return true;
+  if (count >= limit) return true;
   // TTL 119s cho key bucket cũ tự rác bay khỏi edge cache.
   await caches.default.put(
     key,
@@ -146,7 +147,7 @@ export default {
       // Worker tự so secret TRƯỚC khi relay: phòng lạ và sai mật khẩu cùng một câu
       // 401 — người lạ không dò ra được phòng nào tồn tại (bridge vẫn so lại lần 2).
       if (url.pathname === "/api/pair/tenant" && request.method === "POST") {
-        if (await tenantLoginLimited(request)) {
+        if (await rateLimited(request, "pair-tenant", 10)) {
           return json({ code: "rate_limited", message: "Đăng nhập quá nhiều lần — đợi khoảng 1 phút rồi thử lại." }, 429);
         }
         const body = await readJson(request);
@@ -159,6 +160,43 @@ export default {
           return json({ code: "invalid_credentials", message: "Sai tên đăng nhập hoặc mật khẩu." }, 401);
         }
         return relay(env, `machine:${tenant}`, request, url, body);
+      }
+
+      // Tự tạo phòng (self-serve): người cài bridge gõ tên phòng + mật khẩu của
+      // chính mình là có phòng vĩnh viễn trên KV — không cần chủ worker cấp link
+      // mời. Phòng đã tồn tại + ĐÚNG mật khẩu = vào lại bình thường (cài lại máy
+      // lần nào cũng gõ lại y như cũ là xong); sai mật khẩu = 1 câu 401 chung.
+      // "main" bị cấm — đó là slot machine:main của chủ worker, nếu cho tạo
+      // tenant:main thì bridge lạ đăng ký đè luôn địa chỉ máy nhà. Trần 50 phòng
+      // + rate-limit chặn ngập KV nếu URL worker bị lộ.
+      if (url.pathname === "/api/tenant/create" && request.method === "POST") {
+        if (await rateLimited(request, "create-room", 5)) {
+          return json({ code: "rate_limited", message: "Tạo phòng quá nhiều lần — đợi khoảng 1 phút rồi thử lại." }, 429);
+        }
+        const body = await readJson(request);
+        const user = String(body?.user ?? "").trim().toLowerCase();
+        const secret = String(body?.secret ?? "");
+        if (!TENANT_RE.test(user) || ["main", "admin", "root", "api", "www"].includes(user)) {
+          return json({ code: "invalid_user", message: "Tên phòng chỉ gồm 2-32 ký tự a-z, 0-9, gạch ngang." }, 400);
+        }
+        if (secret.length < 8 || secret.length > 128 || /[\s"':&]/.test(secret)) {
+          return json({ code: "invalid_secret", message: "Mật khẩu cần 8-128 ký tự, không chứa dấu cách, nháy, ':' hoặc '&'." }, 400);
+        }
+        let name = String(body?.name ?? "").replace(/[\r\n"']/g, "").trim().slice(0, 60);
+        if (!name) name = user;
+        const existing = await env.OWM_STATE.get(`tenant:${user}`, "json").catch(() => null);
+        if (existing) {
+          if (existing.secret && (await sameSecret(secret, existing.secret))) {
+            return json({ ok: true, existed: true, user, name: existing.name || name });
+          }
+          return json({ code: "taken", message: "Tên phòng này đã có người dùng và mật khẩu không khớp." }, 401);
+        }
+        const rooms = await env.OWM_STATE.list({ prefix: "tenant:" });
+        if (rooms.keys.length >= 50) {
+          return json({ code: "full", message: "Hết chỗ cho phòng mới — liên hệ chủ worker." }, 403);
+        }
+        await env.OWM_STATE.put(`tenant:${user}`, JSON.stringify({ secret, name, createdAt: Date.now() }));
+        return json({ ok: true, created: true, user, name });
       }
 
       const tenant = (request.headers.get("x-owm-tenant") || url.searchParams.get("_m") || "")

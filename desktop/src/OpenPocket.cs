@@ -67,6 +67,7 @@ namespace OpenPocket.Desktop
         private Label lblStatusTunnel;
         private Label lblStatusTunnelUrl;
         private Label lblStatusOpenWork;
+        private Button btnConnectRoom;
         private Button btnStartBridge;
         private Button btnStopBridge;
         private Button btnRestartBridge;
@@ -75,7 +76,6 @@ namespace OpenPocket.Desktop
         private TextBox txtRoomUser;
         private TextBox txtRoomPass;
         private TextBox txtMachineName;
-        private TextBox txtWorkerUrl;
 
         // UI Controls - Tenants Tab
         private TextBox txtNewUser;
@@ -269,45 +269,45 @@ namespace OpenPocket.Desktop
             Button btnOpenLogs = CreateFlatButton("Xem nhật ký", ColorSecondary, 202, 16, 172, 38, cardPair);
             btnOpenLogs.Click += delegate { ActionOpenLogs(); };
 
-            // CỘT PHẢI: thẻ tham gia phòng
+            // CỘT PHẢI: thẻ kết nối phòng — TỰ TẠO phòng là đường chính: gõ tên +
+            // mật khẩu bấm 1 nút là lưu vĩnh viễn trên web (POST /api/tenant/create),
+            // không cần chủ nhà cấp link mời. Link mời chỉ còn đường phụ tự điền.
             int yR = 0;
-            Panel cardConfig = CreateCard(432, ref yR, 420, 316, pnlMachine);
-            CreateCardTitle("THAM GIA PHÒNG (DÀNH CHO NGƯỜI DÙNG MỚI)", cardConfig);
+            Panel cardConfig = CreateCard(432, ref yR, 420, 322, pnlMachine);
+            CreateCardTitle("KẾT NỐI PHÒNG CỦA BẠN", cardConfig);
 
             Label lblHint = new Label();
-            lblHint.Text = "Nhận link mời từ chủ nhà rồi dán vào ô bên dưới:";
+            lblHint.Text = "Gõ tên phòng + mật khẩu rồi bấm nút — phòng lưu vĩnh viễn trên web, cài lại máy lần nào cũng gõ lại y như vậy để vào lại.";
             lblHint.ForeColor = ColorMuted;
             lblHint.Font = new Font("Segoe UI", 8.5f);
             lblHint.Location = new Point(16, 30);
-            lblHint.Size = new Size(388, 18);
+            lblHint.Size = new Size(388, 30);
             cardConfig.Controls.Add(lblHint);
 
-            txtInviteLink = CreateInput(16, 52, 282, cardConfig);
+            CreateFieldLabel("Tên phòng (a-z, 0-9, gạch ngang — vd: marcus):", 16, 64, cardConfig);
+            txtRoomUser = CreateInput(16, 82, 388, cardConfig);
+
+            CreateFieldLabel("Mật khẩu (≥8 ký tự):", 16, 114, cardConfig);
+            txtRoomPass = CreateInput(16, 132, 388, cardConfig);
+            txtRoomPass.PasswordChar = '•';
+
+            CreateFieldLabel("Tên máy hiển thị (tùy chọn):", 16, 164, cardConfig);
+            txtMachineName = CreateInput(16, 182, 388, cardConfig);
+
+            CreateFieldLabel("Có link mời từ chủ nhà? Dán vào đây (tự điền bên trên):", 16, 214, cardConfig);
+            txtInviteLink = CreateInput(16, 232, 282, cardConfig);
             txtInviteLink.TextChanged += delegate { OnInviteLinkPasted(); };
 
-            Button btnPaste = CreateFlatButton("Dán link", ColorSecondary, 306, 51, 98, 26, cardConfig);
+            Button btnPaste = CreateFlatButton("Dán link", ColorSecondary, 306, 231, 98, 26, cardConfig);
             btnPaste.Click += delegate {
                 if (Clipboard.ContainsText()) {
                     txtInviteLink.Text = Clipboard.GetText().Trim();
                 }
             };
 
-            CreateFieldLabel("Tên phòng (user):", 16, 88, cardConfig);
-            txtRoomUser = CreateInput(16, 106, 182, cardConfig);
-
-            CreateFieldLabel("Mật khẩu phòng:", 206, 88, cardConfig);
-            txtRoomPass = CreateInput(206, 106, 182, cardConfig);
-            txtRoomPass.PasswordChar = '•';
-
-            CreateFieldLabel("Tên máy hiển thị:", 16, 138, cardConfig);
-            txtMachineName = CreateInput(16, 156, 388, cardConfig);
-
-            CreateFieldLabel("Địa chỉ Worker (cố định):", 16, 190, cardConfig);
-            txtWorkerUrl = CreateInput(16, 208, 388, cardConfig);
-
-            Button btnSaveConfig = CreateFlatButton("Lưu cấu hình & Bật kết nối phòng", ColorPrimary, 16, 244, 388, 40, cardConfig);
-            btnSaveConfig.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
-            btnSaveConfig.Click += delegate { ActionSaveAndJoin(); };
+            btnConnectRoom = CreateFlatButton("Tạo phòng & Kết nối", ColorSuccess, 16, 266, 388, 40, cardConfig);
+            btnConnectRoom.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+            btnConnectRoom.Click += delegate { ActionConnectRoom(); };
 
             // --- PAGE 2: QUẢN LÝ PHÒNG (TENANTS) — 2 CỘT ---
             pnlTenants = new Panel();
@@ -562,12 +562,11 @@ namespace OpenPocket.Desktop
             currentTenant = config.ContainsKey("lookupTenant") ? Convert.ToString(config["lookupTenant"]) : "";
             currentMachineName = config.ContainsKey("machineName") ? Convert.ToString(config["machineName"]) : "";
             string secret = config.ContainsKey("lookupSecret") ? Convert.ToString(config["lookupSecret"]) : "";
-            string workerUrl = config.ContainsKey("lookupUrl") ? Convert.ToString(config["lookupUrl"]) : "https://YOUR-WORKER.workers.dev";
 
             txtRoomUser.Text = currentTenant;
             txtMachineName.Text = currentMachineName;
             txtRoomPass.Text = secret;
-            txtWorkerUrl.Text = workerUrl;
+            if (string.IsNullOrEmpty(txtMachineName.Text)) txtMachineName.Text = Environment.MachineName;
 
             // Kiểm tra autostart task
             CheckAutostartTask();
@@ -584,12 +583,6 @@ namespace OpenPocket.Desktop
             {
                 txtRoomUser.Text = m.Groups[1].Value.ToLower();
                 txtRoomPass.Text = m.Groups[2].Value;
-                try
-                {
-                    Uri uri = new Uri(raw);
-                    txtWorkerUrl.Text = uri.GetLeftPart(UriPartial.Authority);
-                }
-                catch { }
 
                 if (string.IsNullOrEmpty(txtMachineName.Text))
                 {
@@ -598,38 +591,172 @@ namespace OpenPocket.Desktop
             }
         }
 
-        private void ActionSaveAndJoin()
+        // Worker URL ưu tiên: link mời dán vào > config (lookupUrl) > mặc định.
+        // GUI KHÔNG còn ô nhập worker URL — người mới không cần biết khái niệm này.
+        private string ResolveWorkerUrl(string fromInviteLink)
+        {
+            if (!string.IsNullOrEmpty(fromInviteLink)) return fromInviteLink.Trim().TrimEnd('/');
+            var config = LoadConfig();
+            if (config.ContainsKey("lookupUrl"))
+            {
+                string fromConfig = Convert.ToString(config["lookupUrl"]);
+                if (!string.IsNullOrEmpty(fromConfig)) return fromConfig.Trim().TrimEnd('/');
+            }
+            return "https://YOUR-WORKER.workers.dev";
+        }
+
+        // Đường chính cho người mới: gõ tên phòng + mật khẩu → tạo phòng VĨNH VIỄN
+        // trên worker (POST /api/tenant/create; phòng cũ + đúng mật khẩu = vào lại)
+        // → lưu config → bật lại bridge. Bridge sống lại là tự đăng ký
+        // machine:<phòng> lên KV, điện thoại đăng nhập bằng chính cặp user/pass đó.
+        private void ActionConnectRoom()
         {
             string user = txtRoomUser.Text.Trim().ToLower();
             string pass = txtRoomPass.Text.Trim();
             string machine = txtMachineName.Text.Trim();
-            string url = txtWorkerUrl.Text.Trim().TrimEnd('/');
+            string url = "";
 
-            if (!Regex.IsMatch(user, @"^[a-z0-9][a-z0-9-]{0,31}$"))
+            // Link mời (nếu dán) thắng ưu tiên: bóc cặp user:secret + origin ra khỏi link
+            string link = txtInviteLink.Text.Trim();
+            if (link.Length > 0)
             {
-                MessageBox.Show(this, "Tên phòng không hợp lệ. Chỉ gồm a-z, 0-9, dấu gạch ngang (vd: marcus).", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                var lm = Regex.Match(link, @"#i=([A-Za-z0-9][A-Za-z0-9-]{0,31}):([^&\s]+)");
+                if (lm.Success)
+                {
+                    user = lm.Groups[1].Value.ToLower();
+                    pass = lm.Groups[2].Value;
+                    try { url = new Uri(link).GetLeftPart(UriPartial.Authority); } catch { }
+                }
+            }
+
+            if (!Regex.IsMatch(user, @"^[a-z0-9][a-z0-9-]{1,31}$"))
+            {
+                MessageBox.Show(this, "Tên phòng chỉ gồm 2-32 ký tự a-z, 0-9, gạch ngang (vd: marcus).", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
-            if (string.IsNullOrEmpty(pass))
+            if (pass.Length < 8 || Regex.IsMatch(pass, @"[\s""':&]"))
             {
-                MessageBox.Show(this, "Vui lòng nhập mật khẩu phòng.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this, "Mật khẩu cần ít nhất 8 ký tự, không chứa dấu cách, nháy kép/nháy đơn, ':' hoặc '&'.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            var config = LoadConfig();
-            config["lookupTenant"] = user;
-            config["lookupSecret"] = pass;
-            config["machineName"] = !string.IsNullOrEmpty(machine) ? machine : user;
-            config["lookupUrl"] = !string.IsNullOrEmpty(url) ? url : "https://YOUR-WORKER.workers.dev";
-            SaveConfig(config);
+            url = ResolveWorkerUrl(url);
+            if (!url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(url, @"\s"))
+            {
+                MessageBox.Show(this, "Địa chỉ worker phải bắt đầu bằng https:// và không chứa dấu cách.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
 
-            // Bật tự khởi động Task Scheduler luôn để người dùng không phải cấu hình lại
-            EnsureAutostartTaskEnabled();
+            btnConnectRoom.Enabled = false;
+            btnConnectRoom.Text = "Đang lưu phòng lên web...";
 
-            // Khởi động lại bridge
-            ActionRestartBridge();
+            string reqUser = user, reqPass = pass, reqUrl = url, reqName = machine;
+            ThreadPool.QueueUserWorkItem(delegate {
+                bool ok = false;
+                bool existed = false;
+                string errCode = "";
+                string errMessage = "";
+                try
+                {
+                    var jss = new JavaScriptSerializer();
+                    string payload = jss.Serialize(new Dictionary<string, object> {
+                        { "user", reqUser }, { "secret", reqPass }, { "name", reqName }
+                    });
+                    byte[] body = Encoding.UTF8.GetBytes(payload);
+                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create(reqUrl + "/api/tenant/create");
+                    req.Method = "POST";
+                    req.ContentType = "application/json";
+                    req.ContentLength = body.Length;
+                    req.Timeout = 20000;
+                    req.ReadWriteTimeout = 20000;
+                    using (Stream rs = req.GetRequestStream()) rs.Write(body, 0, body.Length);
+                    using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
+                    using (StreamReader sr = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
+                    {
+                        var dict = jss.Deserialize<Dictionary<string, object>>(sr.ReadToEnd());
+                        ok = dict != null && dict.ContainsKey("ok") && Convert.ToBoolean(dict["ok"]);
+                        existed = dict != null && dict.ContainsKey("existed") && Convert.ToBoolean(dict["existed"]);
+                    }
+                }
+                catch (WebException wex)
+                {
+                    HttpWebResponse httpErr = wex.Response as HttpWebResponse;
+                    if (httpErr != null)
+                    {
+                        errCode = Convert.ToString((int)httpErr.StatusCode);
+                        try
+                        {
+                            using (StreamReader sr = new StreamReader(httpErr.GetResponseStream(), Encoding.UTF8))
+                            {
+                                var jss = new JavaScriptSerializer();
+                                var dict = jss.Deserialize<Dictionary<string, object>>(sr.ReadToEnd());
+                                if (dict != null)
+                                {
+                                    if (dict.ContainsKey("code")) errCode = Convert.ToString(dict["code"]);
+                                    if (dict.ContainsKey("message")) errMessage = Convert.ToString(dict["message"]);
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                    else
+                    {
+                        errCode = "network";
+                        errMessage = wex.Message;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    errCode = "network";
+                    errMessage = ex.Message;
+                }
 
-            MessageBox.Show(this, string.Format("Đã cấu hình máy vào phòng \"{0}\" và khởi động lại Bridge!\nĐiện thoại có thể mở lại link mời để điều khiển máy này.", user), "Đã tham gia phòng", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                this.Invoke(new MethodInvoker(delegate {
+                    btnConnectRoom.Enabled = true;
+                    btnConnectRoom.Text = "Tạo phòng & Kết nối";
+
+                    if (ok)
+                    {
+                        var config = LoadConfig();
+                        config["lookupTenant"] = reqUser;
+                        config["lookupSecret"] = reqPass;
+                        config["machineName"] = !string.IsNullOrEmpty(reqName) ? reqName : reqUser;
+                        config["lookupUrl"] = reqUrl;
+                        SaveConfig(config);
+                        // Bật tự khởi động Task Scheduler luôn để khỏi cấu hình lại
+                        EnsureAutostartTaskEnabled();
+                        ActionRestartBridge();
+
+                        // Link dạng #i=user:pass — đúng cơ chế link mời, nhưng ở đây
+                        // người dùng tự gửi cho chính mình qua Zalo rồi bấm là điện
+                        // thoại tự đăng nhập (không phải gõ URL web lạ nào cả)
+                        string loginLink = string.Format("{0}/#i={1}:{2}", reqUrl, reqUser, reqPass);
+                        try { Clipboard.SetText(loginLink); } catch { }
+
+                        MessageBox.Show(this, existed
+                            ? string.Format("Đã kết nối lại phòng \"{0}\" — mật khẩu đúng, phòng giữ nguyên.\n\nMáy này đã bật lại bridge và tự đăng ký lên web.\n\nTRÊN ĐIỆN THOẠI: bấm link vừa copy (tự gửi Zalo cho mình) hoặc mở web → tab Đăng nhập → gõ đúng tên phòng + mật khẩu này.\n\nLink (đã copy):\n{1}", reqUser, loginLink)
+                            : string.Format("Đã tạo phòng \"{0}\" và lưu vĩnh viễn trên web!\n\nMáy này đã bật lại bridge và tự đăng ký lên web (đợi chốc lát).\n\nTRÊN ĐIỆN THOẠI: gửi link dưới đây cho chính mình qua Zalo rồi bấm vào — hoặc mở web → tab Đăng nhập → gõ đúng tên phòng + mật khẩu vừa tạo.\n\nLink (đã copy):\n{1}", reqUser, loginLink),
+                            "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        CheckStatus();
+                    }
+                    else if (errCode == "taken")
+                    {
+                        MessageBox.Show(this, string.Format("Tên phòng \"{0}\" đã có người dùng và mật khẩu không khớp.\n\nNếu đó là phòng của bạn: kiểm tra lại mật khẩu rồi thử lại. Nếu không: chọn tên phòng khác.", reqUser), "Phòng đã tồn tại", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+                    else if (errCode == "rate_limited")
+                    {
+                        MessageBox.Show(this, "Thử quá nhiều lần — đợi khoảng 1 phút rồi bấm lại.", "Chậm lại chút", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+                    else if (errCode == "invalid_user" || errCode == "invalid_secret")
+                    {
+                        MessageBox.Show(this, errMessage, "Chưa đúng quy tắc", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+                    else
+                    {
+                        MessageBox.Show(this, string.Format("Không tạo được phòng ({0}).\n{1}\n\nKiểm tra mạng rồi thử lại; vẫn lỗi thì chụp màn hình gửi chủ nhà.", errCode, errMessage), "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }));
+            });
         }
 
         private void CheckStatus()
@@ -1016,8 +1143,7 @@ namespace OpenPocket.Desktop
 
             // Đọc + kiểm tra workerUrl trên UI thread (trước khi khóa nút):
             // URL lỗi định dạng sẽ xê dịch tham số khi ghép lệnh node bên dưới.
-            string workerUrl = txtWorkerUrl.Text.Trim().TrimEnd('/');
-            if (string.IsNullOrEmpty(workerUrl)) workerUrl = "https://YOUR-WORKER.workers.dev";
+            string workerUrl = ResolveWorkerUrl("");
             if (!workerUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(workerUrl, @"\s"))
             {
                 MessageBox.Show(this, "Địa chỉ worker phải bắt đầu bằng https:// và không chứa dấu cách.", "Lỗi định dạng", MessageBoxButtons.OK, MessageBoxIcon.Warning);

@@ -10,19 +10,31 @@ BƯỚC 1 — Cài phần nối (1 lần duy nhất, ~2 phút)
   Mở thư mục "bridge" → bấm đúp vào:  setup-friend.bat
   (đợi chữ XONG! hiện ra là xong)
 
-BƯỚC 2 — Dán link mời
+BƯỚC 2 — Tạo phòng của bạn (không cần ai cấp gì cả)
   Bấm đúp:  OpenPocket.exe
   (Windows hỏi xanh "Windows protected your PC"? → More info → Run anyway
    — app chưa mua chữ ký số nên lần đầu bị hỏi vậy, bình thường)
-  → Tab "Máy của tôi" → dán LINK MỜI bạn nhận được vào ô lớn
-  → Bấm "💾 Lưu cấu hình & Bật kết nối phòng"
+  → Gõ TÊN PHÒNG bạn muốn (chữ thường không dấu, vd: nam-laptop)
+  → Gõ MẬT KHẨU (tối thiểu 8 ký tự, nhớ kỹ!)
+  → Bấm "Tạo phòng & Kết nối" — xong!
+
+  Phòng được LƯU VĨNH VIỄN: lần sau cài lại Windows hay mang máy đi
+  sửa, chỉ cần mở app gõ lại đúng tên phòng + mật khẩu cũ là vào lại.
+  App cũng tự bật "Tự khởi động cùng Windows" giúp bạn.
+
+  (Có LINK MỜI từ chủ nhà gửi sẵn? Dán vào ô dưới cùng — tự điền,
+   bấm nút là vào. Không có thì khỏi cần.)
 
 BƯỚC 3 — Trên điện thoại
-  Bấm vào link mời (gửi qua Zalo/Messenger) → tự vào app luôn.
-  Lần sau mở app là vào thẳng, không gõ lại gì cả.
+  App vừa hiện ra một LINK, đã tự copy — gửi link đó cho CHÍNH MÌNH
+  qua Zalo/Messenger → trên điện thoại bấm vào là điều khiển được máy.
+  Lần sau mở lại link (hoặc lưu vào màn hình chính) là vào thẳng.
 
 MẸO
-  • Tick "Tự khởi động cùng Windows" để máy nào restart cũng tự nối lại.
-  • Nút "📱 Xem mã ghép" in QR để ghép thêm điện thoại khác không cần pass.
-  • Rắc rối? Bấm "📄 Xem nhật ký" rồi chụp màn hình gửi chủ nhà.
+  • Link bấm-là-vào có chứa mật khẩu — chỉ gửi cho chính mình, đừng
+    đưa lên group hay cho người lạ (người khác bấm vào là điều khiển
+    được máy bạn y như bạn).
+  • Muốn người KHÁC cũng điều khiển được máy này? Nhờ chủ nhà cấp
+    cho họ một link mời riêng — đừng đưa link của bạn cho ai.
+  • Rắc rối? Bấm "Xem nhật ký" rồi chụp màn hình gửi chủ nhà.
 ══════════════════════════════════════════════════════════════
