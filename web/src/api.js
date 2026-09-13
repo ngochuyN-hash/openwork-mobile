@@ -111,6 +111,27 @@ export function removeKey(tenant) {
   return true;
 }
 
+/** Đổi tên hiển thị của 1 máy trong chùm chìa — chỉ đổi LOCAL trên app này,
+ * không đụng machineName trong config của bridge (cái tên người khác thấy lúc
+ * đăng nhập). Active machine đổi tên thì cả "Máy đang kết nối" đổi theo. */
+export function renameKey(tenant, name) {
+  const clean = cleanTenantId(tenant);
+  const nice = String(name ?? "").trim().slice(0, 60);
+  if (!nice) return false;
+  const keys = loadKeys();
+  const entry = keys.find((k) => k.tenant === clean);
+  if (!entry) return false;
+  entry.name = nice;
+  saveKeys(keys);
+  if (cleanTenantId(getTenant()) === clean) {
+    // tenant rỗng: setTenant từ chối lưu (guard !clean) — ghi thẳng tên để
+    // hàng "Máy đang kết nối" ở Settings cũng đổi theo
+    if (clean) setTenant(clean, nice);
+    else localStorage.setItem(TENANT_NAME_KEY, nice);
+  }
+  return true;
+}
+
 /** Báo App biết chùm chìa đổi (xóa chìa máy active có thể đổi trạng thái paired). */
 export function notifyKeysChanged() {
   window.dispatchEvent(new CustomEvent("owm:keys"));

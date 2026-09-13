@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "preact/hooks";
 import {
   listKeys,
   removeKey,
+  renameKey,
   notifyKeysChanged,
   ensureActiveKeyEntry,
   apiMachineStatus,
@@ -11,16 +12,17 @@ import {
   setTenant,
   getTenant,
 } from "../api.js";
-import { Banner, Empty, useConfirm } from "../components/ui.jsx";
+import { Banner, useConfirm } from "../components/ui.jsx";
 import { navigate } from "../app.jsx";
 
-// Tab PCs ("mục PC" kiểu 9remote): chùm chìa nhiều máy trong một app. Bấm máy
-// = chuyển sang máy đó 1 chạm; mỗi máy 1 chìa owd_ chỉ mở đúng máy của nó.
-// Ngắt kết nối là quyền của điện thoại, 2 mức:
+// Quản lý nhiều máy ("mục PC" kiểu 9remote) — NHÚNG TRONG Settings (user chốt:
+// không chiếm tab riêng). Chùm chìa `owm_keys`: mỗi máy 1 chìa owd_ chỉ mở đúng
+// máy của nó. Bấm máy = chuyển sang máy đó; đổi tên = tên hiển thị LOCAL trên
+// app này. Ngắt kết nối là quyền của điện thoại, 2 mức:
 //   - Rời máy  = xóa chìa khỏi app, khóa còn nằm trên máy.
 //   - Ngắt hẳn = thu hồi khóa TRÊN MÁY (DELETE /api/devices/:id) + xóa chìa —
 //     phone này chết hẳn với máy đó, vào lại phải có link mời/mã ghép mới.
-// Trạng thái máy kiểm tra ĐÚNG 1 LẦN khi mở tab — không poll liên tục.
+// Trạng thái máy kiểm tra ĐÚNG 1 LẦN khi mở — không poll liên tục.
 
 const STATUS_TEXT = {
   online: "Trực tuyến",
@@ -28,7 +30,7 @@ const STATUS_TEXT = {
   revoked: "Chìa hết hiệu lực",
 };
 
-export function PcsPage() {
+export function PcManager({ onChanged }) {
   const [keys, setKeys] = useState(listKeys);
   const [statuses, setStatuses] = useState({});
   const [checking, setChecking] = useState(false);
@@ -36,6 +38,7 @@ export function PcsPage() {
   // không phòng có tenant "" sẽ khớp luôn và khóa nút vĩnh viễn.
   const [busyTenant, setBusyTenant] = useState(null);
   const [adding, setAdding] = useState(false);
+  const [renaming, setRenaming] = useState(null);
   const [error, setError] = useState("");
   const [confirmDialog, askConfirm] = useConfirm();
 
@@ -56,12 +59,18 @@ export function PcsPage() {
     checkAll();
   }, [checkAll]);
 
-  // Bấm thẻ = nối sang máy đó: chìa của máy thành chìa active, app về Sessions
+  // Bấm máy = nối sang máy đó: chìa của máy thành chìa active, app về Sessions
   // và mọi request/SSE tự mang header phòng mới (worker relay đúng bridge).
   function useMachine(k) {
     setToken(k.token);
     setTenant(k.tenant, k.name);
     navigate("#/");
+  }
+
+  function changed() {
+    notifyKeysChanged();
+    onChanged?.();
+    setKeys(listKeys());
   }
 
   function detach(k) {
@@ -71,7 +80,7 @@ export function PcsPage() {
       confirmLabel: "Rời máy",
       onConfirm: () => {
         removeKey(k.tenant);
-        notifyKeysChanged();
+        changed();
         checkAll();
       },
     });
@@ -93,8 +102,8 @@ export function PcsPage() {
         try {
           if (canRevoke) await apiRevokeMachineKey(k.token, k.tenant, deviceId);
           removeKey(k.tenant);
-          notifyKeysChanged();
           setError("");
+          changed();
         } catch (e) {
           setError(`Ngắt hẳn lỗi: ${String(e.message || e)} — chìa chưa xóa, thử lại.`);
         } finally {
@@ -115,31 +124,38 @@ export function PcsPage() {
           onClose={() => setAdding(false)}
           onAdded={() => {
             setAdding(false);
-            notifyKeysChanged();
+            changed();
             checkAll();
           }}
         />
       )}
-      {keys.length === 0 ? (
-        <Empty
-          icon
-          title="Chưa có máy nào trong app"
-          hint="Đăng nhập phòng hoặc dán link mời để thêm máy đầu tiên."
-          actionLabel="Thêm máy"
-          onAction={() => setAdding(true)}
+      {renaming && (
+        <RenameSheet
+          k={renaming}
+          onClose={() => setRenaming(null)}
+          onSaved={() => {
+            setRenaming(null);
+            changed();
+          }}
         />
-      ) : (
-        <>
-          <div class="page-actions">
-            <button class="btn small" disabled={checking} onClick={checkAll}>
-              {checking ? "Đang kiểm tra…" : "Kiểm tra máy"}
-            </button>
-            <button class="btn small primary" onClick={() => setAdding(true)}>
-              Thêm máy
-            </button>
-          </div>
-          {error && <Banner kind="err">{error}</Banner>}
-          {keys.map((k) => (
+      )}
+      <div class="card">
+        <h3>Máy của tôi</h3>
+        <div class="page-actions" style="margin:0 0 var(--sp-3)">
+          <button class="btn small" disabled={checking} onClick={checkAll}>
+            {checking ? "Đang kiểm tra…" : "Kiểm tra máy"}
+          </button>
+          <button class="btn small primary" onClick={() => setAdding(true)}>
+            Thêm máy
+          </button>
+        </div>
+        {error && <Banner kind="err">{error}</Banner>}
+        {keys.length === 0 ? (
+          <p class="sheet-body" style="margin:0">
+            Chưa có máy nào trong app — bấm <b>Thêm máy</b> (link mời hoặc tài khoản phòng).
+          </p>
+        ) : (
+          keys.map((k) => (
             <PcCard
               key={k.tenant || "main"}
               k={k}
@@ -148,20 +164,21 @@ export function PcsPage() {
               active={activeTenant === String(k.tenant).trim().toLowerCase()}
               busy={busyTenant === k.tenant}
               onUse={() => useMachine(k)}
+              onRename={() => setRenaming(k)}
               onDetach={() => detach(k)}
               onStop={() => hardStop(k)}
             />
-          ))}
-        </>
-      )}
+          ))
+        )}
+      </div>
     </>
   );
 }
 
-function PcCard({ k, status, checking, active, busy, onUse, onDetach, onStop }) {
+function PcCard({ k, status, checking, active, busy, onUse, onRename, onDetach, onStop }) {
   const st = status?.status ?? (checking ? "checking" : "offline");
   return (
-    <div class="card pc-card">
+    <div class="pc-card">
       <button class="pc-main" onClick={onUse} aria-label={`Dùng máy ${k.name}`}>
         <span class="pc-name">
           <span class={`pc-dot ${st}`} aria-hidden="true" />
@@ -174,12 +191,58 @@ function PcCard({ k, status, checking, active, busy, onUse, onDetach, onStop }) 
         </span>
       </button>
       <div class="pc-actions">
+        <button class="btn small ghost" disabled={busy} onClick={onRename}>
+          Đổi tên
+        </button>
         <button class="btn small ghost" disabled={busy} onClick={onDetach}>
           Rời máy
         </button>
         <button class="btn small danger" disabled={busy} onClick={onStop}>
           Ngắt hẳn
         </button>
+      </div>
+    </div>
+  );
+}
+
+function RenameSheet({ k, onClose, onSaved }) {
+  const [name, setName] = useState(k.name);
+  const [busy, setBusy] = useState(false);
+
+  function save() {
+    const nice = name.trim();
+    if (!nice || busy) return;
+    setBusy(true);
+    renameKey(k.tenant, nice);
+    // đổi tên là chuyện local — không đợi mạng, trả giao diện ngay
+    setTimeout(onSaved, 150);
+  }
+
+  return (
+    <div class="sheet-backdrop" onClick={onClose}>
+      <div class="card sheet" role="dialog" aria-modal="true" aria-label="Đổi tên máy" onClick={(e) => e.stopPropagation()}>
+        <h3>Đổi tên máy</h3>
+        <p class="sheet-body" style="margin:0">
+          Tên hiển thị trên app này — máy khác đăng nhập vẫn thấy tên gốc của máy.
+        </p>
+        <label class="field" for="pc-rename">Tên máy</label>
+        <input
+          id="pc-rename"
+          type="text"
+          spellcheck={false}
+          maxLength={60}
+          value={name}
+          onInput={(e) => setName(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && save()}
+        />
+        <div class="sheet-actions">
+          <button class="btn" disabled={busy || !name.trim()} onClick={save}>
+            Lưu tên
+          </button>
+          <button class="btn ghost" onClick={onClose}>
+            Đóng
+          </button>
+        </div>
       </div>
     </div>
   );

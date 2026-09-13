@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "preact/hooks";
 import { getToken, apiState, apiWakeOpenWork, apiRecheck } from "./api.js";
-import { BackIcon, WsIcon, GearIcon, MessageIcon, ScreenIcon, PcsIcon } from "./components/icons.jsx";
+import { BackIcon, WsIcon, GearIcon, MessageIcon, ScreenIcon } from "./components/icons.jsx";
 import { Banner } from "./components/ui.jsx";
 import { PairingScreen } from "./pages/pairing.jsx";
 import { HomePage } from "./pages/home.jsx";
@@ -10,7 +10,6 @@ import { SessionsPage } from "./pages/sessions.jsx";
 import { ChatPage } from "./pages/chat.jsx";
 import { FilesPage } from "./pages/files.jsx";
 import { ScreenPage } from "./pages/screen.jsx";
-import { PcsPage } from "./pages/pcs.jsx";
 import { SettingsPage } from "./pages/settings.jsx";
 
 // Hash router:
@@ -20,8 +19,7 @@ import { SettingsPage } from "./pages/settings.jsx";
 //   #/ws/:id/chat/:sid     -> chat
 //   #/ws/:id/files         -> files
 //   #/screen               -> xem + điều khiển màn hình máy tính
-//   #/pcs                  -> danh sách máy trong chùm chìa (chuyển 1 chạm)
-//   #/settings             -> settings
+//   #/settings             -> settings (gồm mục "Máy của tôi" — chùm chìa nhiều máy)
 function parseHash() {
   const hash = location.hash.replace(/^#/, "");
   const [path, query] = hash.split("?");
@@ -30,7 +28,6 @@ function parseHash() {
   if (parts[0] === "settings") return { view: "settings" };
   if (parts[0] === "workspaces") return { view: "workspaces" };
   if (parts[0] === "screen") return { view: "screen" };
-  if (parts[0] === "pcs") return { view: "pcs" };
   if (parts[0] === "ws" && parts[1]) {
     if (parts[2] === "chat" && parts[3]) return { view: "chat", wsId: parts[1], sessionId: parts[3] };
     if (parts[2] === "files") return { view: "files", wsId: parts[1], path: params.get("path") ?? "" };
@@ -127,10 +124,6 @@ export function App() {
     case "screen":
       view = <ScreenPage />;
       title = "Screen";
-      break;
-    case "pcs":
-      view = <PcsPage />;
-      title = "PCs";
       break;
     case "settings":
       view = <SettingsPage state={state} onRecheck={refreshState} onUnpaired={() => setPaired(false)} />;
@@ -230,7 +223,6 @@ function BottomNav({ current }) {
     files: "workspaces",
     workspaces: "workspaces",
     screen: "screen",
-    pcs: "pcs",
     settings: "settings",
   };
   const active = activeOf[current] ?? "home";
@@ -246,7 +238,6 @@ function BottomNav({ current }) {
         {tab("home", "Sessions", "#/", <MessageIcon />)}
         {tab("workspaces", "Workspace", "#/workspaces", <WsIcon />)}
         {tab("screen", "Screen", "#/screen", <ScreenIcon />)}
-        {tab("pcs", "PCs", "#/pcs", <PcsIcon />)}
         {tab("settings", "Settings", "#/settings", <GearIcon />)}
       </nav>
     </div>

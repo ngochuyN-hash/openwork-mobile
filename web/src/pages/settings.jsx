@@ -16,6 +16,7 @@ import {
 } from "../api.js";
 import { Banner, useConfirm } from "../components/ui.jsx";
 import { navigate } from "../app.jsx";
+import { PcManager } from "./pcs.jsx";
 
 export function SettingsPage({ state, onRecheck, onUnpaired }) {
   const [busy, setBusy] = useState(false);
@@ -31,6 +32,15 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
   const [linkBusy, setLinkBusy] = useState(false);
   const [linkMsg, setLinkMsg] = useState("");
   const [linkErr, setLinkErr] = useState("");
+  // Chùm chìa đổi (đổi tên/rời/ngắt máy) — vẽ lại ngay các hàng tĩnh bên dưới
+  // ("Máy đang kết nối" đọc từ localStorage) thay vì đợi poll 15s.
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const onKeys = () => setTick((t) => t + 1);
+    window.addEventListener("owm:keys", onKeys);
+    return () => window.removeEventListener("owm:keys", onKeys);
+  }, []);
 
   useEffect(() => {
     apiDevices().then(setDevices).catch(() => setDevices([]));
@@ -170,6 +180,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
   return (
     <>
       {confirmDialog}
+      <PcManager onChanged={() => setTick((t) => t + 1)} />
       <div class="card">
         <h3>Trạng thái bridge</h3>
         <table style="width:100%;font-size:13.5px;border-collapse:collapse">
@@ -183,9 +194,6 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
           </tbody>
         </table>
         <div class="page-actions" style="margin-top:12px">
-          <button class="btn small" onClick={() => navigate("#/pcs")}>
-            Danh sách máy (PCs)
-          </button>
           <button class="btn small" disabled={busy} onClick={recheck}>
             {busy ? "Đang kiểm tra…" : "Kiểm tra lại"}
           </button>
