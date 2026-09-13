@@ -988,19 +988,20 @@ label.field {
 .touch-echo {
   display: none;
   position: absolute;
-  width: 14px;
-  height: 14px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.22);
+  background: transparent; /* lòng trong suốt — thấy nội dung xuyên qua */
+  border: 2px solid rgba(96, 165, 250, 0.85); /* viền xanh lam mờ */
+  box-shadow: 0 0 6px rgba(96, 165, 250, 0.35);
   transform: translate(-50%, -50%);
   pointer-events: none;
   z-index: 3;
 }
 .touch-echo.show { display: block; }
 .touch-echo.rc {
-  background: var(--danger);
-  box-shadow: 0 0 0 7px color-mix(in srgb, var(--danger) 30%, transparent);
+  border-color: var(--danger); /* giữ lâu = Right-click: vành đỏ báo hiệu */
+  box-shadow: 0 0 8px color-mix(in srgb, var(--danger) 45%, transparent);
 }
 /* Cụm nút MỜ góc trên-phải đè lên ảnh: Toàn màn hình/Thu nhỏ luôn có; Bàn phím
    + Gõ chữ chỉ hiện khi toàn màn hình (mode thường 2 panel hiển thị sẵn dưới ảnh). */
