@@ -41,6 +41,20 @@ export const FRAME_JPEG = 1;
 export const FRAME_META = 2;
 export const FRAME_ERROR = 3;
 
+/**
+ * Khung JPEG có đáng cache replay cho viewer mới? Chỉ khung phủ (0,0) và đủ
+ * ≥95% CẢ HAI chiều so với cỡ chụp hiện hành (tw/th). Dải ngang rộng-nhưng-thấp
+ * ở (0,0) trước đây chỉ được check width nên bị cache làm "nền" cho viewer mới
+ * → web kéo dãn ra cả màn hình (lỗi "tự focus" 14/09). Chưa biết chiều cao (th=0)
+ * thì giữ hành vi cũ: chỉ chặn khi có đủ mốc.
+ */
+export function isFullFrameForReplay(x, y, w, h, tw, th) {
+  if (x !== 0 || y !== 0 || !(tw > 0)) return false;
+  const okW = w >= tw * 0.95;
+  const okH = th > 0 ? h >= th * 0.95 : true;
+  return okW && okH;
+}
+
 /** Mã 1 frame ra binary: [4B len][1B type][payload]. */
 export function encodeFrame(type, payload = null) {
   const head = Buffer.alloc(5);
@@ -163,6 +177,7 @@ export class ScreenService {
     this.setupError = null;
     this.viewers = new Set();
     this.dimsCache = null; // {width,height} vật lý — cập nhật từ mỗi lần chụp của worker
+    this.shotDims = null; // {width,height} khung CHỤP thật (thu nhỏ theo width viewer) — meta báo web để chặn crop lọt qua gate "full frame"
     this.daemonDims = null; // kích thước theo góc nhìn daemon (DPI) — ưu tiên cho tọa độ input
     this.worker = null; // worker thread chụp màn hình chính (screen-capture.worker.js)
     this.workers = new Set(); // turbo: tối đa 2 workers khi nội dung động (BitBlt GDI ~85-105ms/khung nhưng KHÔNG serialize — đo thật 1.74× với 2 thread)
@@ -229,10 +244,19 @@ export class ScreenService {
         onMeta: (m) => {
           this.touch();
           const dims = { width: m.screenW, height: m.screenH };
-          const changed = !this.dimsCache || this.dimsCache.width !== dims.width || this.dimsCache.height !== dims.height;
+          const screenChanged = !this.dimsCache || this.dimsCache.width !== dims.width || this.dimsCache.height !== dims.height;
           this.dimsCache = dims;
+          // Daemon báo shotW/shotH = cỡ khung chụp thật (thu nhỏ theo width
+          // viewer, đổi mỗi lần START/reconfigure) — giữ lại để meta cho web
+          // luôn nói đúng cỡ frame nó sắp nhận; trước đây vứt đi rồi broadcast
+          // shotH:0 làm web không biết đâu là full frame thật.
+          let shotChanged = false;
+          if (m.shotW > 0 && m.shotH > 0) {
+            shotChanged = !this.shotDims || this.shotDims.width !== m.shotW || this.shotDims.height !== m.shotH;
+            this.shotDims = { width: m.shotW, height: m.shotH };
+          }
           if (this.workerWaiters.length) for (const r of this.workerWaiters.splice(0)) r();
-          if (changed && this.viewers.size) this.broadcastMeta();
+          if (this.viewers.size && (screenChanged || shotChanged)) this.broadcastMeta();
         },
         onError: (msg) => {
           // daemon chết giữa phiên: báo + chạy GDI thay ngay
@@ -257,8 +281,9 @@ export class ScreenService {
     // Replay cho viewer mới chỉ nên là khung FULL — replay một crop mảnh từng
     // vẽ mảnh rời lên canvas trống = "màn hình đen" trên phone (14/09).
     if (jpeg.length >= 8) {
-      const fx = jpeg.readUInt16LE(0), fy = jpeg.readUInt16LE(2), fw = jpeg.readUInt16LE(4);
-      if (fx === 0 && fy === 0 && fw >= this.dxgi.width * 0.95) this.lastJpegByParams.set(key, jpeg);
+      const fx = jpeg.readUInt16LE(0), fy = jpeg.readUInt16LE(2), fw = jpeg.readUInt16LE(4), fh = jpeg.readUInt16LE(6);
+      const tw = this.shotDims?.width ?? this.dxgi.width, th = this.shotDims?.height ?? 0;
+      if (isFullFrameForReplay(fx, fy, fw, fh, tw, th)) this.lastJpegByParams.set(key, jpeg);
     }
     if (this.viewers.size) this.broadcast(FRAME_JPEG, jpeg);
     // viewer tham số khác (zoom) vẫn nhận khung này hiển thị co giãn CSS,
@@ -326,6 +351,8 @@ export class ScreenService {
       this.touch();
       const dimsChanged = !this.dimsCache || this.dimsCache.width !== m.w || this.dimsCache.height !== m.h;
       this.dimsCache = { width: m.w, height: m.h };
+      // GDI luôn chụp full khung tại cỡ m.w×m.h — xem như cỡ chụp thật hiện hành.
+      this.shotDims = { width: m.w, height: m.h };
       if (this.workerWaiters.length) for (const r of this.workerWaiters.splice(0)) r();
       if (dimsChanged && this.viewers.size > 0) this.broadcastMeta();
       if (!m.changed) {
@@ -442,10 +469,14 @@ export class ScreenService {
     req.on("close", () => this.removeViewer(viewer));
     res.on("error", () => this.removeViewer(viewer));
 
+    // Meta báo ngay cỡ khung chụp web sẽ nhận (shotDims nếu pipeline đã chạy;
+    // chưa chạy thì báo width viewer đã xin, shotH = 0 — meta tiếp theo từ daemon
+    // START sẽ đính chính). Web dùng shotW/H làm mốc nhận diện full frame thật.
+    const shot = this.shotDims ? { width: this.shotDims.width, height: this.shotDims.height } : { width, height: 0 };
     this.sendTo(viewer, FRAME_META, Buffer.from(JSON.stringify({
       screenW: this.dimsCache?.width ?? 0,
       screenH: this.dimsCache?.height ?? 0,
-      shotW: width, shotH: 0, quality,
+      shotW: shot.width, shotH: shot.height, quality,
     })));
     // Khung gần nhất cùng tham số -> cho xem ngay không phải đợi nhịp chụp
     const key = `${width}x${quality}`;
@@ -476,10 +507,11 @@ export class ScreenService {
     };
     this.viewers.add(viewer);
     scr.onClosed(() => this.removeViewer(viewer));
+    const dshot = this.shotDims ? { width: this.shotDims.width, height: this.shotDims.height } : { width: viewer.width, height: 0 };
     this.sendTo(viewer, FRAME_META, Buffer.from(JSON.stringify({
       screenW: this.dimsCache?.width ?? 0,
       screenH: this.dimsCache?.height ?? 0,
-      shotW: viewer.width, shotH: 0, quality: viewer.quality,
+      shotW: dshot.width, shotH: dshot.height, quality: viewer.quality,
     })));
     const key = `${viewer.width}x${viewer.quality}`;
     if (this.lastJpegByParams.get(key)) this.sendTo(viewer, FRAME_JPEG, this.lastJpegByParams.get(key));
@@ -496,8 +528,10 @@ export class ScreenService {
   broadcastMeta() {
     const dims = this.dims();
     if (!dims) return;
+    const shot = this.shotDims;
     this.broadcast(FRAME_META, Buffer.from(JSON.stringify({
-      screenW: dims.width, screenH: dims.height, shotW: 0, shotH: 0, quality: 0,
+      screenW: dims.width, screenH: dims.height,
+      shotW: shot?.width ?? 0, shotH: shot?.height ?? 0, quality: 0,
     })));
   }
 
@@ -572,6 +606,7 @@ export class ScreenService {
         // là daemon đã chết mà viewer kế vẫn tin khâu chụp đang chạy (14/09: mọi
         // lần vào tab sau người đầu tiên chỉ nhận replay crop → màn hình đen).
         this.dimsCache = null;
+        this.shotDims = null;
         // lastJpegByParams GIỮ NGUYÊN: viewer quay lại thấy ngay khung gần nhất
         // trong lúc daemon sống lại, thay vì màn trống chờ compile/chụp (~50-110KB RAM).
       }

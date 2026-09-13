@@ -36,6 +36,7 @@ import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { apiScreenInfo, owScreenInput, owScreenStream, owWebrtcIce, owWebrtcSignal } from "../api.js";
 import { Banner } from "../components/ui.jsx";
+import { isFullFrameShot } from "../lib/fullframe.js";
 import {
   ExpandIcon,
   Icon,
@@ -158,6 +159,11 @@ export function ScreenPage() {
   // zoomRef — hai đường không giẫm chân nhau.
   const zoomRef = useRef({ s: 1, x: 0, y: 0 });
   const chipRef = useRef(null); // chip "1.5×" — cập nhật bằng tay, khỏi re-render
+  // Thứ tự CSS transform áp dụng TỪ PHẢI SANG TRÁI: scale → (rotate) → translate
+  // ngoài cùng. Translate x/y là theo MÀN HÌNH (stage) sau khi đã xoay/phóng —
+  // mọi phép pinch/pan bên dưới đều tính trong hệ toạ độ ảnh ĐÃ transform (visual
+  // bounds) nên không cần đảo trục khi xoay dọc 90°; chỉ normXY (gửi về PC) mới
+  // phải un-rotate. Đừng "sửa" theo kiểu đổi translate vào giữa — sẽ phá hết.
   const zoomStr = () => {
     const z = zoomRef.current;
     const parts = [];
@@ -216,8 +222,10 @@ export function ScreenPage() {
     scx: 0, scy: 0, startT: 0, sentDown: false, held: false,
     lpTimer: null, lastSendT: 0, accY: 0, lastMidY: 0,
     // véo: khoảng cách/điểm giữa 2 ngón lúc đặt xuống, độ phóng lúc đầu (s0),
-    // tâm neo nội dung (fa* — tỉ lệ chỗ ngón kẹp trên khung ảnh), khung ảnh
-    // gốc s=1 (b* — kích thước + tâm theo khung xem) và khung xem (st*/sl*)
+    // tâm neo nội dung (fa* — tỉ lệ chỗ ngón kẹp trong HÌNH CHỮ NHẬT VISUAL đã
+    // transform, không phải toạ độ nguồn), khung ảnh gốc ở s=1 đo theo visual
+    // bounds (b* — kích thước + tâm) và khung xem (st*/sl*) — TẤT CẢ theo
+    // stage/visual px, xoay dọc 90° cũng không cần đảo trục ở đây.
     d0: 1, mx0: 0, my0: 0, s0: 1, fax: 0.5, fay: 0.5,
     bcx: 0, bcy: 0, bw: 1, bh: 1, stw: 1, sth: 1, slx: 0, sly: 0,
     // pan 1 ngón khi đã zoom: điểm bắt đầu, pan lúc đầu, biên dời từng trục
@@ -226,6 +234,33 @@ export function ScreenPage() {
   });
   const drawChain = useRef(Promise.resolve()); // vẽ tuần tự — crop về sau không nhảy hàng trước crop trước nó
   const gotFullRef = useRef(false); // đã có khung FULL cho kết nối hiện tại? crop lẻ không đủ làm nền
+  // Cỡ "đích" để nhận diện full frame: shotW/H = cỡ khung chụp thật do bridge
+  // báo qua meta (đổi khi zoom sâu/reconfigure). Gate phải so với mốc NÀY —
+  // so với canvas mặc định 300×150 trước đây để crop dải ở (0,0) ≥ 40.500px
+  // lọt qua, web kéo dãn cục đó ra cả màn hình (lỗi "tự focus" 14/09).
+  const shotDimsRef = useRef(null); // {width,height} cỡ khung chụp hiện hành
+  const screenDimsRef = useRef(null); // {width,height} màn hình vật lý (suy chiều cao khi bridge cũ chưa gửi shotH)
+  const expShotDims = useCallback(() => {
+    const t = shotDimsRef.current;
+    if (t && t.width > 0 && t.height > 0) return t;
+    const s = screenDimsRef.current;
+    if (t?.width > 0 && s && s.width > 0 && s.height > 0) {
+      return { width: t.width, height: Math.round((t.width * s.height) / s.width) };
+    }
+    return null;
+  }, []);
+  // Full frame = khung phủ gần hết cỡ đích theo CẢ HAI chiều (95%). Crop hợp lệ
+  // ở (0,0) (vùng đổi chạm góc trên-trái) vẫn bị loại vì thiếu chiều cao —
+  // daemon không bao giờ crop ≥ 60% diện tích khung nên ngưỡng này không nhầm.
+  const isFullFrame = useCallback((x, y, w, h) => {
+    const e = expShotDims();
+    if (e) return isFullFrameShot(x, y, w, h, e.width, e.height);
+    if (x !== 0 || y !== 0) return false;
+    // Chưa có cỡ đích nào (bridge cũ / meta chưa tới): lùi về ngưỡng diện tích cũ.
+    const c = imgRef.current;
+    const cw = c && c.width > 2 ? c.width : 300, ch = c && c.height > 2 ? c.height : 150;
+    return w * h >= 0.9 * cw * ch;
+  }, [expShotDims]);
   // Ghép khung lên canvas — dùng CHUNG cho cả hai đường truyền. Payload từ v4.1:
   // [2B x][2B y][2B w][2B h] LE + JPEG — vùng đổi vẽ ĐÈ đúng chỗ, vùng đứng yên
   // giữ nguyên trên canvas (không phải truyền lại như <img> src nguyên khung).
@@ -244,14 +279,13 @@ export function ScreenPage() {
       w = u8[4] | (u8[5] << 8); h = u8[6] | (u8[7] << 8);
       if (!w || !h) return;
     }
-    // Chưa có khung full: crop mảnh (replay stale / vùng đổi nhỏ) BỎ QUA hẳn —
-    // vẽ mảnh rời lên canvas trống từng biến thành "màn hình đen" (mảnh ở 0,0
-    // còn bị tưởng là full nên canvas bị resize theo cỡ mảnh rồi CSS phóng to).
+    // Full = khung nguyên màn đủ cỡ theo meta (isFullFrame). Chưa có full: crop
+    // mảnh (replay stale / vùng đổi nhỏ) BỎ QUA hẳn — vẽ mảnh rời lên canvas
+    // trống từng biến thành "màn hình đen". Chỉ frame full mới được resize
+    // canvas (crop (0,0) hợp lệ giữa phiên KHÔNG được đổi cỡ).
+    const full = raw || isFullFrame(x, y, w, h);
     if (!gotFullRef.current) {
-      const c = imgRef.current;
-      const cw = c && c.width > 2 ? c.width : 300, ch = c && c.height > 2 ? c.height : 150;
-      const isFull = raw || (x === 0 && y === 0 && w * h >= 0.9 * cw * ch);
-      if (!isFull) return;
+      if (!full) return;
       gotFullRef.current = true;
     }
     drawChain.current = drawChain.current.then(async () => {
@@ -260,8 +294,8 @@ export function ScreenPage() {
         const c = imgRef.current;
         if (c) {
           const fw = w || bmp.width, fh = h || bmp.height;
-          if (x === 0 && y === 0 && (c.width !== fw || c.height !== fh)) {
-            c.width = fw; // resize tự xóa canvas — chỉ khi đúng khung full từ gốc
+          if (full && (c.width !== fw || c.height !== fh)) {
+            c.width = fw; // resize tự xóa canvas — chỉ khung full từ gốc
             c.height = fh;
           }
           c.getContext("2d").drawImage(bmp, x, y, fw, fh);
@@ -270,7 +304,7 @@ export function ScreenPage() {
         setHasFrame(true);
       } catch {}
     });
-  }, []);
+  }, [isFullFrame]);
   // Meta đổi cỡ ảnh (zoom sâu v3.0 / kết nối mới) — canvas theo cỡ mới.
   const fitCanvas = useCallback((w, h) => {
     const c = imgRef.current;
@@ -315,6 +349,7 @@ export function ScreenPage() {
         try {
           setStatus((s) => (s === "live" ? s : "connecting"));
           gotFullRef.current = false; // kết nối (lại) — chờ khung full đầu tiên
+          shotDimsRef.current = null; screenDimsRef.current = null; // cỡ mới do meta kết nối này báo
           await owScreenStream({
             w: capW,
             q,
@@ -326,7 +361,11 @@ export function ScreenPage() {
             },
             onUnchanged: () => setStatus((s) => (s === "live" ? "live" : s)),
             onMeta: (meta) => {
-              if (meta.shotW > 0 && meta.shotH > 0) fitCanvas(meta.shotW, meta.shotH);
+              if (meta.shotW > 0 && meta.shotH > 0) {
+                shotDimsRef.current = { width: meta.shotW, height: meta.shotH };
+                fitCanvas(meta.shotW, meta.shotH);
+              }
+              if (meta.screenW > 0 && meta.screenH > 0) screenDimsRef.current = { width: meta.screenW, height: meta.screenH };
               setInfo((i) => (i ? { ...i, screen: { width: meta.screenW, height: meta.screenH } } : i));
             },
             onError: (m) => setErrorMsg(m),
@@ -368,6 +407,7 @@ export function ScreenPage() {
     if (wrtcRef.current === "active" || wrtcRef.current === "failed") return;
     wrtcRef.current = "trying";
     gotFullRef.current = false; // kết nối mới — chờ khung full đầu tiên
+    shotDimsRef.current = null; screenDimsRef.current = null; // cỡ mới do meta kết nối này báo
     setWrtc("trying");
     setStatus("connecting");
     let dead = false;
@@ -429,7 +469,11 @@ export function ScreenPage() {
           let m = null;
           try { m = JSON.parse(e.data); } catch { return; }
           if (m.t === "meta") {
-            if (m.shotW > 0 && m.shotH > 0) fitCanvas(m.shotW, m.shotH);
+            if (m.shotW > 0 && m.shotH > 0) {
+              shotDimsRef.current = { width: m.shotW, height: m.shotH };
+              fitCanvas(m.shotW, m.shotH);
+            }
+            if (m.screenW > 0 && m.screenH > 0) screenDimsRef.current = { width: m.screenW, height: m.screenH };
             setInfo((i) => (i ? { ...i, screen: { width: m.screenW, height: m.screenH } } : i));
           }
           else if (m.t === "pong") setPing(Math.max(0, Math.round(performance.now() - m.ts)));

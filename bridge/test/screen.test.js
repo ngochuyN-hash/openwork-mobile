@@ -4,6 +4,7 @@ import {
   encodeFrame,
   normalizeInput,
   createRateLimiter,
+  isFullFrameForReplay,
   FRAME_UNCHANGED,
   FRAME_JPEG,
   FRAME_META,
@@ -78,4 +79,28 @@ test("encodeFrame + parse lại: meta JSON đi trọn vẹn", () => {
   const len = frame.readUInt32BE(0);
   assert.equal(frame.readUInt8(4), FRAME_META);
   assert.equal(JSON.parse(frame.subarray(5, 5 + len).toString("utf8")).screenW, 2880);
+});
+
+test("isFullFrameForReplay: dải ngang (0,0) rộng-thấp KHÔNG được cache replay", () => {
+  const tw = 880, th = 551;
+  // Dải đầy bề ngang nhưng chỉ cao ~22% — lỗi 14/09 từng lọt vì chỉ check width.
+  assert.equal(isFullFrameForReplay(0, 0, 880, 120, tw, th), false);
+  assert.equal(isFullFrameForReplay(0, 0, 836, 500, tw, th), false); // w chớm dưới 95%
+  assert.equal(isFullFrameForReplay(0, 0, 880, 523, tw, th), false); // h chớm dưới 95%
+});
+
+test("isFullFrameForReplay: khung full thật được cache, crop khác gốc bị loại", () => {
+  const tw = 880, th = 551;
+  assert.equal(isFullFrameForReplay(0, 0, 880, 551, tw, th), true);
+  assert.equal(isFullFrameForReplay(0, 0, 840, 525, tw, th), true); // ≥95% cả hai chiều
+  assert.equal(isFullFrameForReplay(10, 0, 880, 551, tw, th), false); // lệch gốc
+  assert.equal(isFullFrameForReplay(0, 10, 880, 551, tw, th), false);
+});
+
+test("isFullFrameForReplay: chưa biết cỡ đích thì không đoán (tw=0) / chưa biết cao giữ hành vi cũ", () => {
+  assert.equal(isFullFrameForReplay(0, 0, 880, 551, 0, 0), false); // pipeline chưa báo cỡ
+  assert.equal(isFullFrameForReplay(5, 0, 880, 551, 880, 551), false);
+  // th = 0 (bridge vừa khởi động chưa có meta đủ) — chỉ chặn được chiều rộng.
+  assert.equal(isFullFrameForReplay(0, 0, 880, 120, 880, 0), true);
+  assert.equal(isFullFrameForReplay(0, 0, 800, 551, 880, 0), false);
 });

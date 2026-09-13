@@ -1011,6 +1011,9 @@ label.field {
   display: block;
   width: 100%;
   height: auto;
+  /* Mọi công thức zoom/pan/pinch (screen.jsx) tính theo tâm ảnh làm gốc scale
+     và rotation — khai báo tường minh thay vì dựa default của trình duyệt. */
+  transform-origin: 50% 50%;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
