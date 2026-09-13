@@ -1,5 +1,19 @@
 import { useEffect, useState } from "preact/hooks";
-import { clearToken, clearTenant, getTenantName, getToken, setToken, apiRecheck, apiDevices, apiRevokeDevice, apiWakeOpenWork, apiPair, apiState } from "../api.js";
+import {
+  getTenant,
+  getTenantName,
+  getToken,
+  setToken,
+  addKey,
+  removeKey,
+  notifyKeysChanged,
+  apiRecheck,
+  apiDevices,
+  apiRevokeDevice,
+  apiWakeOpenWork,
+  apiPair,
+  apiState,
+} from "../api.js";
 import { Banner, useConfirm } from "../components/ui.jsx";
 import { navigate } from "../app.jsx";
 
@@ -67,15 +81,24 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     }
   }
 
+  // "Gỡ pairing" = RỜI máy đang kết nối: xóa chìa khỏi chùm (khóa vẫn nằm
+  // trên máy, vào lại cần đăng nhập/link mời). Còn máy khác trong app thì tự
+  // chuyển sang máy đó — muốn chết hẳn với máy, dùng "Ngắt hẳn" ở tab PCs.
   function unpair() {
+    const tenant = getTenant();
     askConfirm({
       title: "Gỡ pairing?",
-      body: "Điện thoại này sẽ quên token và phòng đang kết nối, quay về màn đăng nhập/ghép thiết bị.",
+      body: "Điện thoại này sẽ quên máy đang kết nối (xóa chìa khỏi app). Nếu app còn máy khác sẽ tự chuyển sang máy đó, hết máy thì quay về màn đăng nhập.",
       confirmLabel: "Gỡ pairing",
       onConfirm: () => {
-        clearToken();
-        clearTenant();
-        onUnpaired();
+        removeKey(tenant); // tự thăng máy khác làm active nếu còn, hết thì dọn token
+        notifyKeysChanged();
+        if (getToken()) {
+          onRecheck();
+          navigate("#/");
+        } else {
+          onUnpaired();
+        }
       },
     });
   }
@@ -115,6 +138,9 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     setToken(value);
     try {
       await apiState();
+      // Token hợp lệ cho phòng hiện tại → chìa mới ghi vào chùm (tab PCs).
+      addKey({ tenant: getTenant(), token: value, name: getTenantName() });
+      notifyKeysChanged();
       setTokenInput("");
       setLinkMsg("");
       onRecheck();
@@ -157,6 +183,9 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
           </tbody>
         </table>
         <div class="page-actions" style="margin-top:12px">
+          <button class="btn small" onClick={() => navigate("#/pcs")}>
+            Danh sách máy (PCs)
+          </button>
           <button class="btn small" disabled={busy} onClick={recheck}>
             {busy ? "Đang kiểm tra…" : "Kiểm tra lại"}
           </button>

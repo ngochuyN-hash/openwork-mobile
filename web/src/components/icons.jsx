@@ -142,6 +142,18 @@ export function ScreenIcon({ size }) {
   );
 }
 
+export function PcsIcon({ size }) {
+  // Nhiều máy xếp chồng (Lucide "server") — tab danh sách PC, phân biệt với
+  // ScreenIcon (1 màn hình). Chấm vuông vẽ path h.01 như các icon khác.
+  return (
+    <Icon size={size ?? 22}>
+      <rect x="2" y="2" width="20" height="8" rx="2" />
+      <rect x="2" y="14" width="20" height="8" rx="2" />
+      <path d="M6 6h.01M6 18h.01" />
+    </Icon>
+  );
+}
+
 export function MouseIcon({ size }) {
   return (
     <Icon size={size ?? 18}>

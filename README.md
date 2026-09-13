@@ -141,7 +141,16 @@ openpocket tenant revoke alice             # delete a room (that machine loses i
 ```
 Runs from any terminal — without an explicit worker URL it takes `lookupUrl` from this machine's bridge config (or env `OWM_WORKER_URL`). Same thing via `node worker/scripts/tenant.mjs …`.
 
-The worker owner's own machine changes nothing — without joining a room it keeps the `machine:main` flow as before. A limit worth remembering: the bridge heartbeats every 15 minutes, so free KV (~1000 writes/day) fits about **~10 rooms**; each phone pairs with 1 machine (changing machines = Settings → Unpair → sign in again).
+The worker owner's own machine changes nothing — without joining a room it keeps the `machine:main` flow as before. A limit worth remembering: the bridge heartbeats every 15 minutes, so free KV (~1000 writes/day) fits about **~10 rooms**.
+
+### One app, many machines — the "PCs" tab
+
+A phone is not limited to one machine anymore. The app keeps a **keychain** (`localStorage owm_keys`): one entry per machine, each entry = the permanent `owd_` key that THAT machine minted. The **PCs** tab (5th in the bottom nav) lists every machine in the keychain with a one-shot online check on open (green = online, gray = machine/tunnel down, red = key revoked on the machine — never polled in a loop, there is a manual "Check machines" button):
+
+- **Switch = one tap** on the card: that machine's key becomes the active one and the app jumps back to Sessions — every request/SSE now carries the new room, the worker relays to the right bridge.
+- **Add a machine**: paste the invite link `…/#i=user:secret` (or type the room's user/pass) in the "Add machine" sheet — signs in, saves the key into the keychain, switches to the new machine. Re-adding the same machine replaces its key instead of duplicating the card.
+- **Disconnect is the phone's decision, two levels**: **Leave** deletes the key from the app only (the machine still trusts it — sign in again to return); **Cut off** revokes the key ON the machine (`DELETE /api/devices/:id` with that machine's own key) AND deletes it from the app — that phone is dead to the machine until a fresh invite/pair. Master `owm_` tokens cannot be revoked remotely (they live in the machine's config) — the dialog says so and only removes the local entry.
+- **Machines stay isolated by construction**: a key opens only the machine that issued it (the hash lives in that machine's `devices.json` alone), bridges never talk to each other, and a machine has no channel back to the phone — connections are initiated and torn down one-way, from the phone.
 
 ## Desktop helper app (OpenPocket.exe — optional, no terminal for the basics)
 
@@ -164,7 +173,7 @@ worker/          # Cloudflare Worker "openpocket" — fixed URL + multi-tenant
   src/index.js   # /__register (room check-in) · /api/* (per-room relay) · serves the web app
   scripts/tenant.mjs # issue/delete rooms (user/pass accounts) on KV
 web/             # PWA Preact + Vite → builds to web/dist served by the bridge
-  src/pages/     # pairing (Sign-in-only screen, tagline under the logo; pair-code/token entry moved into Settings behind the sign-in wall) · workspaces · sessions · chat · files · screen · settings
+  src/pages/     # pairing (Sign-in-only screen, tagline under the logo; pair-code/token entry moved into Settings behind the sign-in wall) · workspaces · sessions · chat · files · screen · pcs (multi-machine keychain) · settings
   src/components/# ui.jsx (Loading/Skeleton/Empty/Banner/Sheet/Confirm) · icons.jsx (SVG set)
   .zcode/skills/ # pwa-workspace-ui: internal design skill (tokens · ui-rules · pwa-checklist)
 desktop/         # OpenPocket.exe — native WinForms GUI (built by csc.exe, zero deps): join room by invite link · create/list/revoke rooms · pairing QR · bridge start/stop/autostart
@@ -176,6 +185,7 @@ CODE_SUMMARY.md  # code map + the "symptom → where to fix" table
 
 - **One-time pairing code, lives 30 minutes**: printed in the bridge's QR/terminal — used exactly once, then dead. Even a leaked QR is only dangerous for 30 minutes.
 - **Permanent device key (`owd_...`)**: after pairing, each phone gets its own key (stored on the phone; the bridge keeps only a hash). Reopening the app always goes straight in.
+- **Keychain of machines changes nothing here**: the phone may hold keys to several machines, but each key still opens only the machine that minted it — carrying a bunch of keys is not a skeleton key.
 - **Revoke per device**: in the app → Settings → *Paired devices*. Lost your phone? Revoke it and it loses access instantly.
 - **Rooms (multi-tenant)**: each room's secret lives on the worker KV and in that person's bridge; the worker holds NO phone keys — every key is still verified by the bridge. The web stores the permanent key only, never the password. Wrong username or wrong password returns **the exact same answer** — strangers can't probe which rooms exist, let alone see each other's machines. Deleting a room (`tenant.mjs revoke`) means that machine can no longer report its address. Web sign-in is also rate-limited **at the worker itself** — 10 attempts/min/IP (counted via the Cache API, zero KV writes) — so password guessing can neither grind on it nor burn the free-tier KV read quota. **Issuing rooms is owner-only by construction**: the `tenant` command is just a local caller — it works because YOUR wrangler is logged into YOUR Cloudflare account. Anyone else running it (a friend who installed the bridge, anyone who cloned the repo) hits `Authentication error` — without your Cloudflare login the command cannot touch your KV, so nobody can self-issue rooms on your worker.
 - The `owm_...` master token is only a fallback printed in the terminal (use it at the machine, share it with no one).
