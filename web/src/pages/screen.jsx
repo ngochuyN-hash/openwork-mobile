@@ -15,7 +15,6 @@ import {
   ClipboardIcon,
   ExpandIcon,
   KeyboardIcon,
-  MousePointerIcon,
   SendIcon,
 } from "../components/icons.jsx";
 
@@ -66,9 +65,15 @@ export function ScreenPage() {
   const [panel, setPanel] = useState(null); // null | "keys" | "mouse" | "text" — kiểu 9remote
 
   const imgRef = useRef(null);
-  const lastPoint = useRef({ x: 0.5, y: 0.5 }); // điểm chạm cuối cho chuột phải/double
+  // Gesture trên hình, kiểu màn cảm ứng: chạm = click · giữ lâu = Right-click ·
+  // chạm đôi = Double-click · kéo = di chuyển · hai ngón vuốt = cuộn.
+  const pointers = useRef(new Map()); // pointerId -> {x, y} (client px)
+  const g = useRef({
+    mode: "idle", // idle | press (đã gửi down, đang kéo) | scroll (hai ngón)
+    scx: 0, scy: 0, startT: 0, sentDown: false, longFired: false,
+    lpTimer: null, lastSendT: 0, accY: 0, lastMidY: 0,
+  });
   const urlRef = useRef("");
-  const dragRef = useRef(null); // {lastSent: ms} khi đang kéo
   const runIdRef = useRef(0); // hủy vòng nối lại khi pause/unmount đổi
   const textInputRef = useRef(null);
 
@@ -172,38 +177,117 @@ export function ScreenPage() {
     }
   }, []);
 
-  const normFromEvent = (e) => {
+  const normXY = (cx, cy) => {
     const rect = imgRef.current?.getBoundingClientRect();
     if (!rect || !rect.width) return null;
     return {
-      x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
-      y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height)),
+      x: Math.min(1, Math.max(0, (cx - rect.left) / rect.width)),
+      y: Math.min(1, Math.max(0, (cy - rect.top) / rect.height)),
     };
   };
 
+  const SLOP = 10; // px: quá ngưỡng mới tính là kéo (không thì là chạm/giữ)
+  const TAP_MS = 260;
+  const LP_MS = 550; // giữ lâu -> Right-click
+  const WHEEL_STEP = 24; // hai ngón đi được từng này px thì cuộn một nấc
+
   const onPointerDown = (e) => {
-    const p = normFromEvent(e);
-    if (!p) return;
-    lastPoint.current = p;
-    dragRef.current = { lastSent: 0 };
+    const n = normXY(e.clientX, e.clientY);
+    if (!n) return;
     e.currentTarget.setPointerCapture?.(e.pointerId);
-    sendInput({ type: "down", ...p });
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const st = g.current;
+    if (pointers.current.size === 1) {
+      st.mode = "idle";
+      st.scx = e.clientX; st.scy = e.clientY;
+      st.startT = Date.now(); st.sentDown = false; st.longFired = false; st.accY = 0;
+      clearTimeout(st.lpTimer);
+      st.lpTimer = setTimeout(() => {
+        // Giữ lâu không rời -> Right-click tại điểm chạm
+        if (st.mode === "idle" && !st.sentDown) {
+          st.longFired = true;
+          const n2 = normXY(st.scx, st.scy);
+          if (n2) sendInput({ type: "rclick", ...n2 });
+        }
+      }, LP_MS);
+    } else {
+      // Ngón thứ hai đặt xuống: huỷ long-press, nhả nút nếu đang kéo, vào cuộn
+      clearTimeout(st.lpTimer);
+      if (st.mode === "press") {
+        const n2 = normXY(e.clientX, e.clientY);
+        if (n2) sendInput({ type: "up", ...n2 });
+      }
+      st.mode = "scroll";
+      st.sentDown = false;
+      const pts = [...pointers.current.values()];
+      st.lastMidY = (pts[0].y + pts[1].y) / 2;
+      st.accY = 0;
+    }
   };
+
   const onPointerMove = (e) => {
-    if (!dragRef.current) return;
-    const p = normFromEvent(e);
-    if (!p) return;
-    lastPoint.current = p;
-    const now = Date.now();
-    if (now - dragRef.current.lastSent < 60) return; // throttle ~16 lần/giây là đủ
-    dragRef.current.lastSent = now;
-    sendInput({ type: "move", ...p });
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const st = g.current;
+    if (st.mode === "scroll") {
+      if (pointers.current.size >= 2) {
+        const pts = [...pointers.current.values()];
+        const mid = (pts[0].y + pts[1].y) / 2;
+        st.accY += mid - st.lastMidY;
+        st.lastMidY = mid;
+        while (Math.abs(st.accY) >= WHEEL_STEP) {
+          // ngón vuốt lên (accY âm) = cuộn xem nội dung dưới = wheel âm
+          sendInput({ type: "wheel", dy: st.accY > 0 ? 2 : -2 });
+          st.accY -= st.accY > 0 ? WHEEL_STEP : -WHEEL_STEP;
+        }
+      }
+      return;
+    }
+    if (st.mode === "press") {
+      const now = Date.now();
+      if (now - st.lastSendT < 60) return; // throttle ~16 lần/giây
+      st.lastSendT = now;
+      const n = normXY(e.clientX, e.clientY);
+      if (n) sendInput({ type: "move", ...n });
+      return;
+    }
+    // idle: nếu đi quá ngưỡng -> bắt đầu kéo (gửi down tại điểm chạm ban đầu)
+    const dist = Math.hypot(e.clientX - st.scx, e.clientY - st.scy);
+    if (dist > SLOP) {
+      clearTimeout(st.lpTimer);
+      const n = normXY(st.scx, st.scy);
+      if (n) sendInput({ type: "down", ...n });
+      st.sentDown = true;
+      st.mode = "press";
+      st.lastSendT = Date.now();
+    }
   };
-  const onPointerUp = (e) => {
-    if (!dragRef.current) return;
-    const p = normFromEvent(e) ?? lastPoint.current;
-    dragRef.current = null;
-    sendInput({ type: "up", ...p });
+
+  const finishPointer = (e) => {
+    pointers.current.delete(e.pointerId);
+    const st = g.current;
+    if (st.mode === "scroll") {
+      if (pointers.current.size === 0) st.mode = "idle";
+      return; // ngón còn lại sau cuộn: bỏ qua tới khi nhấc hết
+    }
+    if (st.longFired) { st.mode = "idle"; return; } // Right-click đã xử lý
+    clearTimeout(st.lpTimer);
+    const n = normXY(e.clientX, e.clientY);
+    if (st.sentDown) {
+      if (n) sendInput({ type: "up", ...n });
+      st.mode = "idle";
+      return;
+    }
+    // chạm nhanh nhấc tay ngay = click (chạm 2 lần liên tiếp OS tự hiểu là double)
+    if (n && Date.now() - st.startT < TAP_MS + 200) sendInput({ type: "click", ...n });
+    st.mode = "idle";
+  };
+
+  const onPointerUp = finishPointer;
+  const onPointerCancel = (e) => {
+    pointers.current.delete(e.pointerId);
+    clearTimeout(g.current.lpTimer);
+    if (g.current.mode !== "scroll") g.current.mode = "idle";
   };
 
   const tapKey = (key) => {
@@ -245,7 +329,6 @@ export function ScreenPage() {
     setPanel((p) => (p === name ? null : name));
   };
 
-  const at = lastPoint.current;
   const unavailable = info && info.available === false;
   const screenRatio = info?.screen?.width && info?.screen?.height
     ? `${info.screen.width} / ${info.screen.height}`
@@ -303,15 +386,6 @@ export function ScreenPage() {
             <KeyboardIcon size={20} />
           </button>
           <button
-            class={`stage-btn ${panel === "mouse" ? "on" : ""}`}
-            disabled={unavailable}
-            aria-label="Chuột"
-            aria-pressed={panel === "mouse"}
-            onClick={() => togglePanel("mouse")}
-          >
-            <MousePointerIcon size={20} />
-          </button>
-          <button
             class={`stage-btn ${panel === "text" ? "on" : ""}`}
             disabled={unavailable}
             aria-label="Gõ hoặc dán chữ"
@@ -329,6 +403,7 @@ export function ScreenPage() {
             <ExpandIcon size={20} />
           </button>
       </div>
+      <p class="screen-hint">Chạm = click · giữ lâu = Right-click · chạm 2 lần = Double-click · kéo = di chuyển · hai ngón vuốt = cuộn</p>
       {full && (
         <button class="btn danger small stage-exit" onClick={toggleFull}>Thoát toàn màn hình</button>
       )}
@@ -369,18 +444,6 @@ export function ScreenPage() {
             <button class="screen-key wide" disabled={sending} onClick={() => tapKey("backspace")}>Bksp</button>
             <button class="screen-key wide" disabled={sending} onClick={() => tapKey("tab")}>Tab</button>
           </div>
-        </div>
-      )}
-
-      {panel === "mouse" && (
-        <div class="screen-panel">
-          <div class="screen-row">
-            <button class="screen-key" disabled={sending} onClick={() => sendInput({ type: "rclick", ...at })}>Right-click</button>
-            <button class="screen-key" disabled={sending} onClick={() => sendInput({ type: "dbl", ...at })}>Double-click</button>
-            <button class="screen-key" disabled={sending} onClick={() => sendInput({ type: "wheel", dy: 3 })}>Wheel ↑</button>
-            <button class="screen-key" disabled={sending} onClick={() => sendInput({ type: "wheel", dy: -3 })}>Wheel ↓</button>
-          </div>
-          <p class="screen-note">Chạm vào hình = left-click · giữ rồi kéo = drag. Right-click/Double-click bấm tại điểm chạm cuối.</p>
         </div>
       )}
 

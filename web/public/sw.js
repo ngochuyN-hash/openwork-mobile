@@ -1,7 +1,10 @@
 // Service worker: app-shell precache so the PWA opens instantly / offline.
 // Chỉ cache tài nguyên tĩnh cùng origin; không bao giờ cache /api/* (REST+SSE).
-const CACHE = "owm-shell-v18";
-// index.html dùng navigate-fallback (không precache cứng vì Vite hash asset mỗi build).
+const CACHE = "owm-shell-v20";
+// Asset hash Vite đổi mỗi build nên không precache cứng — runtime cache ở lần
+// load đầu. Riêng "/" (index.html) PHẢI precache: navigate-fallback offline
+// đọc từ cache, trước đây "/" không bao giờ được cache nên offline mở app
+// vẫn rơi trang lỗi.
 const SHELL = [
   "/manifest.webmanifest",
   "/icon.svg",
@@ -15,7 +18,14 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(CACHE)
-      .then((cache) => cache.addAll(SHELL).catch(() => {}))
+      .then((cache) =>
+        Promise.all([
+          cache.addAll(SHELL).catch(() => {}),
+          // cache: "reload" bypass HTTP cache để bản index.html luôn tươi theo
+          // CACHE bump (bản mới tham chiếu asset hash mới).
+          cache.add(new Request("/", { cache: "reload" })).catch(() => {}),
+        ])
+      )
       .then(() => self.skipWaiting())
   );
 });

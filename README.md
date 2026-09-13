@@ -83,7 +83,7 @@ When the bridge starts it **opens a Cloudflare Quick Tunnel by itself** (downloa
 Things to know about Quick Tunnel:
 - **The URL changes every time the bridge/cloudflared restarts** (power loss, reboot...) — the bridge **prints a fresh QR** in the terminal; rescanning takes 10 seconds.
 - No SLA (personal use: keep the bridge running and it's fine). The bridge also revives cloudflared if it dies.
-- **Cloudflare rate-limits Quick Tunnel creation per IP (HTTP 429 / error 1015)** — restarting the bridge too often in a short window triggers it (each restart = a new tunnel request). The bridge backs off on its own (2 → 4 → ... max 10 minutes, also for tunnels the edge dumps right after granting) and the block lifts by itself: **don't keep restarting — that only extends the ban**.
+- **Cloudflare rate-limits Quick Tunnel creation per IP (HTTP 429 / error 1015)** — restarting the bridge too often in a short window triggers it (each restart = a new tunnel request). The bridge backs off on its own (2 → 4 → ... max 10 minutes, also for tunnels the edge dumps right after granting) and the block lifts by itself: **don't keep restarting — that only extends the ban**. Every retry attempt is logged (`chạy cloudflared (đợt N)`) and a failed spawn (fires `error`, not `exit`) retries on its own instead of silently killing the retry chain — if the log ever goes quiet for hours while the phone says the machine is offline, that bug is fixed as of the night of 13/09 (restart the bridge once to pick the fix up).
 - To disable the tunnel: run the bridge with `OPENWORK_BRIDGE_TUNNEL=0`.
 
 **Permanent fixed URL — already available, $0:** the official web app runs on your own Cloudflare Worker (`worker/` in this repo, e.g. `https://YOUR-WORKER.workers.dev`). The bridge "reports its address" to the worker every 15 minutes (a tunnel change is reported immediately), so the phone only ever needs to remember this one URL — whatever the tunnel does, it gets found again. Device pairing QRs also point at this URL. The option below only matters if you want an extra privacy layer:
@@ -108,7 +108,7 @@ Without `--with-openwork`, only the bridge auto-starts (you open OpenWork manual
 Open the app → **Screen** tab (bottom nav) and the computer's screen appears right away, like watching a home camera:
 
 - **Watch**: the bridge captures ~3-4 frames/s at 880px / JPEG 55 (fixed — tuned once for a phone screen, no picker), compresses and pushes straight to the phone (RAM holds exactly 1 frame — **nothing is ever written to disk**). A still screen costs nearly 0 bytes. Hiding the app stops the stream automatically (battery/data), reopening resumes it — there is no manual pause button.
-- **Control (v2.1 — one toolbar below the image, 9Remote-style)**: icon row — **Keyboard**, **Mouse**, **Clipboard**, **Fullscreen** (edge-to-edge letterboxed viewing, CSS-based so it works on iOS Safari too). Each control opens one panel at a time:
+- **Control (v2.2 — touch gestures, like real remote-desktop apps)**: the image itself is the input surface — **tap = left-click**, **press-and-hold = Right-click**, **double-tap = Double-click**, **press-and-drag = drag & move**, **two-finger swipe = scroll** (the wheel buttons are gone — the gesture covers it; content follows your fingers). Toolbar (below the image, never covering it) — **Keyboard**, **Clipboard**, **Fullscreen** (edge-to-edge letterboxed viewing, CSS-based so it works on iOS Safari too). Keyboard opens one panel at a time:
   - **Keyboard panel**: sticky Ctrl/Alt/Shift/Win (light up, then press a key = combo), one-tap combos **Ctrl+C / Ctrl+V / Ctrl+Z / Alt+Tab / Win+D / Win+E / Ctrl+Shift+Esc**, arrows + **Del / Space / Home / End / PgUp / PgDn**, Enter / Esc / Bksp / Tab — all in English keycaps.
   - **Mouse panel**: **Right-click**, **Double-click**, **Wheel ↑ / Wheel ↓** (they act at the last touched point; tap on the image = left-click, press-drag = drag).
   - **Clipboard panel**: text box that **pre-fills from the phone's own clipboard** for review, then **Send** — text travels to the computer via clipboard + paste, so Vietnamese diacritics survive even with Unikey installed (max 500 chars).
@@ -147,7 +147,7 @@ worker/          # Cloudflare Worker "openpocket" — fixed URL + multi-tenant
   src/index.js   # /__register (room check-in) · /api/* (per-room relay) · serves the web app
   scripts/tenant.mjs # issue/delete rooms (user/pass accounts) on KV
 web/             # PWA Preact + Vite → builds to web/dist served by the bridge
-  src/pages/     # pairing (one connection card, 3 rows: Sign in / Pair device / Enter token — any one row is enough) · workspaces · sessions · chat · files · screen · settings
+  src/pages/     # pairing (one connection card, 3 rows: Sign in / Pair device / Enter token — any one row is enough; tagline "OpenWork in your pocket" under the logo) · workspaces · sessions · chat · files · screen · settings
   src/components/# ui.jsx (Loading/Skeleton/Empty/Banner/Sheet/Confirm) · icons.jsx (SVG set)
   .zcode/skills/ # pwa-workspace-ui: internal design skill (tokens · ui-rules · pwa-checklist)
 README.md        # this file
