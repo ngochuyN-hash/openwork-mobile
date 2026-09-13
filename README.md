@@ -122,7 +122,7 @@ The shared worker URL is an "apartment building": anyone can open it, but each p
 | End | How to sign in |
 |---|---|
 | Friend's PC | `openpocket edge join` → paste the invite link (user/pass are read from it; once, saved to config) — their bridge heartbeats into "their room" |
-| Friend's phone | Tap the invite link → signs in by itself and lands straight in the app (typing fallback: open the web → the **Sign in** form (shown right away, no tabs needed) → same user/pass; a permanent key is received like a normal pair — the password is never stored on the web) |
+| Friend's phone | Tap the invite link → signs in by itself and lands straight in the app (typing fallback: open the web → fill the **Sign in** row of the connection card → same user/pass; a permanent key is received like a normal pair — the password is never stored on the web) |
 
 Owner-side commands (run in `worker/`, requires a logged-in `wrangler`):
 
@@ -147,7 +147,7 @@ worker/          # Cloudflare Worker "openpocket" — fixed URL + multi-tenant
   src/index.js   # /__register (room check-in) · /api/* (per-room relay) · serves the web app
   scripts/tenant.mjs # issue/delete rooms (user/pass accounts) on KV
 web/             # PWA Preact + Vite → builds to web/dist served by the bridge
-  src/pages/     # pairing (Sign-in-only screen; Pair/Enter token behind "Other methods") · workspaces · sessions · chat · files · screen · settings
+  src/pages/     # pairing (one connection card, 3 rows: Sign in / Pair device / Enter token — any one row is enough) · workspaces · sessions · chat · files · screen · settings
   src/components/# ui.jsx (Loading/Skeleton/Empty/Banner/Sheet/Confirm) · icons.jsx (SVG set)
   .zcode/skills/ # pwa-workspace-ui: internal design skill (tokens · ui-rules · pwa-checklist)
 README.md        # this file

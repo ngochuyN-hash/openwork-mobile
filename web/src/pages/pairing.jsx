@@ -3,17 +3,19 @@ import { setToken, apiState, apiPair, apiPairTenant, pairingCodeFromHash, invite
 import { Banner } from "../components/ui.jsx";
 import { OpenWorkMark } from "../components/logo.jsx";
 
-// Mở app = duy nhất ô Đăng nhập (user + pass + tên thiết bị + nút) — không
-// placeholder, không chữ giải thích. Hai cách kết nối còn lại (mã ghép 1 lần
-// XXXX-XXXX in trên terminal bridge, và dán token owm_/owd_ dài hạn) nằm sau
-// nút "Cách kết nối khác", bấm mới lộ hàng tab. Link mời #i= và link ghép #p=
-// vẫn tự chạy khi mở, không cần đụng tab nào.
+// MỘT thẻ duy nhất chia 3 dòng (yêu cầu chủ máy: không tab, không ẩn):
+//   1. Đăng nhập — user/pass do chủ worker cấp (apiPairTenant)
+//   2. Ghép thiết bị — mã 1 lần 8 ký tự in trên terminal bridge (apiPair)
+//   3. Nhập token — dán thẳng owm_/owd_ dài hạn
+// Điền khớp DUY NHẤT một dòng là vào được, ba nút độc lập nhau. Không
+// placeholder, không chữ giải thích thừa — label trên ô nhập nói đủ. Tên thiết
+// bị (tùy chọn) nằm ở dòng 1 nhưng dùng chung: ghép bằng mã cũng gửi theo.
+// Link mời #i= và link ghép #p= vẫn tự chạy khi mở, không cần đụng form.
 export function PairingScreen({ onPaired }) {
-  const [tab, setTab] = useState("login");
-  const [showAlt, setShowAlt] = useState(false);
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
   const [code, setCode] = useState("");
+  const [token, setTokenValue] = useState("");
   const [label, setLabel] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -56,12 +58,12 @@ export function PairingScreen({ onPaired }) {
 
   // Dự phòng: dán trực tiếp token dài (owm_/owd_)
   async function connectWithToken() {
-    const token = code.trim();
-    if (!token) return;
+    const value = token.trim();
+    if (!value) return;
     setBusy(true);
     setError("");
     setStatus("Đang kiểm tra token…");
-    setToken(token);
+    setToken(value);
     try {
       await apiState();
       onPaired();
@@ -86,8 +88,8 @@ export function PairingScreen({ onPaired }) {
   }
 
   // Tự chạy khi mở link: #p=MÃ(&m=PHÒNG) → ghép; #i=USER:SECRET (link mời) →
-  // tự đăng nhập luôn. Link mời hỏng/máy chưa join → màn Đăng nhập vẫn được
-  // điền sẵn user/pass, bấm lại một phát là xong.
+  // tự đăng nhập luôn. Link mời hỏng/máy chưa join → form vẫn được điền sẵn
+  // user/pass, bấm lại một phát là xong.
   useEffect(() => {
     const fromHash = pairingCodeFromHash();
     if (fromHash) {
@@ -102,6 +104,13 @@ export function PairingScreen({ onPaired }) {
     }
   }, []);
 
+  const divider = (
+    <hr style="border:none;border-top:1px solid var(--border);margin:18px 0 0" />
+  );
+  const rowTitle = (text) => (
+    <div style="font-weight:600;font-size:13.5px;margin:14px 0 0">{text}</div>
+  );
+
   return (
     <div class="view no-nav pair-view">
       <div class="pair-hero">
@@ -110,143 +119,84 @@ export function PairingScreen({ onPaired }) {
       </div>
 
       <div class="card">
-        {showAlt && (
-          <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-            <button
-              class={`btn small ${tab === "login" ? "" : "ghost"}`}
-              onClick={() => {
-                setTab("login");
-                setError("");
-              }}
-            >
-              Đăng nhập
-            </button>
-            <button
-              class={`btn small ${tab === "pair" ? "" : "ghost"}`}
-              onClick={() => {
-                setTab("pair");
-                setCode("");
-                setError("");
-              }}
-            >
-              Ghép thiết bị
-            </button>
-            <button
-              class={`btn small ${tab === "token" ? "" : "ghost"}`}
-              onClick={() => {
-                setTab("token");
-                setCode("");
-                setError("");
-              }}
-            >
-              Nhập token
-            </button>
-          </div>
-        )}
+        {rowTitle("Đăng nhập")}
+        <label class="field" for="login-user">Tên đăng nhập</label>
+        <input
+          id="login-user"
+          type="text"
+          autocomplete="username"
+          autocapitalize="none"
+          spellcheck={false}
+          value={user}
+          onInput={(e) => setUser(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && submitLogin()}
+        />
+        <label class="field" for="login-pass">Mật khẩu</label>
+        <input
+          id="login-pass"
+          type="password"
+          autocomplete="current-password"
+          value={pass}
+          onInput={(e) => setPass(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && submitLogin()}
+        />
+        <label class="field" for="login-label">Tên thiết bị này (tùy chọn)</label>
+        <input
+          id="login-label"
+          type="text"
+          value={label}
+          onInput={(e) => setLabel(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && submitLogin()}
+        />
+        <div class="sheet-actions">
+          <button class="btn" disabled={busy || !user.trim() || !pass} onClick={submitLogin}>
+            {busy ? status || "Đang đăng nhập…" : "Đăng nhập"}
+          </button>
+        </div>
 
-        {tab === "login" ? (
-          <>
-            <label class="field" for="login-user">Tên đăng nhập</label>
-            <input
-              id="login-user"
-              type="text"
-              autocomplete="username"
-              autocapitalize="none"
-              spellcheck={false}
-              value={user}
-              onInput={(e) => setUser(e.currentTarget.value)}
-              onKeyDown={(e) => e.key === "Enter" && submitLogin()}
-            />
-            <label class="field" for="login-pass">Mật khẩu</label>
-            <input
-              id="login-pass"
-              type="password"
-              autocomplete="current-password"
-              value={pass}
-              onInput={(e) => setPass(e.currentTarget.value)}
-              onKeyDown={(e) => e.key === "Enter" && submitLogin()}
-            />
-            <label class="field" for="login-label">Tên thiết bị này (tùy chọn)</label>
-            <input
-              id="login-label"
-              type="text"
-              value={label}
-              onInput={(e) => setLabel(e.currentTarget.value)}
-              onKeyDown={(e) => e.key === "Enter" && submitLogin()}
-            />
-            <div class="sheet-actions">
-              <button class="btn" disabled={busy || !user.trim() || !pass} onClick={submitLogin}>
-                {busy ? status || "Đang đăng nhập…" : "Đăng nhập"}
-              </button>
-            </div>
-            {status && !error && busy && <p class="pair-hint">{status}</p>}
-            {error && <Banner kind="err">{error}</Banner>}
-            {!showAlt && (
-              <p class="pair-hint" style="margin-top:14px">
-                <button
-                  class="btn small ghost"
-                  onClick={() => {
-                    setShowAlt(true);
-                    setError("");
-                  }}
-                >
-                  Cách kết nối khác: mã ghép · token
-                </button>
-              </p>
-            )}
-          </>
-        ) : tab === "pair" ? (
-          <>
-            <label class="field" for="pair-code">
-              Mã ghép 8 ký tự (in trên terminal bridge, sống 30 phút — hoặc quét QR trên đó)
-            </label>
-            <input
-              id="pair-code"
-              type="text"
-              autocomplete="one-time-code"
-              spellcheck={false}
-              value={code}
-              onInput={(e) => setCode(e.currentTarget.value)}
-              onKeyDown={(e) => e.key === "Enter" && submitPair()}
-            />
-            <label class="field" for="pair-label">Tên thiết bị này (tùy chọn)</label>
-            <input
-              id="pair-label"
-              type="text"
-              value={label}
-              onInput={(e) => setLabel(e.currentTarget.value)}
-              onKeyDown={(e) => e.key === "Enter" && submitPair()}
-            />
-            <div class="sheet-actions">
-              <button class="btn" disabled={busy || !code.trim()} onClick={submitPair}>
-                {busy ? status || "Đang ghép…" : "Ghép thiết bị"}
-              </button>
-            </div>
-            {status && !error && busy && <p class="pair-hint">{status}</p>}
-            {error && <Banner kind="err">{error}</Banner>}
-          </>
-        ) : (
-          <>
-            <label class="field" for="token-code">
-              Token dài hạn của bạn (master từ QR master trên máy, hoặc khóa của thiết bị cũ)
-            </label>
-            <input
-              id="token-code"
-              type="text"
-              spellcheck={false}
-              value={code}
-              onInput={(e) => setCode(e.currentTarget.value)}
-              onKeyDown={(e) => e.key === "Enter" && connectWithToken()}
-            />
-            <div class="sheet-actions">
-              <button class="btn" disabled={busy || !code.trim()} onClick={connectWithToken}>
-                {busy ? status || "Đang kiểm tra…" : "Kết nối"}
-              </button>
-            </div>
-            {status && !error && busy && <p class="pair-hint">{status}</p>}
-            {error && <Banner kind="err">{error}</Banner>}
-          </>
-        )}
+        {divider}
+
+        {rowTitle("Ghép thiết bị")}
+        <label class="field" for="pair-code">
+          Mã 8 ký tự in trên terminal bridge (sống 30 phút — hoặc quét QR trên đó)
+        </label>
+        <input
+          id="pair-code"
+          type="text"
+          autocomplete="one-time-code"
+          spellcheck={false}
+          value={code}
+          onInput={(e) => setCode(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && submitPair()}
+        />
+        <div class="sheet-actions">
+          <button class="btn" disabled={busy || !code.trim()} onClick={submitPair}>
+            {busy ? status || "Đang ghép…" : "Ghép thiết bị"}
+          </button>
+        </div>
+
+        {divider}
+
+        {rowTitle("Nhập token")}
+        <label class="field" for="token-code">
+          Token dài hạn owm_ / owd_ (master từ QR master trên máy, hoặc khóa thiết bị cũ)
+        </label>
+        <input
+          id="token-code"
+          type="text"
+          spellcheck={false}
+          value={token}
+          onInput={(e) => setTokenValue(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && connectWithToken()}
+        />
+        <div class="sheet-actions">
+          <button class="btn" disabled={busy || !token.trim()} onClick={connectWithToken}>
+            {busy ? status || "Đang kiểm tra…" : "Kết nối"}
+          </button>
+        </div>
+
+        {status && !error && busy && <p class="pair-hint">{status}</p>}
+        {error && <Banner kind="err">{error}</Banner>}
       </div>
     </div>
   );
