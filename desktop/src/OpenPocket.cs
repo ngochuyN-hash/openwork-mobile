@@ -96,6 +96,8 @@ namespace OpenPocket.Desktop
             private readonly ButtonKind kind;
             private Color fill, stroke, textColor;
             private bool hover;
+            // Bán kính bo góc — icon tròn để = chiều cao/2
+            public int Radius = 8;
 
             // Dựng trên Control THUẦN, không phải Button: ButtonBase cứ tự vẽ
             // nền/viền/focus-rect sau lưng OnPaint — trên máy owner hằn vết
@@ -151,7 +153,7 @@ namespace OpenPocket.Desktop
             {
                 e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 // Path thụt 1px để nét viền không bị mép control cắt mất nửa nét
-                using (System.Drawing.Drawing2D.GraphicsPath p = MainForm.RoundedPath(Width - 1, Height - 1, 8))
+                using (System.Drawing.Drawing2D.GraphicsPath p = MainForm.RoundedPath(Width - 1, Height - 1, Radius))
                 {
                     Color f = (Enabled && hover) ? HoverFill() : fill;
                     using (SolidBrush b = new SolidBrush(f)) e.Graphics.FillPath(b, p);
@@ -259,6 +261,8 @@ namespace OpenPocket.Desktop
             tipAdmin.SetToolTip(lblAdminBadge, isAdmin
                 ? "Đang chạy quyền Administrator — điều khiển được mọi cửa sổ, kể cả cửa sổ đang chạy Admin."
                 : "Thiếu quyền Admin: các cửa sổ đang chạy quyền Admin sẽ không điều khiển được. Thoát hẳn (icon khay) rồi mở lại OpenPocket.exe bằng tay, chấp nhận UAC là đủ.");
+            // Icon ↻ thay chữ — nghĩa của nút chuyển sang tooltip
+            tipAdmin.SetToolTip(btnTunnelRestart, "Mở lại đường hầm Cloudflare ngay — không đợi bộ đếm 429");
 
             refreshTimer = new System.Windows.Forms.Timer();
             refreshTimer.Interval = 3500;
@@ -350,8 +354,12 @@ namespace OpenPocket.Desktop
             // Restart tunnel CHỦ ĐỘNG (owner 13/09: bộ đếm backoff 429 "hên xui"):
             // xin tunnel mới ngay không đợi hẹn — bridge vẫn sống, chỉ cloudflared
             // được thay. Vô hiệu khi bridge dừng (CheckStatus khoá theo đèn xanh).
-            btnTunnelRestart = CreateButton("Restart tunnel", ButtonKind.Ghost, 360, 68, 120, 27, cardStatus);
-            btnTunnelRestart.Font = new Font("Segoe UI", 9f);
+            // Nút restart tunnel = ICON TRÒN (owner 13/09 đêm: "đẩy nút restart
+            // tunnel thành kiểu logo hình nút restart") — glyph ↻ của Segoe
+            // MDL2 Assets, 30x30 bo tròn, tooltip nêu nghĩa thay cho chữ
+            btnTunnelRestart = CreateButton("\uE72C", ButtonKind.Ghost, 360, 68, 30, 30, cardStatus);
+            btnTunnelRestart.Font = new Font("Segoe MDL2 Assets", 12f);
+            btnTunnelRestart.Radius = 15;
             btnTunnelRestart.Click += delegate { ActionRestartTunnel(); };
             // Label tunnel tạo TRƯỚC nút nên nằm TRÊN (z-order theo thứ tự add,
             // index 0 đỉnh) — bề rộng 448 ban đầu của label đè trắng nút; kéo
@@ -523,7 +531,7 @@ namespace OpenPocket.Desktop
             lblStatusTunnel.Width = inner - 132;
             lblStatusOpenWork.Width = inner;
             lblStatusTunnelUrl.Width = inner;
-            btnTunnelRestart.SetBounds(cw - 16 - 120, 68, 120, 27);
+            btnTunnelRestart.SetBounds(cw - 16 - 30, 68, 30, 30);
 
             int gap = 8;
             int bw = (inner - 2 * gap) / 3;
@@ -917,11 +925,18 @@ namespace OpenPocket.Desktop
                 lblStatusTunnel.ForeColor = ColorMuted;
             }
 
-            // 4. Check OpenWork Desktop port 8787
-            bool openworkRunning = IsPortOpen("127.0.0.1", 8787, 300);
+            // 4. OpenWork Desktop đang mở hay tắt — soi TIẾN TRÌNH "OpenWork"
+            // (bản desktop Electron). Soi cổng 8787 cũ không đáng tin: app mở
+            // rồi mà GUI vẫn báo "Chưa mở" — owner bắt sửa 13/09 đêm.
+            bool openworkRunning = false;
+            foreach (Process p in Process.GetProcessesByName("OpenWork"))
+            {
+                openworkRunning = true;
+                p.Dispose();
+            }
             if (openworkRunning)
             {
-                lblStatusOpenWork.Text = "OpenWork Desktop: Đã phát hiện (Cổng 8787)";
+                lblStatusOpenWork.Text = "OpenWork Desktop: Đang mở";
                 lblStatusOpenWork.ForeColor = ColorSuccess;
             }
             else
