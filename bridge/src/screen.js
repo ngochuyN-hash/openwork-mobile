@@ -367,11 +367,19 @@ export class ScreenService {
         if (!groups.size) break;
         const encoded = await Promise.all([...groups.keys()].map(async (key) => {
           const [w, q] = key.split("x").map(Number);
-          const jpeg = await sharp(job.raw, { raw: { width: job.w, height: job.h, channels: 4 } })
+          const { data, info } = await sharp(job.raw, { raw: { width: job.w, height: job.h, channels: 4 } })
             .resize({ width: w, withoutEnlargement: true })
             .jpeg({ quality: q })
-            .toBuffer();
-          return { key, jpeg };
+            .toBuffer({ resolveWithObject: true });
+          // v4.1.1: khung GDI cũng phải mang header [2B x][2B y][2B w][2B h] LE như
+          // DXGI — thiếu là pushFrame bên phone cắt mù 8 byte đầu (ăn luôn SOI
+          // 0xFF 0xD8 của JPEG) → decode vỡ, canvas trắng dù badge vẫn đếm fps.
+          const head = Buffer.alloc(8);
+          head.writeUInt16LE(0, 0);
+          head.writeUInt16LE(0, 2);
+          head.writeUInt16LE(info.width, 4);
+          head.writeUInt16LE(info.height, 6);
+          return { key, jpeg: Buffer.concat([head, data]) };
         }));
         if (this.workers.size === 0 && this.pendingEncode.length === 0) break; // worker chết — bỏ dở
         this.encodedHash = job.hash;

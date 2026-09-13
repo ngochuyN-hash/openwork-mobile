@@ -228,22 +228,32 @@ export function ScreenPage() {
   // Ghép khung lên canvas — dùng CHUNG cho cả hai đường truyền. Payload từ v4.1:
   // [2B x][2B y][2B w][2B h] LE + JPEG — vùng đổi vẽ ĐÈ đúng chỗ, vùng đứng yên
   // giữ nguyên trên canvas (không phải truyền lại như <img> src nguyên khung).
+  // JPEG trần 0xFF 0xD8 (bridge cũ, GDI chưa đóng header) vẫn ăn: full-frame.
   const pushFrame = useCallback((data) => {
     const u8 = data instanceof Uint8Array ? data : new Uint8Array(data);
-    if (u8.length < 9) return;
-    const x = u8[0] | (u8[1] << 8), y = u8[2] | (u8[3] << 8);
-    const w = u8[4] | (u8[5] << 8), h = u8[6] | (u8[7] << 8);
-    if (!w || !h) return;
+    // JPEG trần (mở đầu 0xFF 0xD8) = khung full KHÔNG header từ bridge cũ (trước
+    // khi GDI fallback đóng header như DXGI). Frame có header không bao giờ khởi
+    // đầu bằng cặp byte này (byte cao của x ≤ 0x06 vì width chặn 1600) nên nhận
+    // diện không bao giờ nhầm.
+    const raw = u8.length >= 4 && u8[0] === 0xff && u8[1] === 0xd8;
+    let x = 0, y = 0, w = 0, h = 0;
+    if (!raw) {
+      if (u8.length < 9) return;
+      x = u8[0] | (u8[1] << 8); y = u8[2] | (u8[3] << 8);
+      w = u8[4] | (u8[5] << 8); h = u8[6] | (u8[7] << 8);
+      if (!w || !h) return;
+    }
     drawChain.current = drawChain.current.then(async () => {
       try {
-        const bmp = await createImageBitmap(new Blob([u8.subarray(8)], { type: "image/jpeg" }));
+        const bmp = await createImageBitmap(new Blob([raw ? u8 : u8.subarray(8)], { type: "image/jpeg" }));
         const c = imgRef.current;
         if (c) {
-          if (x === 0 && y === 0 && (c.width !== w || c.height !== h)) {
-            c.width = w; // resize tự xóa canvas — chỉ khi đúng khung full từ gốc
-            c.height = h;
+          const fw = w || bmp.width, fh = h || bmp.height;
+          if (x === 0 && y === 0 && (c.width !== fw || c.height !== fh)) {
+            c.width = fw; // resize tự xóa canvas — chỉ khi đúng khung full từ gốc
+            c.height = fh;
           }
-          c.getContext("2d").drawImage(bmp, x, y, w, h);
+          c.getContext("2d").drawImage(bmp, x, y, fw, fh);
         }
         bmp.close?.();
         setHasFrame(true);
