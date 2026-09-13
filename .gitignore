@@ -8,6 +8,10 @@ _tmp-*
 Thumbs.db
 .zcode/
 
+# desktop GUI build artifact — the exe embeds the real worker URL string and
+# binaries cannot go through the pre-push washer, so keep it local-only
+desktop/bin/
+
 # wrangler files
 .wrangler
 .dev.vars*

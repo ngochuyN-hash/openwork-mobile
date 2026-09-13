@@ -289,11 +289,23 @@ async function handleRequest(req, res) {
       return;
     }
 
-    // Mã ghép ĐANG SỐNG cho CLI (`openpocket code`) — không phải parse log nữa.
-    // Auth bắt buộc (master/device): mã ghép là thông tin quản trị, không phát
-    // cho người lạ chưa token. baseUrl = tunnel/worker hiện tại để CLI ghép QR.
+    // Mã ghép ĐANG SỐNG cho CLI (`openpocket code`) + GUI desktop — không phải
+    // parse log nữa. Auth bắt buộc (master/device): mã ghép là thông tin quản
+    // trị, không phát cho người lạ chưa token. baseUrl = tunnel/worker hiện
+    // tại để CLI ghép QR. QR render ASCII bằng qrcode-terminal NGAY TẠI ĐÂY —
+    // GUI desktop không phải gọi API QR ngoài (mã ghép không rời máy).
     if (req.method === "GET" && pathname === "/api/pairing-code") {
       const code = pairing.ensureCode();
+      const pairUrl = `${currentBase()}/#p=${code}${tenantHashSuffix()}`;
+      const masterUrl = `${currentBase()}/#t=${config.mobileToken}${tenantHashSuffix()}`;
+      let qr = "";
+      let masterQr = "";
+      qrcode.generate(pairUrl, { small: true }, (s) => {
+        qr = s;
+      });
+      qrcode.generate(masterUrl, { small: true }, (s) => {
+        masterQr = s;
+      });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
         JSON.stringify({
@@ -303,6 +315,10 @@ async function handleRequest(req, res) {
           secondsLeft: pairing.codeSecondsLeft(),
           baseUrl: currentBase(),
           tenant: config.lookupTenant || null,
+          pairUrl,
+          qr,
+          masterUrl,
+          masterQr,
         })
       );
       return;
