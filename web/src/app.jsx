@@ -91,7 +91,11 @@ export function App() {
 
   if (!paired) return <PairingScreen onPaired={() => setPaired(true)} />;
 
-  const banners = <StatusBanners state={state} onRecheck={refreshState} />;
+  // Tab Screen chỉ để điều khiển máy từ xa — cấm thông báo của OpenWork/mảng
+  // khác lọt vào; trạng thái có hỏng thì trang tự báo qua badge + banner riêng.
+  const banners = route.view === "screen" ? null : (
+    <StatusBanners state={state} onRecheck={refreshState} />
+  );
 
   let view;
   let showNav = true;

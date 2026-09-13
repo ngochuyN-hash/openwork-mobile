@@ -1147,6 +1147,24 @@ label.field {
   min-height: 36px;
   font-size: 14px;
 }
+/* Trang Màn hình (mode thường): KHUNG XEM + NÚT CHỨC NĂNG CỐ ĐỊNH — không
+   trôi theo cuộn trang. Cả trang khớp đúng một màn hình: ảnh PC chiếm phần
+   trên (flex), bàn phím + gõ chữ nằm dưới, badge sát đáy — mở tab là thấy hết
+   mọi thứ. Màn quá nhỏ thì vẫn cuộn được (overflow auto). */
+.screen-page {
+  height: calc(100dvh - 190px);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.screen-page .screen-view {
+  flex: 1;
+  min-height: 0;
+}
+.screen-page .screen-view .screen-stage {
+  flex: 1;
+  min-height: 0;
+}
 /* Điện thoại XOAY NGANG — trang Màn hình tự thành "player" như YouTube tự lật
    ngang, KHÔNG cần bấm toàn màn hình: hình bên trái, thanh chức năng đứng dọc
    bên phải, panel tự mở nổi góc dưới-trái (chủ động mở mới có, tắt là hết).
