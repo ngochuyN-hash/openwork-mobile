@@ -76,7 +76,7 @@ namespace OpenPocket.Desktop
         // Ngôn ngữ theo skill UI: Primary = nền đen chữ trắng; Ghost = nền
         // trắng viền đậm mảnh; DangerGhost = nền trắng viền đỏ chữ đỏ; khóa
         // = nhạt hẳn mất màu vai (đèn trạng thái mới giữ màu).
-        internal enum ButtonKind { Primary, Ghost, DangerGhost, SuccessGhost }
+        internal enum ButtonKind { Primary, Ghost, DangerGhost, SuccessGhost, InlineIcon }
 
         internal class RoundedButton : Control
         {
@@ -90,6 +90,7 @@ namespace OpenPocket.Desktop
             private static readonly Color CHairline = Color.FromArgb(228, 231, 236); // #E4E7EC
             private static readonly Color CHover = Color.FromArgb(238, 241, 244);    // #EEF1F4
             private static readonly Color CFaint = Color.FromArgb(139, 141, 152);    // #8B8D98
+            private static readonly Color CMuted = Color.FromArgb(96, 100, 108);     // #60646C
             private static readonly Color CDanger = Color.FromArgb(214, 69, 69);     // #D64545
             private static readonly Color CDangerHover = Color.FromArgb(252, 240, 240);
             private static readonly Color CSuccess = Color.FromArgb(48, 164, 108);   // #30A46C
@@ -136,6 +137,13 @@ namespace OpenPocket.Desktop
                     {
                         stroke = CSuccess; textColor = CSuccess;
                     }
+                    else if (kind == ButtonKind.InlineIcon)
+                    {
+                        // Icon ẩn danh nằm trong dòng chữ: KHÔNG viền, glyph xám
+                        // nhã — hover mới nổi nền tròn mờ (không hòa viền vào
+                        // thiết kế — owner 14/09 sáng)
+                        stroke = Color.Transparent; textColor = CMuted;
+                    }
                     else
                     {
                         stroke = CStroke; textColor = CText;
@@ -144,7 +152,8 @@ namespace OpenPocket.Desktop
                 else
                 {
                     fill = kind == ButtonKind.Primary ? CHover : CCard;
-                    stroke = kind == ButtonKind.Primary ? CHover : CHairline;
+                    stroke = (kind == ButtonKind.Primary || kind == ButtonKind.InlineIcon)
+                        ? Color.Transparent : CHairline;
                     textColor = CFaint;
                 }
                 ForeColor = textColor;
@@ -370,10 +379,10 @@ namespace OpenPocket.Desktop
             // Restart tunnel CHỦ ĐỘNG (owner 13/09: bộ đếm backoff 429 "hên xui"):
             // xin tunnel mới ngay không đợi hẹn — bridge vẫn sống, chỉ cloudflared
             // được thay. Vô hiệu khi bridge dừng (CheckStatus khoá theo đèn xanh).
-            // Nút restart tunnel = ICON TRÒN (owner 13/09 đêm: "đẩy nút restart
-            // tunnel thành kiểu logo hình nút restart") — glyph ↻ của Segoe
-            // MDL2 Assets, 30x30 bo tròn, tooltip nêu nghĩa thay cho chữ
-            btnTunnelRestart = CreateButton("\uE72C", ButtonKind.Ghost, 360, 68, 24, 24, cardStatus);
+            // Nút restart tunnel = ICON TRÒN KHÔNG VIỀN (owner 14/09: "bỏ viền
+            // đi… nhìn nút đó như không hòa được với thiết kế") — glyph ↻ xám
+            // nằm hoà vào dòng, rê chuột mới nổi nền tròn mờ; nghĩa để tooltip
+            btnTunnelRestart = CreateButton("\uE72C", ButtonKind.InlineIcon, 360, 68, 24, 24, cardStatus);
             btnTunnelRestart.Font = new Font("Segoe MDL2 Assets", 10f);
             btnTunnelRestart.Radius = 12;
             btnTunnelRestart.Click += delegate { ActionRestartTunnel(); };
