@@ -1096,25 +1096,50 @@ label.field {
   z-index: 5;
   box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
 }
-/* Điện thoại XOAY NGANG khi toàn màn hình: hình dồn sát trái chiếm hết phần
-   còn lại, thanh phím chức năng xoay đứng dọc bên phải — không đè lên hình. */
+/* Điện thoại XOAY NGANG — trang Màn hình tự thành "player" như YouTube tự lật
+   ngang, KHÔNG cần bấm toàn màn hình: hình bên trái, thanh chức năng đứng dọc
+   bên phải, panel tự mở nổi góc dưới-trái (chủ động mở mới có, tắt là hết).
+   Toàn màn hình (.view-full) dùng chung bố cục này, chỉ thêm nền đen kín. */
 @media (orientation: landscape) {
-  .screen-view.view-full {
+  .screen-view {
     flex-direction: row;
     align-items: stretch;
+    position: relative; /* mốc absolute cho panel nổi ở chế độ thường */
   }
-  .view-full .stage-toolbar {
+  .screen-view .screen-stage {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+  /* Chế độ THƯỜNG: bóp hình theo chiều cao trang cho vừa khung, hết cuộn dài;
+     toàn màn hình giữ nguyên max-height:100% của rule .view-full .screen-img. */
+  .screen-view:not(.view-full) .screen-img {
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: calc(100dvh - 185px);
+  }
+  .screen-view .stage-toolbar {
     flex-direction: column;
     align-self: center;
     margin: 0 0 0 8px;
     padding: 6px 4px;
   }
-  .view-full .screen-panel {
+  /* Dòng hint học gesture nhường chỗ cho hình ở màn ngang (vẫn còn ở dọc) */
+  .screen-hint {
+    display: none;
+  }
+  .screen-view .screen-panel {
+    position: absolute;
     left: calc(8px + var(--sal));
     right: auto;
-    width: min(440px, 62%);
     bottom: calc(8px + var(--sab));
+    width: min(440px, 62%);
     max-height: 72%;
+    overflow-y: auto;
+    margin: 0;
+    z-index: 5;
+    box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
   }
 }
 .screen-bar {
