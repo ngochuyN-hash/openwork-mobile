@@ -679,14 +679,32 @@ namespace OpenPocket.Desktop
             btn.ApplyLook(on);
         }
 
-        // Icon restart ↻ ngồi SÁT sau chữ dòng tunnel (owner 13/09: "nút
-        // restart đặt sát vô") — chữ đổi theo trạng thái nên đo lại bằng
-        // MeasureText mỗi lần chạy, canh giữa dọc với dòng chữ
+        // Icon restart ↻ ngồi NGAY TRƯỚC dấu ":" của dòng tunnel (owner 14/09:
+        // "dời hẳn về trước dấu ':'" + "căn lên 1 tí cho mặt chữ ngang đúng
+        // trung tâm nút") — đo bề rộng chữ BỎ dấu ":" rồi để icon đè lên chỗ
+        // ấy (fill trắng đặc che sạch); label cao 22 nhưng mặt chữ nằm nửa
+        // trên nên icon nâng 3px. Trạng thái không kết thúc bằng ":" (429,
+        // đang thiết lập…) thì icon bám sát đuôi chữ.
         private void PlaceTunnelRestart()
         {
-            int w = TextRenderer.MeasureText(lblStatusTunnel.Text, lblStatusTunnel.Font).Width;
-            btnTunnelRestart.Left = lblStatusTunnel.Left + w + 8;
-            btnTunnelRestart.Top = lblStatusTunnel.Top + (lblStatusTunnel.Height - btnTunnelRestart.Height) / 2;
+            string t = lblStatusTunnel.Text;
+            int x;
+            if (t.EndsWith(":"))
+            {
+                // MeasureText lệch +10px so với label vẽ thật trên bố cục
+                // fixed-pixel DPI-unaware này (đo thực tế 14/09) — trừ bù để
+                // icon đè ĐÚNG lên chỗ dấu ":"
+                string noColon = t.Substring(0, t.Length - 1);
+                x = lblStatusTunnel.Left + TextRenderer.MeasureText(noColon,
+                    lblStatusTunnel.Font, Size.Empty, TextFormatFlags.NoPadding).Width - 7;
+            }
+            else
+            {
+                x = lblStatusTunnel.Left + TextRenderer.MeasureText(t,
+                    lblStatusTunnel.Font, Size.Empty, TextFormatFlags.NoPadding).Width + 6;
+            }
+            btnTunnelRestart.Left = x;
+            btnTunnelRestart.Top = lblStatusTunnel.Top - 5;
         }
 
         // ================= CONFIG & LOGIC =================
