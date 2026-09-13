@@ -68,6 +68,7 @@ export function ScreenPage() {
   const [panel, setPanel] = useState(null); // null | "keys" | "mouse" | "text" — kiểu 9remote
 
   const imgRef = useRef(null);
+  const viewRef = useRef(null); // .screen-view — đối tượng Fullscreen API thật
   // Gesture trên hình, kiểu màn cảm ứng: chạm = click · giữ lâu = Right-click ·
   // chạm đôi = Double-click · kéo = di chuyển · hai ngón vuốt = cuộn.
   const pointers = useRef(new Map()); // pointerId -> {x, y} (client px)
@@ -155,15 +156,23 @@ export function ScreenPage() {
     };
   }, [info?.available, paused]);
 
+  // Thoát toàn màn hình: nhả khoá xoay + thoát fullscreen gốc + tắt lớp CSS.
+  // (Khai báo TRƯỚC effect bên dưới — deps [exitFull] không được chạm TDZ.)
+  const exitFull = useCallback(() => {
+    try { screen.orientation?.unlock?.(); } catch {}
+    try { if (document.fullscreenElement) void document.exitFullscreen(); } catch {}
+    setFull(false);
+  }, []);
+
   // Ẩn app thì ngắt stream cho đỡ pin/3G, quay lại thì nối tiếp; thoát faux-full khi ẩn.
   useEffect(() => {
     const onVis = () => {
       setPaused(document.hidden);
-      if (document.hidden) setFull(false);
+      if (document.hidden) exitFull();
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
-  }, []);
+  }, [exitFull]);
 
   useEffect(() => () => {
     if (urlRef.current) URL.revokeObjectURL(urlRef.current);
@@ -330,9 +339,27 @@ export function ScreenPage() {
     if (rest.length) setMods([]);
   };
 
-  // Toàn màn hình kiểu faux: cố định khung hình đè lên mọi thứ (Fullscreen API
-  // trên iOS Safari chỉ dành cho <video>, nên dùng CSS cho đồng bộ mọi máy).
-  const toggleFull = () => setFull((f) => !f);
+  // Toàn màn hình: ưu tiên API GỐC + KHOÁ XOAY NGANG — bấm phóng to là màn xoay
+  // ngang luôn như YouTube (Android Chrome); iOS Safari không cho fullscreen
+  // phần tử thường (chỉ <video>) và không cho lock hướng, nên lùi về faux CSS —
+  // người dùng tự xoay máy, bố cục player vẫn ăn theo media query landscape.
+  const toggleFull = async () => {
+    if (full) { exitFull(); return; }
+    setFull(true);
+    try {
+      await viewRef.current?.requestFullscreen?.();
+      await screen.orientation?.lock?.("landscape");
+    } catch {
+      // Không khoá được hướng (iOS/máy tính) — faux fullscreen vẫn chạy.
+    }
+  };
+
+  // Thoát fullscreen bằng nút hệ thống (nút back Android/swipe) → đồng bộ state.
+  useEffect(() => {
+    const onFs = () => { if (!document.fullscreenElement) exitFull(); };
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, [exitFull]);
 
   // Nút Clipboard kiểu 9remote: mở panel gõ chữ + nạp clipboard điện thoại vào ô.
   const openClipboard = async () => {
@@ -377,7 +404,7 @@ export function ScreenPage() {
 
       {/* .screen-view gói cả hình + thanh nút + panel: khi toàn màn hình thì cả
           cụm vào một lớp cố định — xoay ngang thì hình sát trái, phím đứng phải. */}
-      <div class={`screen-view ${full ? "view-full" : ""}`}>
+      <div ref={viewRef} class={`screen-view ${full ? "view-full" : ""}`}>
         <div class="screen-stage">
           {url ? (
             <img

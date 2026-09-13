@@ -6,7 +6,7 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "any",
   "lang": "vi",
   "categories": ["productivity", "utilities"],
   "background_color": "#f8fafc",
