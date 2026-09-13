@@ -3,11 +3,9 @@ import { setToken, setTenant, apiPair, pairingCodeFromHash } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 import { OpenWorkMark } from "../components/logo.jsx";
 
-// Màn vào app kiểu 9remote với 2 đường: HÀNG MÃ GHÉP 8 ký tự (tạm thời, sống
-// 30 phút, in trong OpenPocket) và HÀNG KHÓA VĨNH VIỄN (dán link master hoặc
-// khóa full copy từ OpenPocket — máy đã ghép từ trước thì khỏi đợi mã mới).
-// Không tài khoản, không mật khẩu. Link QR #p= (và master #t=) tự vào trước
-// khi tới màn này; muốn gõ tay thì mở OpenPocket → "Xem mã ghép".
+// Màn vào app kiểu 9remote với 2 đường, mỗi hàng đúng một nhãn ngắn (owner
+// call: bỏ hết chỉ dẫn dài — hàng nào mã tạm thời, hàng nào mã vĩnh viễn là
+// đủ). Link QR #p= (và master #t=) tự vào trước khi tới màn này.
 export function PairingScreen({ onPaired }) {
   const [code, setCode] = useState("");
   const [key, setKey] = useState("");
@@ -18,7 +16,7 @@ export function PairingScreen({ onPaired }) {
   async function pairWithCode(codeValue) {
     setBusy(true);
     setError("");
-    setStatus("Đang ghép với máy tính…");
+    setStatus("Đang ghép…");
     try {
       const { token } = await apiPair(codeValue, "");
       setToken(token);
@@ -55,7 +53,7 @@ export function PairingScreen({ onPaired }) {
   async function loginWithKey() {
     const parsed = parsePermanentKey(key);
     if (!parsed) {
-      setError("Khóa không đúng dạng — dán link master hoặc khóa full (owm_/owd_…) copy từ OpenPocket.");
+      setError("Khóa không đúng — copy link master hoặc khóa trong OpenPocket.");
       return;
     }
     setBusy(true);
@@ -96,9 +94,7 @@ export function PairingScreen({ onPaired }) {
       </div>
 
       <div class="card">
-        <label class="field" for="pair-code">
-          Mã ghép 8 ký tự (hiện trong OpenPocket trên máy tính)
-        </label>
+        <label class="field" for="pair-code">Mã tạm thời (8 ký tự)</label>
         <input
           id="pair-code"
           class="pair-code-input"
@@ -118,9 +114,7 @@ export function PairingScreen({ onPaired }) {
 
         <div class="pair-or"><span>hoặc</span></div>
 
-        <label class="field" for="pair-key">
-          Khóa vĩnh viễn (dán link master / khóa full copy từ OpenPocket)
-        </label>
+        <label class="field" for="pair-key">Mã vĩnh viễn</label>
         <input
           id="pair-key"
           class="pair-key-input"
@@ -140,10 +134,6 @@ export function PairingScreen({ onPaired }) {
 
         {busy && status && !error && <p class="pair-hint">{status}</p>}
         {error && <Banner kind="err">{error}</Banner>}
-        <p class="pair-hint">
-          Không có cả hai? Bấm "Xem mã ghép (QR)" trong OpenPocket trên máy tính —
-          quét QR bằng camera cũng vào được, không cần gõ.
-        </p>
       </div>
     </div>
   );
