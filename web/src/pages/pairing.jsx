@@ -1,29 +1,24 @@
 import { useEffect, useState } from "preact/hooks";
-import { setToken, apiPair, apiPairTenant, pairingCodeFromHash, inviteFromHash } from "../api.js";
+import { setToken, apiPair, pairingCodeFromHash } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 import { OpenWorkMark } from "../components/logo.jsx";
 
-// Màn mở app = duy nhất ô Đăng nhập (user + pass + tên thiết bị + nút) —
-// không placeholder, không chữ giải thích thừa. Ghép thiết bị (mã 1 lần) và
-// nhập token owm_/owd_ KHÔNG nằm ở đây nữa: đã dời vào Settings sau khi đăng
-// nhập (yêu cầu chủ máy — tường đăng nhập phải sạch). Hai đường tự động vẫn
-// chạy từ trước khi vào: link mời #i=user:secret tự đăng nhập, link ghép
-// #p=MÃ tự ghép (QR trên terminal bridge trỏ vào link này).
+// Màn vào app kiểu 9remote: DUY NHẤT ô mã ghép 8 ký tự (in trong OpenPocket
+// trên máy tính, sống 30 phút). Không tài khoản, không mật khẩu — chìa duy
+// nhất là token do chính máy đó cấp lúc ghép mã. Link QR #p= (và master #t=)
+// tự ghép trước khi tới màn này; muốn gõ tay thì mở OpenPocket → "Xem mã ghép".
 export function PairingScreen({ onPaired }) {
-  const [user, setUser] = useState("");
-  const [pass, setPass] = useState("");
-  const [label, setLabel] = useState("");
+  const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
 
-  // Ghép bằng mã 1 lần — chỉ còn đường tự động qua link #p= (quét QR)
-  async function pairWithCode(codeValue, labelValue) {
+  async function pairWithCode(codeValue) {
     setBusy(true);
     setError("");
-    setStatus("Đang ghép với bridge…");
+    setStatus("Đang ghép với máy tính…");
     try {
-      const { token } = await apiPair(codeValue, labelValue);
+      const { token } = await apiPair(codeValue, "");
       setToken(token);
       onPaired();
     } catch (e) {
@@ -34,42 +29,14 @@ export function PairingScreen({ onPaired }) {
     }
   }
 
-  // Đăng nhập phòng (multi-tenant) — khóa + tên máy được api.js tự lưu
-  async function loginWithTenant(userValue, passValue, labelValue) {
-    setBusy(true);
-    setError("");
-    setStatus("Đang đăng nhập…");
-    try {
-      const { machineName } = await apiPairTenant(userValue, passValue, labelValue);
-      setStatus("");
-      setError("");
-      console.log(`[pairing] đã vào máy: ${machineName}`);
-      onPaired();
-    } catch (e) {
-      setStatus("");
-      setError(String(e.message || e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function submitLogin() {
-    if (!user.trim() || !pass) return;
-    loginWithTenant(user, pass, label);
+  function submit() {
+    const value = code.trim().toUpperCase().replace(/[\s-]/g, "");
+    if (value) pairWithCode(value);
   }
 
   useEffect(() => {
     const fromHash = pairingCodeFromHash();
-    if (fromHash) {
-      pairWithCode(fromHash, "");
-      return;
-    }
-    const invite = inviteFromHash();
-    if (invite) {
-      setUser(invite.user);
-      setPass(invite.secret);
-      loginWithTenant(invite.user, invite.secret, "");
-    }
+    if (fromHash) pairWithCode(fromHash);
   }, []);
 
   return (
@@ -81,41 +48,31 @@ export function PairingScreen({ onPaired }) {
       </div>
 
       <div class="card">
-        <label class="field" for="login-user">Tên đăng nhập</label>
+        <label class="field" for="pair-code">
+          Mã ghép 8 ký tự (hiện trong OpenPocket trên máy tính)
+        </label>
         <input
-          id="login-user"
+          id="pair-code"
           type="text"
-          autocomplete="username"
-          autocapitalize="none"
+          autocomplete="one-time-code"
+          autocapitalize="characters"
           spellcheck={false}
-          value={user}
-          onInput={(e) => setUser(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === "Enter" && submitLogin()}
-        />
-        <label class="field" for="login-pass">Mật khẩu</label>
-        <input
-          id="login-pass"
-          type="password"
-          autocomplete="current-password"
-          value={pass}
-          onInput={(e) => setPass(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === "Enter" && submitLogin()}
-        />
-        <label class="field" for="login-label">Tên thiết bị này (tùy chọn)</label>
-        <input
-          id="login-label"
-          type="text"
-          value={label}
-          onInput={(e) => setLabel(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === "Enter" && submitLogin()}
+          style="text-transform:uppercase;letter-spacing:0.2em;text-align:center;font-size:18px"
+          value={code}
+          onInput={(e) => setCode(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
         />
         <div class="sheet-actions">
-          <button class="btn" disabled={busy || !user.trim() || !pass} onClick={submitLogin}>
-            {busy ? status || "Đang đăng nhập…" : "Đăng nhập"}
+          <button class="btn" disabled={busy || !code.trim()} onClick={submit}>
+            {busy ? status || "Đang ghép…" : "Vào"}
           </button>
         </div>
-        {status && !error && busy && <p class="pair-hint">{status}</p>}
+        {busy && status && !error && <p class="pair-hint">{status}</p>}
         {error && <Banner kind="err">{error}</Banner>}
+        <p class="pair-hint">
+          Không có mã? Bấm "Xem mã ghép (QR)" trong OpenPocket trên máy tính —
+          quét QR bằng camera cũng vào được, không cần gõ.
+        </p>
       </div>
     </div>
   );

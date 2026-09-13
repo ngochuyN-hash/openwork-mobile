@@ -51,49 +51,35 @@ namespace OpenPocket.Desktop
         private string currentTenant = "";
         private string currentMachineName = "";
         private string bridgeDir = "";
-        private string workerDir = "";
         private string nodeExe = "";
+        // 1 PC, hết tài khoản: lần đầu mở app, app TỰ cấp định danh máy (room
+        // ngầm + mật khẩu ngầm qua /api/tenant/create) và TỰ npm install bridge
+        // — exe chính là bộ cài, người dùng chỉ bấm Bật và quét QR.
+        private bool bridgeNeedsInstall = false;
+        private bool provisioning = false;
+        private bool provisionDone = false;
 
-        // UI Controls - Header & Tabs
-        private Button btnTabMachine;
-        private Button btnTabTenants;
-        private Panel pnlMachine;
-        private Panel pnlTenants;
+        // UI Controls - Header
         private Label lblAdminBadge;
 
-        // UI Controls - Machine Tab
+        // UI Controls - single page
         private Label lblStatusBridge;
         private Label lblStatusRoom;
         private Label lblStatusTunnel;
         private Label lblStatusTunnelUrl;
         private Label lblStatusOpenWork;
-        private Button btnConnectRoom;
         private Button btnStartBridge;
         private Button btnStopBridge;
         private Button btnRestartBridge;
         private CheckBox chkAutostart;
-        private TextBox txtInviteLink;
-        private TextBox txtRoomUser;
-        private TextBox txtRoomPass;
-        private TextBox txtMachineName;
-
-        // UI Controls - Tenants Tab
-        private TextBox txtNewUser;
-        private TextBox txtNewDisplayName;
-        private TextBox txtNewPass;
-        private Button btnCreateTenant;
-        private TextBox txtCreatedResult;
-        private Button btnCopyCreatedLink;
-        private ListBox lstTenants;
-        private Button btnRefreshTenants;
-        private Button btnRevokeTenant;
-        private Label lblTenantNote;
 
         public MainForm()
         {
             InitializeComponent();
             ResolvePaths();
+            EnsureConfigDefaults();
             LoadConfigToUi();
+            BeginProvisionIfNeeded();
             CheckStatus();
 
             // Badge admin: kiểm tra thật bằng WindowsPrincipal (manifest đòi
@@ -131,20 +117,9 @@ namespace OpenPocket.Desktop
                 }
             }
 
-            // Tìm worker dir (nếu là máy chủ)
-            string[] workerCandidates = new string[] {
-                Path.Combine(baseDir, "worker"),
-                Path.Combine(baseDir, "..", "worker"),
-                Path.Combine(baseDir, "..", "..", "worker")
-            };
-            foreach (string w in workerCandidates)
-            {
-                if (File.Exists(Path.Combine(w, "scripts", "tenant.mjs")))
-                {
-                    workerDir = Path.GetFullPath(w);
-                    break;
-                }
-            }
+            // Bridge trong zip mới bung chưa có node_modules — exe tự cài
+            bridgeNeedsInstall = bridgeDir != "" &&
+                !Directory.Exists(Path.Combine(bridgeDir, "node_modules"));
 
             // Tìm node.exe
             nodeExe = FindNodeExe();
@@ -152,22 +127,78 @@ namespace OpenPocket.Desktop
 
         private void InitializeComponent()
         {
-            this.Text = "OpenPocket — Điều khiển OpenWork Desktop";
-            // 900x540 = vừa 1 màn hình không cuộn: 2 cột đựng hết mọi thứ
-            this.Size = new Size(900, 540);
-            this.MinimumSize = new Size(900, 540);
+            this.Text = "OpenPocket — Điều khiển OpenWork từ điện thoại";
+            // 640x470 = MỘT cột duy nhất, mở ra là đủ khung, không cuộn
+            this.Size = new Size(640, 470);
+            this.MinimumSize = new Size(640, 470);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = ColorBg;
             this.ForeColor = ColorText;
             this.Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
             this.Icon = SystemIcons.Application;
 
+            // Nội dung một cột: thẻ trạng thái + thẻ QR. pnlContent thêm vào form
+            // TRƯỚC, header thêm SAU — dock xử lý theo index giảm dần nên header
+            // lấy mép Top trước, content Fill phần còn lại (bài học header chìm).
+            Panel pnlContent = new Panel();
+            pnlContent.Dock = DockStyle.Fill;
+            pnlContent.Padding = new Padding(20, 14, 20, 16);
+
+            int yL = 0;
+            Panel cardStatus = CreateCard(0, ref yL, 560, 244, pnlContent);
+            CreateCardTitle("TRẠNG THÁI KẾT NỐI", cardStatus);
+
+            lblStatusBridge = CreateStatusLabel("Bridge: Đang kiểm tra...", 16, 34, cardStatus);
+            lblStatusBridge.Size = new Size(528, 20);
+            lblStatusRoom = CreateStatusLabel("Máy: Đang đọc cấu hình...", 16, 58, cardStatus);
+            lblStatusRoom.Size = new Size(528, 20);
+            lblStatusTunnel = CreateStatusLabel("Cloudflare Tunnel: Đang kiểm tra...", 16, 82, cardStatus);
+            lblStatusTunnel.Size = new Size(528, 20);
+            lblStatusTunnelUrl = new Label();
+            lblStatusTunnelUrl.Text = "(đang lấy địa chỉ công khai...)";
+            lblStatusTunnelUrl.Font = new Font("Consolas", 8f);
+            lblStatusTunnelUrl.ForeColor = ColorMuted;
+            lblStatusTunnelUrl.Location = new Point(30, 100);
+            lblStatusTunnelUrl.Size = new Size(514, 16);
+            cardStatus.Controls.Add(lblStatusTunnelUrl);
+            lblStatusOpenWork = CreateStatusLabel("OpenWork Desktop: Đang kiểm tra...", 16, 124, cardStatus);
+            lblStatusOpenWork.Size = new Size(528, 20);
+
+            btnStartBridge = CreateFlatButton("Bật Bridge", ColorSuccess, 16, 152, 104, 34, cardStatus);
+            btnStartBridge.Click += delegate { ActionStartBridge(); };
+
+            btnStopBridge = CreateFlatButton("Dừng", ColorDanger, 126, 152, 70, 34, cardStatus);
+            btnStopBridge.Click += delegate { ActionStopBridge(); };
+
+            btnRestartBridge = CreateFlatButton("Khởi động lại", ColorSecondary, 202, 152, 122, 34, cardStatus);
+            btnRestartBridge.Click += delegate { ActionRestartBridge(); };
+
+            chkAutostart = new CheckBox();
+            chkAutostart.Text = "Tự khởi động cùng Windows (ngầm, quyền Admin)";
+            chkAutostart.ForeColor = ColorText;
+            chkAutostart.Font = new Font("Segoe UI", 9f, FontStyle.Regular);
+            chkAutostart.Location = new Point(16, 198);
+            chkAutostart.AutoSize = true;
+            chkAutostart.CheckedChanged += OnAutostartChanged;
+            cardStatus.Controls.Add(chkAutostart);
+
+            yL += 12;
+
+            // Thẻ QR — tính năng DUY NHẤT còn lại ngoài trạng thái: hiện mã/QR
+            // cho điện thoại ghép, kiểu 9remote
+            Panel cardPair = CreateCard(0, ref yL, 560, 70, pnlContent);
+            Button btnShowQr = CreateFlatButton("Xem mã ghép (QR)", ColorPrimary, 16, 16, 178, 38, cardPair);
+            btnShowQr.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+            btnShowQr.Click += delegate { ActionShowPairingDialog(); };
+
+            Button btnOpenLogs = CreateFlatButton("Xem nhật ký", ColorSecondary, 202, 16, 172, 38, cardPair);
+            btnOpenLogs.Click += delegate { ActionOpenLogs(); };
+
             // Header thanh mảnh kiểu OpenWork: trắng, tên app + badge bên phải
             Panel pnlHeader = new Panel();
             pnlHeader.Dock = DockStyle.Top;
             pnlHeader.Height = 58;
             pnlHeader.BackColor = ColorCard;
-            this.Controls.Add(pnlHeader);
 
             Label lblTitle = new Label();
             lblTitle.Text = "OpenPocket";
@@ -191,193 +222,12 @@ namespace OpenPocket.Desktop
             lblAdminBadge.ForeColor = ColorSuccess;
             lblAdminBadge.BackColor = Color.FromArgb(220, 252, 231);
             lblAdminBadge.Padding = new Padding(8, 4, 8, 4);
-            lblAdminBadge.Location = new Point(726, 18);
+            lblAdminBadge.Location = new Point(496, 18);
             lblAdminBadge.AutoSize = true;
             pnlHeader.Controls.Add(lblAdminBadge);
 
-            // Tab pills kiểu sidebar OpenWork: mục đang chọn = viên xám nhạt
-            Panel pnlTabs = new Panel();
-            pnlTabs.Dock = DockStyle.Top;
-            pnlTabs.Height = 48;
-            pnlTabs.BackColor = ColorBg;
-            this.Controls.Add(pnlTabs);
-
-            btnTabMachine = CreateTabButton("Máy của tôi", true);
-            btnTabMachine.Location = new Point(20, 8);
-            btnTabMachine.Click += delegate { SwitchTab(true); };
-            pnlTabs.Controls.Add(btnTabMachine);
-
-            btnTabTenants = CreateTabButton("Quản lý phòng", false);
-            btnTabTenants.Location = new Point(198, 8);
-            btnTabTenants.Click += delegate { SwitchTab(false); };
-            pnlTabs.Controls.Add(btnTabTenants);
-
-            // Tab Page Container — KHÔNG AutoScroll: nội dung được đo vừa khít
-            Panel pnlContent = new Panel();
-            pnlContent.Dock = DockStyle.Fill;
-            pnlContent.Padding = new Padding(20, 14, 20, 16);
             this.Controls.Add(pnlContent);
-
-            // --- PAGE 1: MÁY CỦA TÔI — 2 CỘT (trái 420 / phải 420) ---
-            pnlMachine = new Panel();
-            pnlMachine.Dock = DockStyle.Fill;
-            pnlContent.Controls.Add(pnlMachine);
-
-            // CỘT TRÁI: thẻ trạng thái
-            int yL = 0;
-            Panel cardStatus = CreateCard(0, ref yL, 420, 244, pnlMachine);
-            CreateCardTitle("TRẠNG THÁI KẾT NỐI", cardStatus);
-
-            lblStatusBridge = CreateStatusLabel("Bridge: Đang kiểm tra...", 16, 34, cardStatus);
-            lblStatusRoom = CreateStatusLabel("Phòng: Đang đọc cấu hình...", 16, 58, cardStatus);
-            lblStatusTunnel = CreateStatusLabel("Cloudflare Tunnel: Đang kiểm tra...", 16, 82, cardStatus);
-            lblStatusTunnelUrl = new Label();
-            lblStatusTunnelUrl.Text = "(đang lấy địa chỉ công khai...)";
-            lblStatusTunnelUrl.Font = new Font("Consolas", 8f);
-            lblStatusTunnelUrl.ForeColor = ColorMuted;
-            lblStatusTunnelUrl.Location = new Point(30, 100);
-            lblStatusTunnelUrl.Size = new Size(374, 16);
-            cardStatus.Controls.Add(lblStatusTunnelUrl);
-            lblStatusOpenWork = CreateStatusLabel("OpenWork Desktop: Đang kiểm tra...", 16, 124, cardStatus);
-
-            btnStartBridge = CreateFlatButton("Bật Bridge", ColorSuccess, 16, 152, 104, 34, cardStatus);
-            btnStartBridge.Click += delegate { ActionStartBridge(); };
-
-            btnStopBridge = CreateFlatButton("Dừng", ColorDanger, 126, 152, 70, 34, cardStatus);
-            btnStopBridge.Click += delegate { ActionStopBridge(); };
-
-            btnRestartBridge = CreateFlatButton("Khởi động lại", ColorSecondary, 202, 152, 122, 34, cardStatus);
-            btnRestartBridge.Click += delegate { ActionRestartBridge(); };
-
-            chkAutostart = new CheckBox();
-            chkAutostart.Text = "Tự khởi động cùng Windows (ngầm, quyền Admin)";
-            chkAutostart.ForeColor = ColorText;
-            chkAutostart.Font = new Font("Segoe UI", 9f, FontStyle.Regular);
-            chkAutostart.Location = new Point(16, 198);
-            chkAutostart.AutoSize = true;
-            chkAutostart.CheckedChanged += OnAutostartChanged;
-            cardStatus.Controls.Add(chkAutostart);
-
-            yL += 12;
-
-            // Thẻ tiện ích: QR + nhật ký (nút Thư mục đã XOÁ — vô nghĩa, hỏng config)
-            Panel cardPair = CreateCard(0, ref yL, 420, 70, pnlMachine);
-            Button btnShowQr = CreateFlatButton("Xem mã ghép (QR)", ColorPrimary, 16, 16, 178, 38, cardPair);
-            btnShowQr.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
-            btnShowQr.Click += delegate { ActionShowPairingDialog(); };
-
-            Button btnOpenLogs = CreateFlatButton("Xem nhật ký", ColorSecondary, 202, 16, 172, 38, cardPair);
-            btnOpenLogs.Click += delegate { ActionOpenLogs(); };
-
-            // CỘT PHẢI: thẻ kết nối phòng — TỰ TẠO phòng là đường chính: gõ tên +
-            // mật khẩu bấm 1 nút là lưu vĩnh viễn trên web (POST /api/tenant/create),
-            // không cần chủ nhà cấp link mời. Link mời chỉ còn đường phụ tự điền.
-            int yR = 0;
-            Panel cardConfig = CreateCard(432, ref yR, 420, 322, pnlMachine);
-            CreateCardTitle("KẾT NỐI PHÒNG CỦA BẠN", cardConfig);
-
-            Label lblHint = new Label();
-            lblHint.Text = "Gõ tên phòng + mật khẩu rồi bấm nút — phòng lưu vĩnh viễn trên web, cài lại máy lần nào cũng gõ lại y như vậy để vào lại.";
-            lblHint.ForeColor = ColorMuted;
-            lblHint.Font = new Font("Segoe UI", 8.5f);
-            lblHint.Location = new Point(16, 30);
-            lblHint.Size = new Size(388, 30);
-            cardConfig.Controls.Add(lblHint);
-
-            CreateFieldLabel("Tên phòng (a-z, 0-9, gạch ngang — vd: marcus):", 16, 64, cardConfig);
-            txtRoomUser = CreateInput(16, 82, 388, cardConfig);
-
-            CreateFieldLabel("Mật khẩu (≥8 ký tự):", 16, 114, cardConfig);
-            txtRoomPass = CreateInput(16, 132, 388, cardConfig);
-            txtRoomPass.PasswordChar = '•';
-
-            CreateFieldLabel("Tên máy hiển thị (tùy chọn):", 16, 164, cardConfig);
-            txtMachineName = CreateInput(16, 182, 388, cardConfig);
-
-            CreateFieldLabel("Có link mời từ chủ nhà? Dán vào đây (tự điền bên trên):", 16, 214, cardConfig);
-            txtInviteLink = CreateInput(16, 232, 282, cardConfig);
-            txtInviteLink.TextChanged += delegate { OnInviteLinkPasted(); };
-
-            Button btnPaste = CreateFlatButton("Dán link", ColorSecondary, 306, 231, 98, 26, cardConfig);
-            btnPaste.Click += delegate {
-                if (Clipboard.ContainsText()) {
-                    txtInviteLink.Text = Clipboard.GetText().Trim();
-                }
-            };
-
-            btnConnectRoom = CreateFlatButton("Tạo phòng & Kết nối", ColorSuccess, 16, 266, 388, 40, cardConfig);
-            btnConnectRoom.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
-            btnConnectRoom.Click += delegate { ActionConnectRoom(); };
-
-            // --- PAGE 2: QUẢN LÝ PHÒNG (TENANTS) — 2 CỘT ---
-            pnlTenants = new Panel();
-            pnlTenants.Dock = DockStyle.Fill;
-            pnlTenants.Visible = false;
-            pnlContent.Controls.Add(pnlTenants);
-
-            // Dock layout xử lý collection theo index GIẢM DẦN (index cao lấy
-            // mép trước): tabs + header phải nằm CUỐI collection, nếu không
-            // content nguyên màn hình và CHÌM dưới header/tabs (bắt gặp thật)
-            this.Controls.SetChildIndex(pnlHeader, this.Controls.Count - 1);
-            this.Controls.SetChildIndex(pnlTabs, this.Controls.Count - 1);
-
-            lblTenantNote = new Label();
-            lblTenantNote.Text = "Cấp chìa phòng cho bạn bè — chỉ chủ Worker làm được (cần wrangler đã đăng nhập Cloudflare)";
-            lblTenantNote.ForeColor = ColorMuted;
-            lblTenantNote.Location = new Point(0, 0);
-            lblTenantNote.Size = new Size(852, 20);
-            pnlTenants.Controls.Add(lblTenantNote);
-
-            int y2 = 28;
-
-            // CỘT TRÁI: tạo phòng mới
-            Panel cardNewTenant = CreateCard(0, ref y2, 420, 296, pnlTenants);
-            CreateCardTitle("TẠO PHÒNG MỚI", cardNewTenant);
-
-            CreateFieldLabel("Tên phòng (chỉ a-z, 0-9, gạch ngang — vd: marcus):", 16, 32, cardNewTenant);
-            txtNewUser = CreateInput(16, 50, 388, cardNewTenant);
-
-            CreateFieldLabel("Tên hiển thị (vd: Marcus Laptop):", 16, 82, cardNewTenant);
-            txtNewDisplayName = CreateInput(16, 100, 388, cardNewTenant);
-
-            CreateFieldLabel("Mật khẩu (≥8 ký tự, để trống = tự sinh ngẫu nhiên):", 16, 132, cardNewTenant);
-            txtNewPass = CreateInput(16, 150, 388, cardNewTenant);
-
-            btnCreateTenant = CreateFlatButton("Tạo phòng & Tạo link mời", ColorSuccess, 16, 182, 388, 40, cardNewTenant);
-            btnCreateTenant.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
-            btnCreateTenant.Click += delegate { ActionCreateTenant(); };
-
-            CreateFieldLabel("Link mời vừa tạo (đã tự copy — dán gửi Zalo):", 16, 232, cardNewTenant);
-            txtCreatedResult = CreateInput(16, 250, 270, cardNewTenant);
-            txtCreatedResult.ReadOnly = true;
-
-            btnCopyCreatedLink = CreateFlatButton("Sao chép", ColorPrimary, 294, 249, 110, 26, cardNewTenant);
-            btnCopyCreatedLink.Click += delegate {
-                if (!string.IsNullOrEmpty(txtCreatedResult.Text)) {
-                    Clipboard.SetText(txtCreatedResult.Text);
-                    MessageBox.Show(this, "Đã sao chép link mời vào bộ nhớ tạm! Bạn có thể dán gửi Zalo cho bạn bè.", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-            };
-
-            // CỘT PHẢI: danh sách phòng
-            int y3 = 28;
-            Panel cardListTenant = CreateCard(432, ref y3, 420, 296, pnlTenants);
-            CreateCardTitle("DANH SÁCH PHÒNG TRÊN CLOUDFLARE", cardListTenant);
-
-            lstTenants = new ListBox();
-            lstTenants.Location = new Point(16, 34);
-            lstTenants.Size = new Size(388, 190);
-            lstTenants.BackColor = ColorInputBg;
-            lstTenants.ForeColor = ColorText;
-            lstTenants.BorderStyle = BorderStyle.FixedSingle;
-            lstTenants.Font = new Font("Consolas", 9.5f);
-            cardListTenant.Controls.Add(lstTenants);
-
-            btnRefreshTenants = CreateFlatButton("Làm mới", ColorSecondary, 16, 240, 130, 32, cardListTenant);
-            btnRefreshTenants.Click += delegate { ActionRefreshTenants(); };
-
-            btnRevokeTenant = CreateFlatButton("Thu hồi phòng đã chọn", ColorDanger, 156, 240, 190, 32, cardListTenant);
-            btnRevokeTenant.Click += delegate { ActionRevokeTenant(); };
+            this.Controls.Add(pnlHeader);
         }
 
         // Vẽ đường bo tròn (path) dùng chung cho Region + viền thẻ
@@ -394,44 +244,10 @@ namespace OpenPocket.Desktop
 
         // ================= UI HELPERS =================
 
-        private Button CreateTabButton(string text, bool active)
-        {
-            Button btn = new Button();
-            btn.Text = text;
-            btn.Size = new Size(170, 34);
-            btn.FlatStyle = FlatStyle.Flat;
-            btn.FlatAppearance.BorderSize = 0;
-            btn.Font = new Font("Segoe UI", 9.5f, active ? FontStyle.Bold : FontStyle.Regular);
-            btn.BackColor = active ? ColorSecondary : ColorBg;
-            btn.ForeColor = active ? ColorText : ColorMuted;
-            btn.Cursor = Cursors.Hand;
-            Round(btn, 16);
-            return btn;
-        }
-
         // Bo góc control (Region) — WinForms không có borderRadius sẵn
         private static void Round(Control c, int r)
         {
             c.Region = new Region(RoundedPath(c.Width, c.Height, r));
-        }
-
-        private void SwitchTab(bool machineTab)
-        {
-            btnTabMachine.BackColor = machineTab ? ColorSecondary : ColorBg;
-            btnTabMachine.ForeColor = machineTab ? ColorText : ColorMuted;
-            btnTabMachine.Font = new Font("Segoe UI", 9.5f, machineTab ? FontStyle.Bold : FontStyle.Regular);
-
-            btnTabTenants.BackColor = !machineTab ? ColorSecondary : ColorBg;
-            btnTabTenants.ForeColor = !machineTab ? ColorText : ColorMuted;
-            btnTabTenants.Font = new Font("Segoe UI", 9.5f, !machineTab ? FontStyle.Bold : FontStyle.Regular);
-
-            pnlMachine.Visible = machineTab;
-            pnlTenants.Visible = !machineTab;
-
-            if (!machineTab)
-            {
-                ActionRefreshTenants();
-            }
         }
 
         private Panel CreateCard(int x, ref int y, int width, int height, Panel parent)
@@ -561,203 +377,165 @@ namespace OpenPocket.Desktop
             var config = LoadConfig();
             currentTenant = config.ContainsKey("lookupTenant") ? Convert.ToString(config["lookupTenant"]) : "";
             currentMachineName = config.ContainsKey("machineName") ? Convert.ToString(config["machineName"]) : "";
-            string secret = config.ContainsKey("lookupSecret") ? Convert.ToString(config["lookupSecret"]) : "";
-
-            txtRoomUser.Text = currentTenant;
-            txtMachineName.Text = currentMachineName;
-            txtRoomPass.Text = secret;
-            if (string.IsNullOrEmpty(txtMachineName.Text)) txtMachineName.Text = Environment.MachineName;
 
             // Kiểm tra autostart task
             CheckAutostartTask();
         }
 
-        private void OnInviteLinkPasted()
+        // ================= LẦN ĐẦU CHẠY: ĐỊNH DANH MÁY + TỰ CÀI =================
+
+        // Địa chỉ web trung gian là hằng số nhúng trong exe (zip không kèm config —
+        // %APPDATA% máy người dùng trống, lần đầu chạy app tự ghi vào đó).
+        private const string DefaultWorkerUrl = "https://YOUR-WORKER.workers.dev";
+
+        // Ghi cấu hình tối thiểu để QR ghép chạy qua internet (lookupUrl) — gọi
+        // một lần trong ctor, KHÔNG ghi đè gì đã có (máy đang dùng giữ nguyên).
+        private void EnsureConfigDefaults()
         {
-            string raw = txtInviteLink.Text.Trim();
-            if (string.IsNullOrEmpty(raw)) return;
-
-            // Pattern: #i=user:secret
-            var m = Regex.Match(raw, @"#i=([A-Za-z0-9][A-Za-z0-9-]{0,31}):([^&\s]+)");
-            if (m.Success)
+            try
             {
-                txtRoomUser.Text = m.Groups[1].Value.ToLower();
-                txtRoomPass.Text = m.Groups[2].Value;
-
-                if (string.IsNullOrEmpty(txtMachineName.Text))
+                var config = LoadConfig();
+                bool dirty = false;
+                if (!config.ContainsKey("lookupUrl") || string.IsNullOrEmpty(Convert.ToString(config["lookupUrl"])))
                 {
-                    txtMachineName.Text = Environment.MachineName;
+                    config["lookupUrl"] = DefaultWorkerUrl;
+                    dirty = true;
                 }
+                if (!config.ContainsKey("machineName") || string.IsNullOrEmpty(Convert.ToString(config["machineName"])))
+                {
+                    config["machineName"] = Environment.MachineName;
+                    dirty = true;
+                }
+                if (dirty) SaveConfig(config);
             }
+            catch { }
         }
 
-        // Worker URL ưu tiên: link mời dán vào > config (lookupUrl) > mặc định.
-        // GUI KHÔNG còn ô nhập worker URL — người mới không cần biết khái niệm này.
-        private string ResolveWorkerUrl(string fromInviteLink)
+        // 1 PC, không tài khoản: máy chưa có định danh (lookupTenant trống) thì TỰ
+        // cấp một cái ngầm — room id ngẫu nhiên + mật khẩu ngẫu nhiên 48 hex qua
+        // POST /api/tenant/create. Người dùng KHÔNG gõ gì, thứ họ thấy duy nhất
+        // là QR. Chạy ngầm từ ctor; Bật Bridge đợi xong rồi mới boot (bridge đọc
+        // config lúc mở — thiếu định danh thì đăng ký không được).
+        private void BeginProvisionIfNeeded()
         {
-            if (!string.IsNullOrEmpty(fromInviteLink)) return fromInviteLink.Trim().TrimEnd('/');
+            if (provisionDone || provisioning) return;
             var config = LoadConfig();
-            if (config.ContainsKey("lookupUrl"))
-            {
-                string fromConfig = Convert.ToString(config["lookupUrl"]);
-                if (!string.IsNullOrEmpty(fromConfig)) return fromConfig.Trim().TrimEnd('/');
-            }
-            return "https://YOUR-WORKER.workers.dev";
-        }
+            string tenant = config.ContainsKey("lookupTenant") ? Convert.ToString(config["lookupTenant"]) : "";
+            string secret = config.ContainsKey("lookupSecret") ? Convert.ToString(config["lookupSecret"]) : "";
+            if (!string.IsNullOrEmpty(tenant) && !string.IsNullOrEmpty(secret)) { provisionDone = true; return; }
 
-        // Đường chính cho người mới: gõ tên phòng + mật khẩu → tạo phòng VĨNH VIỄN
-        // trên worker (POST /api/tenant/create; phòng cũ + đúng mật khẩu = vào lại)
-        // → lưu config → bật lại bridge. Bridge sống lại là tự đăng ký
-        // machine:<phòng> lên KV, điện thoại đăng nhập bằng chính cặp user/pass đó.
-        private void ActionConnectRoom()
-        {
-            string user = txtRoomUser.Text.Trim().ToLower();
-            string pass = txtRoomPass.Text.Trim();
-            string machine = txtMachineName.Text.Trim();
-            string url = "";
-
-            // Link mời (nếu dán) thắng ưu tiên: bóc cặp user:secret + origin ra khỏi link
-            string link = txtInviteLink.Text.Trim();
-            if (link.Length > 0)
-            {
-                var lm = Regex.Match(link, @"#i=([A-Za-z0-9][A-Za-z0-9-]{0,31}):([^&\s]+)");
-                if (lm.Success)
-                {
-                    user = lm.Groups[1].Value.ToLower();
-                    pass = lm.Groups[2].Value;
-                    try { url = new Uri(link).GetLeftPart(UriPartial.Authority); } catch { }
-                }
-            }
-
-            if (!Regex.IsMatch(user, @"^[a-z0-9][a-z0-9-]{1,31}$"))
-            {
-                MessageBox.Show(this, "Tên phòng chỉ gồm 2-32 ký tự a-z, 0-9, gạch ngang (vd: marcus).", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            if (pass.Length < 8 || Regex.IsMatch(pass, @"[\s""':&]"))
-            {
-                MessageBox.Show(this, "Mật khẩu cần ít nhất 8 ký tự, không chứa dấu cách, nháy kép/nháy đơn, ':' hoặc '&'.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            url = ResolveWorkerUrl(url);
-            if (!url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(url, @"\s"))
-            {
-                MessageBox.Show(this, "Địa chỉ worker phải bắt đầu bằng https:// và không chứa dấu cách.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            btnConnectRoom.Enabled = false;
-            btnConnectRoom.Text = "Đang lưu phòng lên web...";
-
-            string reqUser = user, reqPass = pass, reqUrl = url, reqName = machine;
+            provisioning = true;
             ThreadPool.QueueUserWorkItem(delegate {
                 bool ok = false;
-                bool existed = false;
-                string errCode = "";
-                string errMessage = "";
                 try
                 {
+                    string user = NewRoomId();
+                    string pass = NewSecret();
+                    var cfg = LoadConfig();
+                    string url = cfg.ContainsKey("lookupUrl") ? Convert.ToString(cfg["lookupUrl"]).Trim().TrimEnd('/') : "";
+                    if (string.IsNullOrEmpty(url)) url = DefaultWorkerUrl;
+
                     var jss = new JavaScriptSerializer();
-                    string payload = jss.Serialize(new Dictionary<string, object> {
-                        { "user", reqUser }, { "secret", reqPass }, { "name", reqName }
-                    });
-                    byte[] body = Encoding.UTF8.GetBytes(payload);
-                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create(reqUrl + "/api/tenant/create");
+                    byte[] body = Encoding.UTF8.GetBytes(jss.Serialize(new Dictionary<string, object> {
+                        { "user", user }, { "secret", pass }, { "name", Environment.MachineName }
+                    }));
+                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url + "/api/tenant/create");
                     req.Method = "POST";
                     req.ContentType = "application/json";
                     req.ContentLength = body.Length;
-                    req.Timeout = 20000;
-                    req.ReadWriteTimeout = 20000;
+                    req.Timeout = 15000;
+                    req.ReadWriteTimeout = 15000;
                     using (Stream rs = req.GetRequestStream()) rs.Write(body, 0, body.Length);
                     using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
                     using (StreamReader sr = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
                     {
                         var dict = jss.Deserialize<Dictionary<string, object>>(sr.ReadToEnd());
                         ok = dict != null && dict.ContainsKey("ok") && Convert.ToBoolean(dict["ok"]);
-                        existed = dict != null && dict.ContainsKey("existed") && Convert.ToBoolean(dict["existed"]);
                     }
-                }
-                catch (WebException wex)
-                {
-                    HttpWebResponse httpErr = wex.Response as HttpWebResponse;
-                    if (httpErr != null)
-                    {
-                        errCode = Convert.ToString((int)httpErr.StatusCode);
-                        try
-                        {
-                            using (StreamReader sr = new StreamReader(httpErr.GetResponseStream(), Encoding.UTF8))
-                            {
-                                var jss = new JavaScriptSerializer();
-                                var dict = jss.Deserialize<Dictionary<string, object>>(sr.ReadToEnd());
-                                if (dict != null)
-                                {
-                                    if (dict.ContainsKey("code")) errCode = Convert.ToString(dict["code"]);
-                                    if (dict.ContainsKey("message")) errMessage = Convert.ToString(dict["message"]);
-                                }
-                            }
-                        }
-                        catch { }
-                    }
-                    else
-                    {
-                        errCode = "network";
-                        errMessage = wex.Message;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    errCode = "network";
-                    errMessage = ex.Message;
-                }
-
-                this.Invoke(new MethodInvoker(delegate {
-                    btnConnectRoom.Enabled = true;
-                    btnConnectRoom.Text = "Tạo phòng & Kết nối";
-
                     if (ok)
                     {
-                        var config = LoadConfig();
-                        config["lookupTenant"] = reqUser;
-                        config["lookupSecret"] = reqPass;
-                        config["machineName"] = !string.IsNullOrEmpty(reqName) ? reqName : reqUser;
-                        config["lookupUrl"] = reqUrl;
-                        SaveConfig(config);
-                        // Bật tự khởi động Task Scheduler luôn để khỏi cấu hình lại
-                        EnsureAutostartTaskEnabled();
-                        ActionRestartBridge();
+                        var save = LoadConfig();
+                        save["lookupTenant"] = user;
+                        save["lookupSecret"] = pass;
+                        save["lookupUrl"] = url;
+                        if (!save.ContainsKey("machineName") || string.IsNullOrEmpty(Convert.ToString(save["machineName"])))
+                            save["machineName"] = Environment.MachineName;
+                        SaveConfig(save);
+                    }
+                }
+                catch { ok = false; }
 
-                        // Link dạng #i=user:pass — đúng cơ chế link mời, nhưng ở đây
-                        // người dùng tự gửi cho chính mình qua Zalo rồi bấm là điện
-                        // thoại tự đăng nhập (không phải gõ URL web lạ nào cả)
-                        string loginLink = string.Format("{0}/#i={1}:{2}", reqUrl, reqUser, reqPass);
-                        try { Clipboard.SetText(loginLink); } catch { }
-
-                        MessageBox.Show(this, existed
-                            ? string.Format("Đã kết nối lại phòng \"{0}\" — mật khẩu đúng, phòng giữ nguyên.\n\nMáy này đã bật lại bridge và tự đăng ký lên web.\n\nTRÊN ĐIỆN THOẠI: bấm link vừa copy (tự gửi Zalo cho mình) hoặc mở web → tab Đăng nhập → gõ đúng tên phòng + mật khẩu này.\n\nLink (đã copy):\n{1}", reqUser, loginLink)
-                            : string.Format("Đã tạo phòng \"{0}\" và lưu vĩnh viễn trên web!\n\nMáy này đã bật lại bridge và tự đăng ký lên web (đợi chốc lát).\n\nTRÊN ĐIỆN THOẠI: gửi link dưới đây cho chính mình qua Zalo rồi bấm vào — hoặc mở web → tab Đăng nhập → gõ đúng tên phòng + mật khẩu vừa tạo.\n\nLink (đã copy):\n{1}", reqUser, loginLink),
-                            "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        CheckStatus();
-                    }
-                    else if (errCode == "taken")
-                    {
-                        MessageBox.Show(this, string.Format("Tên phòng \"{0}\" đã có người dùng và mật khẩu không khớp.\n\nNếu đó là phòng của bạn: kiểm tra lại mật khẩu rồi thử lại. Nếu không: chọn tên phòng khác.", reqUser), "Phòng đã tồn tại", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    }
-                    else if (errCode == "rate_limited")
-                    {
-                        MessageBox.Show(this, "Thử quá nhiều lần — đợi khoảng 1 phút rồi bấm lại.", "Chậm lại chút", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    }
-                    else if (errCode == "invalid_user" || errCode == "invalid_secret")
-                    {
-                        MessageBox.Show(this, errMessage, "Chưa đúng quy tắc", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    }
-                    else
-                    {
-                        MessageBox.Show(this, string.Format("Không tạo được phòng ({0}).\n{1}\n\nKiểm tra mạng rồi thử lại; vẫn lỗi thì chụp màn hình gửi chủ nhà.", errCode, errMessage), "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    }
+                this.Invoke(new MethodInvoker(delegate {
+                    provisioning = false;
+                    provisionDone = ok;
+                    CheckStatus();
                 }));
             });
         }
+
+        private static string NewRoomId()
+        {
+            // a-z0-9 (bỏ ký tự dễ nhầm), "pc-" + 8 ký tự ngẫu nhiên — khớp TENANT_RE
+            const string alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
+            byte[] raw = new byte[8];
+            using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(raw);
+            string id = "pc-";
+            foreach (byte b in raw) id += alphabet[b % alphabet.Length].ToString();
+            return id;
+        }
+
+        private static string NewSecret()
+        {
+            byte[] entropy = new byte[24];
+            using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(entropy);
+            return "ows_" + BitConverter.ToString(entropy).Replace("-", "").ToLowerInvariant();
+        }
+
+        // Bridge trong zip mới bung chưa có node_modules — exe TỰ npm install
+        // (bộ cài chính là exe, hết cần .bat). Chạy ngầm; xong tự gọi lại
+        // ActionStartBridge để đi tiếp chuỗi. Trả false = chuỗi dừng ở đây.
+        private bool EnsureBridgeInstalledAsync()
+        {
+            if (!bridgeNeedsInstall) return true;
+            if (bridgeDir == "" || !File.Exists(nodeExe))
+            {
+                MessageBox.Show(this, "Không tìm thấy thư mục bridge hoặc Node.js.\nCài Node.js 20+ (nodejs.org) và giữ bố cục zip: thư mục bridge nằm cạnh OpenPocket.exe.", "Thiếu thành phần", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            string npmCmd = Path.Combine(Path.GetDirectoryName(nodeExe), "npm.cmd");
+            if (!File.Exists(npmCmd)) npmCmd = "npm.cmd";
+            string npmAt = npmCmd;
+
+            btnStartBridge.Enabled = false;
+            btnStartBridge.Text = "Đang cài bridge (1-2 phút)…";
+            ThreadPool.QueueUserWorkItem(delegate {
+                bool ok = false;
+                try
+                {
+                    var psi = new ProcessStartInfo("cmd.exe", "/c \"\"" + npmAt + "\" install --no-audit --no-fund\"");
+                    psi.WorkingDirectory = bridgeDir;
+                    psi.CreateNoWindow = true;
+                    psi.UseShellExecute = false;
+                    var p = Process.Start(psi);
+                    ok = p != null && p.WaitForExit(300000) && p.ExitCode == 0;
+                }
+                catch { ok = false; }
+
+                this.Invoke(new MethodInvoker(delegate {
+                    btnStartBridge.Enabled = true;
+                    btnStartBridge.Text = "Bật Bridge";
+                    if (!ok)
+                    {
+                        MessageBox.Show(this, "Cài bridge (npm install) chưa thành công — kiểm tra mạng rồi bấm Bật Bridge lại.", "Chưa cài xong", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    bridgeNeedsInstall = false;
+                    ActionStartBridge();
+                }));
+            });
+            return false;
+        }
+
 
         private void CheckStatus()
         {
@@ -793,15 +571,9 @@ namespace OpenPocket.Desktop
             currentTenant = config.ContainsKey("lookupTenant") ? Convert.ToString(config["lookupTenant"]) : "";
             currentMachineName = config.ContainsKey("machineName") ? Convert.ToString(config["machineName"]) : "";
 
-            if (!string.IsNullOrEmpty(currentTenant))
-            {
-                lblStatusRoom.Text = string.Format("Phòng: {0}{1}", currentTenant,
-                    !string.IsNullOrEmpty(currentMachineName) ? (" (" + currentMachineName + ")") : "");
-            }
-            else
-            {
-                lblStatusRoom.Text = "Phòng: Chủ máy (machine:main)";
-            }
+            string who = !string.IsNullOrEmpty(currentMachineName) ? currentMachineName
+                : (!string.IsNullOrEmpty(currentTenant) ? currentTenant : "máy chính");
+            lblStatusRoom.Text = "Máy: " + who + (provisioning ? " (đang tạo định danh lần đầu…)" : "");
 
             // 3. Đọc tunnel URL từ log
             tunnelUrl = ReadTunnelUrlFromLog();
@@ -904,17 +676,38 @@ namespace OpenPocket.Desktop
                 MessageBox.Show(this, "Bridge đang chạy rồi (đèn xanh phía trên). Không cần bật lại.", "Đang chạy", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            // Ưu tiên chạy task elevated
-            try
-            {
-                Process.Start("schtasks.exe", "/run /tn OpenPocketBridge");
-                Thread.Sleep(800);
-                CheckStatus();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, "Không khởi động được task: " + ex.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+
+            // Lần đầu chạy zip mới: exe tự npm install trước (bộ cài = exe).
+            // Trả false = đang cài ngầm hoặc lỗi đã báo — chuỗi sẽ tự đi tiếp.
+            if (!EnsureBridgeInstalledAsync()) return;
+
+            btnStartBridge.Enabled = false;
+            btnStartBridge.Text = "Đang chuẩn bị…";
+            ThreadPool.QueueUserWorkItem(delegate {
+                // Định danh máy (lần đầu, qua mạng) phải xong TRƯỚC khi boot —
+                // bridge đọc config một lúc mở, thiếu là đăng ký không được.
+                for (int i = 0; i < 30 && provisioning; i++) Thread.Sleep(500);
+                this.Invoke(new MethodInvoker(delegate {
+                    btnStartBridge.Enabled = true;
+                    btnStartBridge.Text = "Bật Bridge";
+                    try
+                    {
+                        // Máy mới chưa có task tự khởi động → tạo luôn (bridge
+                        // chạy bằng task elevated; thiếu task thì /run vô hiệu)
+                        if (!IsAutostartTaskExisting())
+                        {
+                            EnsureAutostartTaskEnabled();
+                        }
+                        Process.Start("schtasks.exe", "/run /tn OpenPocketBridge");
+                        Thread.Sleep(800);
+                        CheckStatus();
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show(this, "Không khởi động được task: " + ex.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }));
+            });
         }
 
         private void ActionStopBridge()
@@ -1113,228 +906,11 @@ namespace OpenPocket.Desktop
             catch { }
         }
 
-        // ================= TENANT MANAGEMENT =================
-
-        private void ActionCreateTenant()
-        {
-            string user = txtNewUser.Text.Trim().ToLower();
-            string name = txtNewDisplayName.Text.Trim();
-            string pass = txtNewPass.Text.Trim();
-
-            if (!Regex.IsMatch(user, @"^[a-z0-9][a-z0-9-]{1,31}$"))
-            {
-                MessageBox.Show(this, "Tên phòng chỉ gồm 2-32 ký tự chữ thường a-z, số 0-9, gạch ngang (vd: marcus, nam-laptop).", "Lỗi định dạng", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            if (string.IsNullOrEmpty(pass))
-            {
-                // KHÔNG còn mật khẩu mặc định 12345678 — chữ đầu tiên kẻ phá thử
-                // với mọi phòng. Để trống = tự sinh 48 hex (nằm sẵn trong link mời).
-                byte[] entropy = new byte[24];
-                using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(entropy);
-                pass = "owes_" + BitConverter.ToString(entropy).Replace("-", "").ToLowerInvariant();
-            }
-            else if (pass.Length < 8 || Regex.IsMatch(pass, @"[\s""':&]"))
-            {
-                MessageBox.Show(this, "Mật khẩu phòng cần ít nhất 8 ký tự, không chứa dấu cách, nháy kép/nháy đơn, ':' hoặc '&'.", "Mật khẩu không hợp lệ", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            // Đọc + kiểm tra workerUrl trên UI thread (trước khi khóa nút):
-            // URL lỗi định dạng sẽ xê dịch tham số khi ghép lệnh node bên dưới.
-            string workerUrl = ResolveWorkerUrl("");
-            if (!workerUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(workerUrl, @"\s"))
-            {
-                MessageBox.Show(this, "Địa chỉ worker phải bắt đầu bằng https:// và không chứa dấu cách.", "Lỗi định dạng", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            string tenantScript = Path.Combine(workerDir, "scripts", "tenant.mjs");
-            if (!File.Exists(tenantScript))
-            {
-                MessageBox.Show(this, "Không tìm thấy worker/scripts/tenant.mjs.\nChức năng tạo phòng chỉ hoạt động trên máy Chủ dự án.", "Thiếu thành phần", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            btnCreateTenant.Enabled = false;
-            btnCreateTenant.Text = "Đang tạo trên Cloudflare...";
-
-            ThreadPool.QueueUserWorkItem(delegate {
-                try
-                {
-                    var psi = new ProcessStartInfo(nodeExe);
-                    // Nháy kép/CR/LF trong tên hiển thị sẽ thoát khỏi cặp nháy của
-                    // Arguments và xê dịch tham số tenant.mjs — bỏ trước khi ghép lệnh.
-                    string displayName = (string.IsNullOrEmpty(name) ? user : name)
-                        .Replace("\"", "").Replace("\r", "").Replace("\n", "");
-                    psi.Arguments = string.Format("\"{0}\" add {1} \"{2}\" {3} --pass \"{4}\"",
-                        tenantScript, user, displayName, workerUrl, pass);
-                    psi.WorkingDirectory = workerDir;
-                    psi.CreateNoWindow = true;
-                    psi.UseShellExecute = false;
-                    psi.RedirectStandardOutput = true;
-                    psi.RedirectStandardError = true;
-                    // node in UTF-8 — phải khai báo để dấu — và tiếng Việt không vỡ
-                    psi.StandardOutputEncoding = Encoding.UTF8;
-                    psi.StandardErrorEncoding = Encoding.UTF8;
-
-                    var p = Process.Start(psi);
-                    string stdout = p.StandardOutput.ReadToEnd();
-                    string stderr = p.StandardError.ReadToEnd();
-                    p.WaitForExit();
-
-                    this.Invoke(new MethodInvoker(delegate {
-                        btnCreateTenant.Enabled = true;
-                        btnCreateTenant.Text = "➕ Tạo phòng & Tạo link mời";
-
-                        if (p.ExitCode == 0)
-                        {
-                            string inviteLink = string.Format("{0}/#i={1}:{2}", workerUrl, user, pass);
-                            txtCreatedResult.Text = inviteLink;
-                            Clipboard.SetText(inviteLink);
-                            MessageBox.Show(this, string.Format("🎉 Đã tạo phòng \"{0}\" thành công trên Cloudflare KV!\n\nLink mời đã tự động sao chép vào bộ nhớ tạm:\n{1}\n\nHãy dán link này gửi cho bạn bè qua Zalo.", user, inviteLink), "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                            ActionRefreshTenants();
-                        }
-                        else
-                        {
-                            string err = !string.IsNullOrEmpty(stderr) ? stderr : stdout;
-                            MessageBox.Show(this, "Lỗi khi tạo phòng qua Cloudflare:\n" + err, "Thất bại", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        }
-                    }));
-                }
-                catch (Exception ex)
-                {
-                    this.Invoke(new MethodInvoker(delegate {
-                        btnCreateTenant.Enabled = true;
-                        btnCreateTenant.Text = "➕ Tạo phòng & Tạo link mời";
-                        MessageBox.Show(this, "Lỗi thực thi: " + ex.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    }));
-                }
-            });
-        }
-
-        private void ActionRefreshTenants()
-        {
-            string tenantScript = Path.Combine(workerDir, "scripts", "tenant.mjs");
-            if (!File.Exists(tenantScript))
-            {
-                lblTenantNote.Text = "ℹ️ Máy này là phiên bản người dùng (Client) — không chứa worker/scripts. Chỉ xem máy tại tab 'Máy của tôi'.";
-                lstTenants.Items.Clear();
-                lstTenants.Items.Add("(Chức năng chỉ dành cho Chủ tòa nhà Cloudflare)");
-                btnCreateTenant.Enabled = false;
-                btnRefreshTenants.Enabled = false;
-                btnRevokeTenant.Enabled = false;
-                return;
-            }
-
-            btnRefreshTenants.Enabled = false;
-            btnRefreshTenants.Text = "Đang tải...";
-            lstTenants.Items.Clear();
-            lstTenants.Items.Add("Đang kết nối Cloudflare KV để lấy danh sách phòng...");
-
-            ThreadPool.QueueUserWorkItem(delegate {
-                try
-                {
-                    var psi = new ProcessStartInfo(nodeExe);
-                    psi.Arguments = string.Format("\"{0}\" list", tenantScript);
-                    psi.WorkingDirectory = workerDir;
-                    psi.CreateNoWindow = true;
-                    psi.UseShellExecute = false;
-                    psi.RedirectStandardOutput = true;
-                    psi.RedirectStandardError = true;
-                    // node in UTF-8 — phải khai báo để dấu — (em-dash trong "user — tên") không vỡ,
-                    // nếu không regex dòng phòng sẽ không khớp nữa
-                    psi.StandardOutputEncoding = Encoding.UTF8;
-                    psi.StandardErrorEncoding = Encoding.UTF8;
-
-                    var p = Process.Start(psi);
-                    string stdout = p.StandardOutput.ReadToEnd();
-                    p.WaitForExit();
-
-                    this.Invoke(new MethodInvoker(delegate {
-                        btnRefreshTenants.Enabled = true;
-                        btnRefreshTenants.Text = "🔄 Làm mới danh sách";
-                        lstTenants.Items.Clear();
-
-                        if (p.ExitCode == 0 && !string.IsNullOrEmpty(stdout))
-                        {
-                            string[] lines = stdout.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                            foreach (string line in lines)
-                            {
-                                // Format thật của tenant.mjs list:
-                                // "  marcus  —  Marcus Laptop  (tạo 09:36:38 13/9/2026)"
-                                if (Regex.IsMatch(line, @"^\s*[a-z0-9][a-z0-9-]{1,31}\s+—"))
-                                {
-                                    lstTenants.Items.Add(line.Trim());
-                                }
-                            }
-                            if (lstTenants.Items.Count == 0)
-                            {
-                                lstTenants.Items.Add("Chưa có phòng nào được tạo.");
-                            }
-                        }
-                        else
-                        {
-                            lstTenants.Items.Add("Không tải được danh sách phòng. Hãy kiểm tra kết nối mạng.");
-                        }
-                    }));
-                }
-                catch (Exception ex)
-                {
-                    this.Invoke(new MethodInvoker(delegate {
-                        btnRefreshTenants.Enabled = true;
-                        btnRefreshTenants.Text = "🔄 Làm mới danh sách";
-                        lstTenants.Items.Clear();
-                        lstTenants.Items.Add("Lỗi: " + ex.Message);
-                    }));
-                }
-            });
-        }
-
-        private void ActionRevokeTenant()
-        {
-            if (lstTenants.SelectedItem == null)
-            {
-                MessageBox.Show(this, "Vui lòng chọn một dòng phòng trong danh sách phía trên.", "Chưa chọn phòng", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            string selected = lstTenants.SelectedItem.ToString();
-            // Parse tên phòng từ dòng format tenant.mjs list:
-            // "marcus  —  Marcus Laptop  (tạo ...)"
-            var m = Regex.Match(selected, @"^([a-z0-9][a-z0-9-]{1,31})\s+—");
-            if (!m.Success)
-            {
-                MessageBox.Show(this, "Không nhận diện được tên phòng từ dòng đã chọn.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            string user = m.Groups[1].Value;
-
-            if (MessageBox.Show(this, string.Format("Bạn có chắc chắn muốn thu hồi (xóa) phòng \"{0}\"?\nNgười dùng phòng này sẽ mất quyền truy cập ngay lập tức.", user), "Xác nhận thu hồi", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-            {
-                return;
-            }
-
-            string tenantScript = Path.Combine(workerDir, "scripts", "tenant.mjs");
-            try
-            {
-                var psi = new ProcessStartInfo(nodeExe);
-                psi.Arguments = string.Format("\"{0}\" revoke {1}", tenantScript, user);
-                psi.WorkingDirectory = workerDir;
-                psi.CreateNoWindow = true;
-                psi.UseShellExecute = false;
-                var p = Process.Start(psi);
-                p.WaitForExit();
-
-                MessageBox.Show(this, string.Format("Đã thu hồi phòng \"{0}\"!", user), "Đã xóa", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                ActionRefreshTenants();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, "Lỗi khi thu hồi: " + ex.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
+        // ================= TENANT MANAGEMENT — ĐÃ BỎ =================
+        // 1 PC là đủ (quyết định của chủ 13/09): tab phòng, link mời và mọi
+        // tính năng đăng nhập tài khoản bị dời bỏ khỏi GUI. Định danh máy được
+        // cấp NGẦM bằng BeginProvisionIfNeeded; worker/bridge vẫn giữ đường
+        // multi-tenant ngủ đông cho ai cần (không UI nào gọi tới).
 
         private static string FindNodeExe()
         {
