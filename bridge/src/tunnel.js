@@ -59,10 +59,28 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
 
   const runOnce = async () => {
     attempt += 1;
+    log(`[tunnel] chạy cloudflared (đợt ${attempt})...`);
     let sawRateLimit = false;
+
+    // Mỗi đợt chạy chỉ được hẹn đúng MỘT lần chạy lại: exit và error cùng firing
+    // thì cái nào tới trước thắng, kẻo hai vòng hẹn nhau rồi dội tunnel không nghỉ.
+    let respawnScheduled = false;
+    const scheduleRetry = (delay, reason) => {
+      if (respawnScheduled || stopped) return;
+      respawnScheduled = true;
+      log(`[tunnel] ${reason} - chờ ${Math.round(delay / 1000)}s...`);
+      setTimeout(() => {
+        if (!stopped) runOnce().catch((e) => log(`[tunnel] lỗi: ${e.message}`));
+      }, delay);
+    };
+
     const child = spawn(bin, ["tunnel", "--url", `http://127.0.0.1:${targetPort}`, "--no-autoupdate"], {
       stdio: ["ignore", "pipe", "pipe"],
     });
+    // spawn hụt (exe bị khoá/ENOENT...) KHÔNG phát exit — không bắt error thì
+    // vòng retry lặng lẽ chết, bridge tưởng còn tunnel mãi (bệnh đêm 13/09:
+    // im re hơn 2 tiếng không một dòng log, worker báo bridge_offline).
+    child.on("error", (err) => scheduleRetry(60_000, `lỗi spawn cloudflared: ${err.message}`));
 
     let announced = false;
     const scan = (chunk) => {
@@ -98,12 +116,10 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
       let delay = Math.min(5000 * 2 ** Math.max(0, attempt - 1), 60_000);
       if (rateLimitStreak > 0) {
         delay = Math.min(120_000 * 2 ** (rateLimitStreak - 1), 600_000);
-        log(`[tunnel] Cloudflare đang giới hạn tạo tunnel (429) - chờ ${Math.round(delay / 1000)}s...`);
+        scheduleRetry(delay, "Cloudflare đang giới hạn tạo tunnel (429)");
       } else {
-        log(`[tunnel] cloudflared thoát (code ${code}) - chạy lại sau ${Math.round(delay / 1000)}s...`);
+        scheduleRetry(delay, `cloudflared thoát (code ${code}) - chạy lại`);
       }
-      await new Promise((r) => setTimeout(r, delay));
-      if (!stopped) runOnce().catch((e) => log(`[tunnel] lỗi: ${e.message}`));
     });
   };
 
