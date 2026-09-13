@@ -110,6 +110,9 @@ namespace OpenPocket.Desktop
         private Panel pnlHeader;
 
         // UI Controls - single page
+        private Panel pnlContent;
+        private Panel cardStatus;
+        private Panel cardPair;
         private Label lblStatusBridge;
         private Label lblMachineLabel;
         private TextBox txtMachineName;
@@ -120,6 +123,8 @@ namespace OpenPocket.Desktop
         private Button btnStopBridge;
         private Button btnRestartBridge;
         private Button btnTunnelRestart;
+        private Button btnShowQr;
+        private Button btnOpenLogs;
         private CheckBox chkAutostart;
 
         public MainForm()
@@ -180,12 +185,15 @@ namespace OpenPocket.Desktop
         private void InitializeComponent()
         {
             this.Text = "OpenPocket — Điều khiển OpenWork từ điện thoại";
-            // 512x460 = MỘT cột duy nhất, thẻ trắng chạm mép, nền trắng toàn
-            // phần. Bản 680px thừa góc phải, 536px còn dải lề phải + kẽ + đuôi
-            // (owner khoanh đỏ 2 lượt 13/09), lượt 3: bỏ hẳn nền xám F4.
-            // Chữ chính 9.75pt, dòng cách 30px, nút cao 38 — thở, không bị nhòn.
-            this.Size = new Size(512, 460);
-            this.MinimumSize = new Size(512, 460);
+            // MỘT cột duy nhất, nền trắng toàn phần. Client 496x446 = header 58
+            // + thẻ trạng thái 260 + kẽ 8 + thẻ hành động 120. BỀ RỘNG giữ khổ
+            // 512 cũ (owner 13/09 tối: không thu hẹp, phải CÂN ĐỐI 2 bên).
+            // Lưới spacing 8px: 8px trong nhóm, 12px giữa dòng, 24px giữa nhóm,
+            // lề 16 hai bên, nút đồng nhất cao 40. Hàng tự khởi động là CẤU
+            // HÌNH nên đứng TRÊN hàng nút hành động (owner chỉ đường 13/09 tối).
+            // Mọi hàng nút/ô dàn ĐẦY bề ngang bằng RelayoutContent().
+            this.ClientSize = new Size(496, 446);
+            this.MinimumSize = this.Size;
             this.StartPosition = FormStartPosition.CenterScreen;
             // Nền TRẮNG toàn phần (owner 13/09: "gọt sạch hết còn nền trắng
             // thôi") — nền xám F4 từng lộ thành dải sáng nhạt bất đối xứng
@@ -201,14 +209,16 @@ namespace OpenPocket.Desktop
             pnlContent.Dock = DockStyle.Fill;
             // Padding 0: thẻ trắng chạm mép cửa sổ, không còn viền xám nào
             pnlContent.Padding = new Padding(0);
+            this.pnlContent = pnlContent;
 
             int yL = 0;
-            Panel cardStatus = CreateCard(0, ref yL, 496, 284, pnlContent, false);
+            cardStatus = CreateCard(0, ref yL, 496, 260, pnlContent, false);
             CreateCardTitle("TRẠNG THÁI KẾT NỐI", cardStatus);
 
-            lblStatusBridge = CreateStatusLabel("Bridge: Đang kiểm tra...", 16, 36, cardStatus);
+            lblStatusBridge = CreateStatusLabel("Bridge: Đang kiểm tra...", 16, 39, cardStatus);
             lblStatusBridge.Size = new Size(448, 22);
             lblStatusBridge.Font = new Font("Segoe UI", 9.75f);
+
             // Tên máy là ô SỬA ĐƯỢC (owner 13/09: "T cần viết tên máy là gì" —
             // trước đây chỉ là dòng tĩnh "Máy: ..." lấy từ lúc tạo phòng). Enter
             // hoặc rời ô là lưu: bridge đang chạy thì POST /api/machine/name
@@ -218,11 +228,11 @@ namespace OpenPocket.Desktop
             lblMachineLabel.Text = "Tên máy";
             lblMachineLabel.Font = new Font("Segoe UI", 8.5f);
             lblMachineLabel.ForeColor = ColorMuted;
-            lblMachineLabel.Location = new Point(16, 68);
+            lblMachineLabel.Location = new Point(16, 75);
             lblMachineLabel.AutoSize = true;
             cardStatus.Controls.Add(lblMachineLabel);
 
-            txtMachineName = CreateInput(86, 63, 330, cardStatus);
+            txtMachineName = CreateInput(86, 71, 330, cardStatus);
             txtMachineName.MaxLength = 60;
             txtMachineName.KeyDown += delegate(object s, KeyEventArgs e) {
                 if (e.KeyCode == Keys.Enter)
@@ -232,14 +242,15 @@ namespace OpenPocket.Desktop
                 }
             };
             txtMachineName.Leave += delegate { SaveMachineName(); };
-            lblStatusTunnel = CreateStatusLabel("Cloudflare Tunnel: Đang kiểm tra...", 16, 96, cardStatus);
+
+            lblStatusTunnel = CreateStatusLabel("Cloudflare Tunnel: Đang kiểm tra...", 16, 103, cardStatus);
             lblStatusTunnel.Size = new Size(448, 22);
             lblStatusTunnel.Font = new Font("Segoe UI", 9.75f);
             lblStatusTunnelUrl = new Label();
             lblStatusTunnelUrl.Text = "(đang lấy địa chỉ công khai...)";
             lblStatusTunnelUrl.Font = new Font("Consolas", 9f);
             lblStatusTunnelUrl.ForeColor = ColorText;
-            lblStatusTunnelUrl.Location = new Point(32, 120);
+            lblStatusTunnelUrl.Location = new Point(32, 131);
             // Cao 34: URL trycloudflare hiếm khi dài hơn khổ 432px thì tự xuống
             // dòng thay vì bị cắt cụt (label WordWrap sẵn có)
             lblStatusTunnelUrl.Size = new Size(432, 34);
@@ -248,7 +259,7 @@ namespace OpenPocket.Desktop
             // Restart tunnel CHỦ ĐỘNG (owner 13/09: bộ đếm backoff 429 "hên xui"):
             // xin tunnel mới ngay không đợi hẹn — bridge vẫn sống, chỉ cloudflared
             // được thay. Vô hiệu khi bridge dừng (CheckStatus khoá theo đèn xanh).
-            btnTunnelRestart = CreateFlatButton("Restart tunnel", ColorSecondary, 296, 92, 120, 27, cardStatus);
+            btnTunnelRestart = CreateFlatButton("Restart tunnel", ColorSecondary, 296, 100, 120, 27, cardStatus);
             btnTunnelRestart.Font = new Font("Segoe UI", 9f);
             btnTunnelRestart.Click += delegate { ActionRestartTunnel(); };
             // Label tunnel tạo TRƯỚC nút nên nằm TRÊN (z-order theo thứ tự add,
@@ -256,41 +267,44 @@ namespace OpenPocket.Desktop
             // nút lên đỉnh để không bao giờ bị nền label che
             btnTunnelRestart.BringToFront();
 
-            lblStatusOpenWork = CreateStatusLabel("OpenWork Desktop: Đang kiểm tra...", 16, 162, cardStatus);
+            lblStatusOpenWork = CreateStatusLabel("OpenWork Desktop: Đang kiểm tra...", 16, 177, cardStatus);
             lblStatusOpenWork.Size = new Size(448, 22);
             lblStatusOpenWork.Font = new Font("Segoe UI", 9.75f);
 
-            btnStartBridge = CreateFlatButton("Bật Bridge", ColorSuccess, 16, 196, 128, 38, cardStatus);
-            btnStartBridge.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
-            btnStartBridge.Click += delegate { ActionStartBridge(); };
-
-            btnStopBridge = CreateFlatButton("Dừng", ColorDanger, 152, 196, 92, 38, cardStatus);
-            btnStopBridge.Font = new Font("Segoe UI", 10f);
-            btnStopBridge.Click += delegate { ActionStopBridge(); };
-
-            btnRestartBridge = CreateFlatButton("Khởi động lại", ColorSecondary, 252, 196, 150, 38, cardStatus);
-            btnRestartBridge.Font = new Font("Segoe UI", 10f);
-            btnRestartBridge.Click += delegate { ActionRestartBridge(); };
-
+            // Hàng TỰ KHỞI ĐỘNG là cấu hình, không phải hành động — xếp SAU
+            // trạng thái, TRƯỚC hàng nút bấm (owner 13/09 tối chỉ đường)
             chkAutostart = new CheckBox();
             chkAutostart.Text = "Tự khởi động cùng Windows (ngầm, quyền Admin)";
             chkAutostart.ForeColor = ColorText;
             chkAutostart.Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
-            chkAutostart.Location = new Point(16, 246);
+            chkAutostart.Location = new Point(16, 221);
             chkAutostart.AutoSize = true;
             chkAutostart.CheckedChanged += OnAutostartChanged;
             cardStatus.Controls.Add(chkAutostart);
 
             yL += 8;
 
-            // Thẻ QR — tính năng DUY NHẤT còn lại ngoài trạng thái: hiện mã/QR
-            // cho điện thoại ghép, kiểu 9remote. Nút QR là chủ đạo (đen, to).
-            Panel cardPair = CreateCard(0, ref yL, 496, 74, pnlContent, false);
-            Button btnShowQr = CreateFlatButton("Xem mã ghép (QR)", ColorPrimary, 16, 16, 200, 42, cardPair);
+            // Thẻ HÀNH ĐỘNG: hàng nút bridge trước, hàng ghép/journal sau; nút
+            // QR đen chủ đạo. Mọi nút đồng nhất cao 40 cho đều nhịp dọc.
+            cardPair = CreateCard(0, ref yL, 496, 120, pnlContent, false);
+
+            btnStartBridge = CreateFlatButton("Bật Bridge", ColorSuccess, 16, 14, 128, 40, cardPair);
+            btnStartBridge.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
+            btnStartBridge.Click += delegate { ActionStartBridge(); };
+
+            btnStopBridge = CreateFlatButton("Dừng", ColorDanger, 152, 14, 92, 40, cardPair);
+            btnStopBridge.Font = new Font("Segoe UI", 10f);
+            btnStopBridge.Click += delegate { ActionStopBridge(); };
+
+            btnRestartBridge = CreateFlatButton("Khởi động lại", ColorSecondary, 252, 14, 150, 40, cardPair);
+            btnRestartBridge.Font = new Font("Segoe UI", 10f);
+            btnRestartBridge.Click += delegate { ActionRestartBridge(); };
+
+            btnShowQr = CreateFlatButton("Xem mã ghép (QR)", ColorPrimary, 16, 66, 200, 40, cardPair);
             btnShowQr.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
             btnShowQr.Click += delegate { ActionShowPairingDialog(); };
 
-            Button btnOpenLogs = CreateFlatButton("Xem nhật ký", ColorSecondary, 224, 16, 180, 42, cardPair);
+            btnOpenLogs = CreateFlatButton("Xem nhật ký", ColorSecondary, 224, 66, 180, 40, cardPair);
             btnOpenLogs.Font = new Font("Segoe UI", 10f);
             btnOpenLogs.Click += delegate { ActionOpenLogs(); };
 
@@ -340,6 +354,11 @@ namespace OpenPocket.Desktop
             this.Controls.Add(pnlContent);
             this.Controls.Add(pnlHeader);
 
+            // Cân đối động: panel nội dung đổi bề rộng (lần đầu hiện form, kéo
+            // cửa sổ) là hàng nút dàn lại đầy chiều ngang — không bao giờ trở
+            // lại cảnh cụm nút lệch trái, hụt phải
+            pnlContent.Resize += delegate { RelayoutContent(); };
+
             // Icon app + khay hệ thống: X chỉ ẩn xuống khay, "Thoát hẳn" mới
             // kết thúc app (owner yêu cầu 13/09 — tắt cửa sổ mà bridge theo dõi
             // vẫn chạy nền)
@@ -378,6 +397,44 @@ namespace OpenPocket.Desktop
                 trayIcon.Visible = false;
                 trayIcon.Dispose();
             };
+        }
+
+        // Dàn lại bố cục theo bề rộng thật của panel nội dung: thẻ kéo full
+        // width, hai hàng nút chia đều hết chiều ngang (lề 16, kẽ 8). Gọi mỗi
+        // lần pnlContent Resize — Region bo góc của nút phải dựng lại theo
+        // bề rộng mới nên Round() được gọi lại ở đây.
+        private void RelayoutContent()
+        {
+            int cw = pnlContent.ClientSize.Width;
+            int inner = cw - 32;
+            if (inner < 240) return;
+
+            cardStatus.Width = cw;
+            cardPair.Width = cw;
+            lblStatusBridge.Width = inner;
+            // Ô tên máy: từ sau nhãn kéo tới đúng lề phải 16 (cân đối 2 bên)
+            txtMachineName.Width = inner - 70;
+            // Hàng tunnel chừa bề rộng cho nút Restart tunnel neo phải
+            lblStatusTunnel.Width = inner - 132;
+            lblStatusOpenWork.Width = inner;
+            lblStatusTunnelUrl.Width = inner - 16;
+            btnTunnelRestart.SetBounds(cw - 16 - 120, 100, 120, 27);
+            Round(btnTunnelRestart, 8);
+
+            int gap = 8;
+            int bw = (inner - 2 * gap) / 3;
+            btnStartBridge.SetBounds(16, 14, bw, 40);
+            btnStopBridge.SetBounds(16 + bw + gap, 14, bw, 40);
+            btnRestartBridge.SetBounds(16 + 2 * (bw + gap), 14, inner - 2 * (bw + gap), 40);
+            Round(btnStartBridge, 8);
+            Round(btnStopBridge, 8);
+            Round(btnRestartBridge, 8);
+
+            int pw = (inner - gap) / 2;
+            btnShowQr.SetBounds(16, 66, pw, 40);
+            btnOpenLogs.SetBounds(16 + pw + gap, 66, inner - pw - gap, 40);
+            Round(btnShowQr, 8);
+            Round(btnOpenLogs, 8);
         }
 
         // Mở lại cửa sổ từ khay: hiện + khôi phục nếu đang thu nhỏ + kéo lên trước
