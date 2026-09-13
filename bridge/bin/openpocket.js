@@ -9,8 +9,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createInterface } from "node:readline/promises";
-import { Writable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import { bridgeDataDir, loadConfig, saveConfig } from "../src/config.js";
 import { AUTOSTART_TASK_NAME, bridgeEntryPath, buildAutostartAction } from "../src/autostart.js";
 
@@ -25,41 +24,93 @@ function pidFile() {
 function logFile() {
   return join(bridgeDataDir(), "bridge.log");
 }
-// Một readline DUY NHẤT dùng chung cho mọi câu hỏi (tạo interface mới nhiều
-// lần trên cùng stdin sẽ mất các dòng đã vào bộ đệm của interface cũ). Output
-// là "hố đen" nên mật khẩu gõ vào không hiện — prompt viết tay ra stdout.
-// Mọi line đi qua ĐÚNG MỘT lối: có người đang chờ thì giải cho người đó, không
-// thì xếp hàng đợi — dòng bơm dồn từ stdin pipe hay gõ tay từng dòng đều không
-// rơi (dùng rl.question() thì 2 line cùng chunk làm câu hỏi sau chờ mãi).
-let _askRl = null;
+// Một bộ đọc stdin DUY NHẤT cho mọi câu hỏi, xử lý phím ở mức thô (không
+// readline): mỗi phím có phản hồi NGAY trên màn hình — dòng thường hiện chữ,
+// mật khẩu hiện thành * — Backspace xóa được, Enter xuống dòng rõ. Cụ cũ là
+// readline với output "hố đen" (để ẩn mật khẩu) nuốt LUÔN phản hồi gõ phím:
+// user gõ mà màn hình im re, Enter cũng không thấy gì, tưởng phím chết.
+// Dòng bơm dồn từ stdin pipe (script/test) vẫn ăn: chưa có người chờ thì xếp
+// hàng đợi, câu hỏi sau lấy tiếp. Ctrl+C tự thoát (raw mode không sinh
+// SIGINT), chuỗi ESC của phím mũi tên/F-key bị lọc khỏi nội dung gõ.
+const _decoder = new StringDecoder("utf8");
+let _stdinHooked = false;
+let _inputLine = "";
+let _escSkip = false;
+let _lastWasCR = false;
+let _echoMask = null; // "*" khi hỏi mật khẩu, null khi gõ hiện nguyên chữ
 const _lineQueue = [];
 let _lineWaiter = null;
-function askRl() {
-  if (!_askRl) {
-    _askRl = createInterface({
-      input: process.stdin,
-      output: new Writable({ write (_c, _e, cb) { cb(); } }),
-      terminal: true,
-    });
-    _askRl.on("line", (line) => {
-      const waiter = _lineWaiter;
-      if (waiter) {
-        _lineWaiter = null;
-        waiter(line);
-      } else {
-        _lineQueue.push(line);
-      }
+
+function hookStdin() {
+  if (_stdinHooked) return;
+  _stdinHooked = true;
+  if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
+    process.stdin.setRawMode(true);
+    // process.exit() nhảy cóc có thể bỏ qua bước dọn của node — chủ động trả
+    // console về chế độ thường kẻo shell sau khi lệnh chạy xong bị lỗi hành vi.
+    process.on("exit", () => {
+      try {
+        if (process.stdin.isTTY) process.stdin.setRawMode(false);
+      } catch {}
     });
   }
-  return _askRl;
+  process.stdin.on("data", onStdinChunk);
+  process.stdin.resume();
 }
-async function ask(text) {
+
+function deliverLine(line) {
+  const waiter = _lineWaiter;
+  if (waiter) {
+    _lineWaiter = null;
+    waiter(line);
+  } else {
+    _lineQueue.push(line);
+  }
+}
+
+function onStdinChunk(chunk) {
+  for (const ch of _decoder.write(chunk)) {
+    if (_escSkip) {
+      if (/[A-Za-z~]/.test(ch)) _escSkip = false; // byte kết thúc chuỗi ESC/CSI
+      continue;
+    }
+    if (ch === "\x1b") { _escSkip = true; continue; }
+    if (ch === "\r" || ch === "\n") {
+      if (ch === "\n" && _lastWasCR) { _lastWasCR = false; continue; } // \r\n = một Enter
+      _lastWasCR = ch === "\r";
+      const line = _inputLine;
+      _inputLine = "";
+      process.stdout.write("\n");
+      deliverLine(line);
+      continue;
+    }
+    _lastWasCR = false;
+    if (ch === "\b" || ch === "\x7f") {
+      if (_inputLine.length) {
+        _inputLine = _inputLine.slice(0, -1);
+        process.stdout.write("\b \b");
+      }
+    } else if (ch === "\x03") {
+      process.stdout.write("^C\n");
+      process.exit(130);
+    } else if (ch >= " ") {
+      _inputLine += ch;
+      process.stdout.write(_echoMask ?? ch);
+    }
+  }
+}
+
+async function ask(text, { hidden = false } = {}) {
   process.stdout.write(text);
-  askRl();
-  if (_lineQueue.length) return String(_lineQueue.shift()).trim();
-  return new Promise((resolve) => { _lineWaiter = resolve; });
+  hookStdin();
+  _echoMask = hidden ? "*" : null;
+  const line = _lineQueue.length
+    ? _lineQueue.shift()
+    : await new Promise((resolve) => { _lineWaiter = resolve; });
+  _echoMask = null;
+  return line.trim();
 }
-const askHidden = ask;
+const askHidden = (text) => ask(text, { hidden: true });
 // Mật khẩu phòng: chủ máy tự đặt; Enter để trống thì dùng mặc định 12345678 —
 // đỡ vắt óc đặt pass cho phòng dùng thử. Đổi sau bằng revoke + add.
 const DEFAULT_TENANT_PASS = "12345678";
@@ -381,7 +432,7 @@ if (cmd === "add") {
     console.log("Không tìm thấy worker/scripts/tenant.mjs cạnh thư mục bridge — chạy từ repo dự án.");
     process.exit(1);
   }
-  console.log(`Tạo phòng "${user}" — mật khẩu gõ vào sẽ KHÔNG hiện (≥8 ký tự, không dấu cách / : / &; Enter để trống = mặc định 12345678):`);
+  console.log(`Tạo phòng "${user}" — mật khẩu gõ vào sẽ hiện thành *** (≥8 ký tự, không dấu cách / : / &; Enter để trống = mặc định 12345678):`);
   const pass = await askTenantPass();
   const config = loadConfig();
   const url = process.env.OWM_WORKER_URL || config.lookupUrl;
