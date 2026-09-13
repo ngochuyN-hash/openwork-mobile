@@ -127,8 +127,8 @@ The shared worker URL is an "apartment building": anyone can open it, but each p
 Owner-side commands (run in `worker/`, requires a logged-in `wrangler`):
 
 ```bash
-openpocket add alice                       # ask for a password, then print the invite link (auto-copied)
-openpocket tenant add alice "Alice's PC"   # same, but auto-generates a strong password
+openpocket add alice                       # ask for a password (Enter = default 12345678), then print the invite link (auto-copied)
+openpocket tenant add alice "Alice's PC"   # same flow — asks for a password too (Enter = default 12345678)
 openpocket tenant list                     # list rooms
 openpocket tenant revoke alice             # delete a room (that machine loses its address-reporting slot)
 ```
@@ -180,7 +180,6 @@ cd bridge && npm test                                   # unit tests
 node bridge/scripts/e2e-live.mjs <wsId> <provider> <model>   # live E2E
 cd web && npm run dev                                   # dev server (proxies /api through the bridge)
 cd web && npm run build && cd ../worker && npx wrangler deploy # build + deploy the "fixed URL" worker (openpocket)
-cd web && npm run deploy                                # build + deploy the secondary openwork-mobile-web worker (vite-plugin, backup URL)
 cd worker && node scripts/tenant.mjs add <user> "Name"   # issue a multi-tenant room (list / revoke to manage)
 ```
 

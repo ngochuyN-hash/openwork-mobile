@@ -28,7 +28,12 @@ function logFile() {
 // Một readline DUY NHẤT dùng chung cho mọi câu hỏi (tạo interface mới nhiều
 // lần trên cùng stdin sẽ mất các dòng đã vào bộ đệm của interface cũ). Output
 // là "hố đen" nên mật khẩu gõ vào không hiện — prompt viết tay ra stdout.
+// Mọi line đi qua ĐÚNG MỘT lối: có người đang chờ thì giải cho người đó, không
+// thì xếp hàng đợi — dòng bơm dồn từ stdin pipe hay gõ tay từng dòng đều không
+// rơi (dùng rl.question() thì 2 line cùng chunk làm câu hỏi sau chờ mãi).
 let _askRl = null;
+const _lineQueue = [];
+let _lineWaiter = null;
 function askRl() {
   if (!_askRl) {
     _askRl = createInterface({
@@ -36,14 +41,45 @@ function askRl() {
       output: new Writable({ write (_c, _e, cb) { cb(); } }),
       terminal: true,
     });
+    _askRl.on("line", (line) => {
+      const waiter = _lineWaiter;
+      if (waiter) {
+        _lineWaiter = null;
+        waiter(line);
+      } else {
+        _lineQueue.push(line);
+      }
+    });
   }
   return _askRl;
 }
 async function ask(text) {
   process.stdout.write(text);
-  return (await askRl().question("")).trim();
+  askRl();
+  if (_lineQueue.length) return String(_lineQueue.shift()).trim();
+  return new Promise((resolve) => { _lineWaiter = resolve; });
 }
 const askHidden = ask;
+// Mật khẩu phòng: chủ máy tự đặt; Enter để trống thì dùng mặc định 12345678 —
+// đỡ vắt óc đặt pass cho phòng dùng thử. Đổi sau bằng revoke + add.
+const DEFAULT_TENANT_PASS = "12345678";
+async function askTenantPass() {
+  const pass = await askHidden("  Mật khẩu (Enter = dùng mặc định 12345678): ");
+  if (!pass) {
+    console.log("  → Dùng mật khẩu mặc định 12345678 (muốn đổi: revoke rồi add lại).");
+    return DEFAULT_TENANT_PASS;
+  }
+  const pass2 = await askHidden("  Nhập lại lần nữa: ");
+  if (pass !== pass2) {
+    console.log("❌ Hai lần nhập không khớp — chạy lại lệnh.");
+    process.exit(1);
+  }
+  if (pass.length < 8 || /[\s:&]/.test(pass)) {
+    console.log("❌ Mật khẩu cần ≥ 8 ký tự, không chứa dấu cách, ':' hay '&' (phải nằm gọn trong link mời).");
+    process.exit(1);
+  }
+  return pass;
+}
 function readPid() {
   try {
     const pid = Number(readFileSync(pidFile(), "utf8").trim());
@@ -313,9 +349,19 @@ if (cmd === "tenant") {
   }
   const config = loadConfig();
   const rest = args.slice(2);
-  if (sub === "add" && !rest.some((a) => /^https:\/\//i.test(a))) {
-    const url = process.env.OWM_WORKER_URL || config.lookupUrl;
-    if (url) rest.push(url.replace(/\/+$/, ""));
+  if (sub === "add" && !rest.includes("--pass")) {
+    // --pass có sẵn (đường scripted/không tương tác) thì đi thẳng, không hỏi.
+    if (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(rest[0] || "")) {
+      console.log('Dùng: openpocket tenant add <user> "Tên hiển thị" [địa-chỉ-worker]');
+      console.log("      user chỉ gồm a-z, 0-9, dấu gạch ngang (vd: nam). Mật khẩu sẽ được hỏi sau.");
+      process.exit(1);
+    }
+    if (!rest.some((a) => /^https:\/\//i.test(a))) {
+      const url = process.env.OWM_WORKER_URL || config.lookupUrl;
+      if (url) rest.push(url.replace(/\/+$/, ""));
+    }
+    const pass = await askTenantPass();
+    rest.push("--pass", pass);
   }
   const result = spawnSync(process.execPath, [script, sub, ...rest], { stdio: "inherit" });
   process.exit(result.status ?? 1);
@@ -335,17 +381,8 @@ if (cmd === "add") {
     console.log("Không tìm thấy worker/scripts/tenant.mjs cạnh thư mục bridge — chạy từ repo dự án.");
     process.exit(1);
   }
-  console.log(`Tạo phòng "${user}" — đặt mật khẩu (gõ sẽ KHÔNG hiện, tối thiểu 8 ký tự, không dấu cách / : / &):`);
-  const pass = await askHidden("  Mật khẩu: ");
-  const pass2 = await askHidden("  Nhập lại lần nữa: ");
-  if (pass !== pass2) {
-    console.log("❌ Hai lần nhập không khớp — chạy lại lệnh.");
-    process.exit(1);
-  }
-  if (pass.length < 8 || /[\s:&]/.test(pass)) {
-    console.log("❌ Mật khẩu cần ≥ 8 ký tự, không chứa dấu cách, ':' hay '&' (phải nằm gọn trong link mời).");
-    process.exit(1);
-  }
+  console.log(`Tạo phòng "${user}" — mật khẩu gõ vào sẽ KHÔNG hiện (≥8 ký tự, không dấu cách / : / &; Enter để trống = mặc định 12345678):`);
+  const pass = await askTenantPass();
   const config = loadConfig();
   const url = process.env.OWM_WORKER_URL || config.lookupUrl;
   if (!url || !/^https:\/\//i.test(url)) {
@@ -416,8 +453,8 @@ Dùng:
   openpocket code     Xem mã ghép + link mở trên điện thoại
   openpocket edge join <link-mời|worker>  Tham gia "phòng" trên worker chung (dán link mời là được, 1 lần)
   openpocket edge status                  Xem phòng đang tham gia
-  openpocket add <ten-dang-nhap> ["Tên"]  Cấp phòng cho bạn mới — tự hỏi đặt mật khẩu, xong hiện link mời
-  openpocket tenant add <user> "Tên"      Cấp phòng (mật khẩu tự sinh) + thẻ mời tự copy
+  openpocket add <ten-dang-nhap> ["Tên"]  Cấp phòng cho bạn mới — hỏi đặt mật khẩu (Enter = 12345678), xong hiện link mời
+  openpocket tenant add <user> "Tên"      Cấp phòng — hỏi đặt mật khẩu (Enter = 12345678) + thẻ mời tự copy
   openpocket tenant list                  Xem các phòng đang có
   openpocket tenant revoke <user>         Xóa phòng
   openpocket autostart --enable [--with-openwork]   Tự chạy bridge khi đăng nhập Windows
