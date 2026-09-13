@@ -1,66 +1,68 @@
+// Build bộ cài OpenPocket — MỘT file OpenPocket-Setup.exe.
+//
+// Chuỗi: stage (bridge + web/dist + OpenPocket.exe + HUONG-DAN) → zip →
+// NHÚNG zip vào exe trình cài (desktop/src/OpenPocketSetup.cs, csc /res:) →
+// OpenPocket-Setup.exe ở gốc dự án. Zip cũng được copy ra gốc làm
+// openwork-bridge-friend.zip (phương án dự phòng thủ công).
+//
+// Chạy: node desktop/build-setup.js
+// Yêu cầu: đã build desktop/bin/OpenPocket.exe trước (desktop\build.bat).
+
 const fs = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
+const { execSync, spawnSync } = require("child_process");
 
-// Build OpenPocket-Setup.cmd — a ONE-FILE installer (self-extracting batch).
-// Layout: batch header (fixed line count matters NOT — we locate the payload
-// by marker with findstr) + marker + base64'd zip of the stage dir.
+const ROOT = path.join(__dirname, "..");
+const STAGE = path.join(process.env.TEMP, "openpocket-sfx-stage");
+const ZIP = path.join(process.env.TEMP, "openpocket-package.zip");
+const OUT_EXE = path.join(ROOT, "OpenPocket-Setup.exe");
+const OUT_ZIP = path.join(ROOT, "openwork-bridge-friend.zip");
 
-// 1. Stage -> zip (ASCII entry names only, Compress-Archive would mangle diacritics)
-const ROOT = "C:\\Antigravity\\Openwork Mobile App";
-const STAGE = "C:\\Users\\user\\AppData\\Local\\Temp\\openpocket-sfx-stage";
-const ZIP = "C:\\Users\\user\\AppData\\Local\\Temp\\openpocket-package.zip";
-const OUT = process.argv[2] || "C:\\Users\\user\\AppData\\Local\\Temp\\OpenPocket-Setup.cmd";
+// 1. Stage — bố cục đúng như app đòi (OpenPocket.exe nằm cạnh bridge\, web\)
+fs.rmSync(STAGE, { recursive: true, force: true });
+fs.mkdirSync(path.join(STAGE, "bridge"), { recursive: true });
+fs.mkdirSync(path.join(STAGE, "web"), { recursive: true });
+fs.cpSync(path.join(ROOT, "bridge", "src"), path.join(STAGE, "bridge", "src"), { recursive: true });
+fs.cpSync(path.join(ROOT, "bridge", "bin"), path.join(STAGE, "bridge", "bin"), { recursive: true });
+fs.copyFileSync(path.join(ROOT, "bridge", "package.json"), path.join(STAGE, "bridge", "package.json"));
+fs.copyFileSync(path.join(ROOT, "bridge", "package-lock.json"), path.join(STAGE, "bridge", "package-lock.json"));
+fs.cpSync(path.join(ROOT, "web", "dist"), path.join(STAGE, "web", "dist"), { recursive: true });
+fs.copyFileSync(path.join(ROOT, "desktop", "bin", "OpenPocket.exe"), path.join(STAGE, "OpenPocket.exe"));
+fs.copyFileSync(path.join(ROOT, "HUONG-DAN.txt"), path.join(STAGE, "HUONG-DAN.txt"));
 
+// 2. Zip (Compress-Archive mangled tên có dấu — mọi entry giữ ASCII, đã vậy)
 execSync(
   `powershell -NoProfile -Command "Compress-Archive -Path '${STAGE}\\*' -DestinationPath '${ZIP}' -Force"`,
   { stdio: "inherit" }
 );
+fs.copyFileSync(ZIP, OUT_ZIP);
 
-// 2. zip -> base64, wrapped at 64 cols (certutil-friendly)
-const raw = fs.readFileSync(ZIP);
-const b64 = raw.toString("base64").replace(/(.{64})/g, "$1\n");
+// 3. Nhúng zip vào exe trình cài bằng csc có sẵn trong Windows
+const csc64 = "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe";
+const csc32 = "C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe";
+const csc = fs.existsSync(csc64) ? csc64 : csc32;
+const args = [
+  "/target:winexe",
+  "/optimize",
+  "/codepage:65001",
+  `/win32manifest:${path.join(ROOT, "desktop", "src", "setup.manifest")}`,
+  "/r:System.dll",
+  "/r:System.Drawing.dll",
+  "/r:System.Windows.Forms.dll",
+  "/r:System.IO.Compression.dll",
+  "/r:System.IO.Compression.FileSystem.dll",
+  "/r:Microsoft.CSharp.dll",
+  `/res:${ZIP}`,
+  `/out:${OUT_EXE}`,
+  path.join(ROOT, "desktop", "src", "OpenPocketSetup.cs"),
+];
+const build = spawnSync(csc, args, { encoding: "utf8" });
+if (build.error) throw build.error;
+if (build.status !== 0) {
+  console.error(build.stdout);
+  console.error(build.stderr);
+  process.exit(build.status || 1);
+}
 
-// 3. header (ASCII only) + marker + payload
-let hdr = "";
-hdr += "@echo off\r\n";
-hdr += "setlocal\r\n";
-hdr += "title OpenPocket Setup\r\n";
-hdr += "set \"WORK=%TEMP%\\openpocket-setup-%RANDOM%\"\r\n";
-hdr += "mkdir \"%WORK%\" >nul 2>nul\r\n";
-hdr += "set \"SCRIPT=%~f0\"\r\n";
-hdr += "for /f \"delims=:\" %%L in ('findstr /n /b \";__PAYLOAD_BELOW__\" \"%SCRIPT%\"') do set \"SKIP=%%L\"\r\n";
-hdr += "more +%SKIP% \"%SCRIPT%\" > \"%WORK%\\payload.b64\"\r\n";
-hdr += "certutil -f -decode \"%WORK%\\payload.b64\" \"%WORK%\\OpenPocket.zip\" >nul 2>nul\r\n";
-hdr += "if errorlevel 1 goto :broken\r\n";
-hdr += "powershell -NoProfile -Command \"Expand-Archive -Force '%WORK%\\OpenPocket.zip' '%WORK%'\" >nul 2>nul\r\n";
-hdr += "if not exist \"%WORK%\\OpenPocket.exe\" goto :broken\r\n";
-hdr += "set \"FINAL=%LOCALAPPDATA%\\OpenPocket\"\r\n";
-hdr += "if not \"%OPENPOCKET_TEST_DIR%\"==\"\" set \"FINAL=%OPENPOCKET_TEST_DIR%\"\r\n";
-hdr += "where node >nul 2>nul\r\n";
-hdr += "if errorlevel 1 (\r\n";
-hdr += "  start \"\" https://nodejs.org\r\n";
-hdr += "  mshta \"javascript:var sh=new ActiveXObject('WScript.Shell');sh.Popup('Chua co Node.js! Trinh duyet vua mo trang tai Node.js (ban LTS). Cai xong hay chay lai file Setup nay.',0,'OpenPocket',64);close();\"\r\n";
-hdr += "  goto :cleanup\r\n";
-hdr += ")\r\n";
-hdr += "if not exist \"%FINAL%\" mkdir \"%FINAL%\" >nul 2>nul\r\n";
-hdr += "xcopy /E /I /Y /Q \"%WORK%\\bridge\" \"%FINAL%\\bridge\" >nul 2>nul\r\n";
-hdr += "xcopy /E /I /Y /Q \"%WORK%\\web\" \"%FINAL%\\web\" >nul 2>nul\r\n";
-hdr += "copy /Y \"%WORK%\\OpenPocket.exe\" \"%FINAL%\\\" >nul 2>nul\r\n";
-hdr += "copy /Y \"%WORK%\\HUONG-DAN.txt\" \"%FINAL%\\\" >nul 2>nul\r\n";
-hdr += "powershell -NoProfile -Command \"$ws=New-Object -ComObject WScript.Shell; $p='%FINAL%\\OpenPocket.exe'; $lnk=$ws.CreateShortcut([Environment]::GetFolderPath('Programs')+'\\OpenPocket.lnk'); $lnk.TargetPath=$p; $lnk.Save(); $lnk2=$ws.CreateShortcut([Environment]::GetFolderPath('Desktop')+'\\OpenPocket.lnk'); $lnk2.TargetPath=$p; $lnk2.Save()\" >nul 2>nul\r\n";
-hdr += "echo Da cai OpenPocket xong vao: %FINAL%\r\n";
-hdr += "echo Dang mo app... (UAC hoi thi bam Yes)\r\n";
-hdr += "if \"%OPENPOCKET_TEST_DIR%\"==\"\" start \"\" \"%FINAL%\\OpenPocket.exe\"\r\n";
-hdr += "goto :cleanup\r\n";
-hdr += ":broken\r\n";
-hdr += "echo File Setup bi loi (tai chua du?) - tai lai va thu lai nhe.\r\n";
-hdr += "pause\r\n";
-hdr += "goto :eof\r\n";
-hdr += ":cleanup\r\n";
-hdr += "rd /s /q \"%WORK%\" >nul 2>nul\r\n";
-hdr += "exit /b 0\r\n";
-hdr += ";__PAYLOAD_BELOW__\r\n";
-
-fs.writeFileSync(OUT, hdr + b64 + "\r\n", "utf8");
-console.log("Setup written:", OUT, (fs.statSync(OUT).size / 1024).toFixed(0) + " KB");
+console.log("OpenPocket-Setup.exe:", (fs.statSync(OUT_EXE).size / 1024).toFixed(0) + " KB");
+console.log("openwork-bridge-friend.zip:", (fs.statSync(OUT_ZIP).size / 1024).toFixed(0) + " KB");

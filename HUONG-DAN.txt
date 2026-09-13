@@ -7,7 +7,7 @@ CẦN CHỈ 1 THỨ CÀI SẴN: Node.js 20 trở lên
   → Chưa có? Vào https://nodejs.org tải bản LTS, cài next-next là xong.
   (File setup cũng tự mở trang này giúp nếu phát hiện thiếu Node.)
 
-BƯỚC 1 — Bấm đúp:  OpenPocket-Setup.cmd
+BƯỚC 1 — Bấm đúp:  OpenPocket-Setup.exe
   → Tự cài vào máy (thư mục OpenPocket trong tài khoản Windows của bạn),
     tự tạo shortcut ngoài Desktop, tự mở app.
   (Windows hỏi "chạy hay không" / UAC hỏi Yes-No? → chọn chạy / Yes
