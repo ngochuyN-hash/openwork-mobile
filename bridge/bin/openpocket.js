@@ -1,17 +1,20 @@
 #!/usr/bin/env node
-// Lệnh toàn cục `openpocket` — điều khiển bridge như 9remote:
+// Lệnh toàn cục `openpocket` — điều khiển bridge như 9remote.
+// Sau cú rút gọn 1-PC (13/09): CLI chỉ còn việc QUẢN MÁY NÀY — hết edge join,
+// hết cấp phòng/link mời, hết hỏi mật khẩu terminal (định danh máy được cấp
+// ngầm qua GUI/POST /api/tenant/create; admin phòng hiếm hoi dùng wrangler thẳng).
 //   openpocket start    chạy bridge nền (tự sinh mã, tunnel, heartbeat)
 //   openpocket stop     dừng bridge
-//   openpocket status   xem đang chạy không + mã ghép hiện tại
+//   openpocket status   xem đang chạy không
 //   openpocket logs     xem log bridge
 //   openpocket code     in mã ghép hiện tại (30 phút) + QR
+//   openpocket autostart / watchdog / ensure — tự khởi động + máy canh
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { StringDecoder } from "node:string_decoder";
 import { bridgeDataDir, loadConfig, saveConfig } from "../src/config.js";
-import { AUTOSTART_TASK_NAME, WATCHDOG_TASK_NAME, bridgeEntryPath, buildAutostartAction } from "../src/autostart.js";
+import { AUTOSTART_TASK_NAME, WATCHDOG_TASK_NAME, bridgeEntryPath } from "../src/autostart.js";
 
 const BIN_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -23,113 +26,6 @@ function pidFile() {
 }
 function logFile() {
   return join(bridgeDataDir(), "bridge.log");
-}
-// Một bộ đọc stdin DUY NHẤT cho mọi câu hỏi, xử lý phím ở mức thô (không
-// readline): mỗi phím có phản hồi NGAY trên màn hình — dòng thường hiện chữ,
-// mật khẩu hiện thành * — Backspace xóa được, Enter xuống dòng rõ. Cụ cũ là
-// readline với output "hố đen" (để ẩn mật khẩu) nuốt LUÔN phản hồi gõ phím:
-// user gõ mà màn hình im re, Enter cũng không thấy gì, tưởng phím chết.
-// Dòng bơm dồn từ stdin pipe (script/test) vẫn ăn: chưa có người chờ thì xếp
-// hàng đợi, câu hỏi sau lấy tiếp. Ctrl+C tự thoát (raw mode không sinh
-// SIGINT), chuỗi ESC của phím mũi tên/F-key bị lọc khỏi nội dung gõ.
-const _decoder = new StringDecoder("utf8");
-let _stdinHooked = false;
-let _inputLine = "";
-let _escSkip = false;
-let _lastWasCR = false;
-let _echoMask = null; // "*" khi hỏi mật khẩu, null khi gõ hiện nguyên chữ
-const _lineQueue = [];
-let _lineWaiter = null;
-
-function hookStdin() {
-  if (_stdinHooked) return;
-  _stdinHooked = true;
-  if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
-    process.stdin.setRawMode(true);
-    // process.exit() nhảy cóc có thể bỏ qua bước dọn của node — chủ động trả
-    // console về chế độ thường kẻo shell sau khi lệnh chạy xong bị lỗi hành vi.
-    process.on("exit", () => {
-      try {
-        if (process.stdin.isTTY) process.stdin.setRawMode(false);
-      } catch {}
-    });
-  }
-  process.stdin.on("data", onStdinChunk);
-  process.stdin.resume();
-}
-
-function deliverLine(line) {
-  const waiter = _lineWaiter;
-  if (waiter) {
-    _lineWaiter = null;
-    waiter(line);
-  } else {
-    _lineQueue.push(line);
-  }
-}
-
-function onStdinChunk(chunk) {
-  for (const ch of _decoder.write(chunk)) {
-    if (_escSkip) {
-      if (/[A-Za-z~]/.test(ch)) _escSkip = false; // byte kết thúc chuỗi ESC/CSI
-      continue;
-    }
-    if (ch === "\x1b") { _escSkip = true; continue; }
-    if (ch === "\r" || ch === "\n") {
-      if (ch === "\n" && _lastWasCR) { _lastWasCR = false; continue; } // \r\n = một Enter
-      _lastWasCR = ch === "\r";
-      const line = _inputLine;
-      _inputLine = "";
-      process.stdout.write("\n");
-      deliverLine(line);
-      continue;
-    }
-    _lastWasCR = false;
-    if (ch === "\b" || ch === "\x7f") {
-      if (_inputLine.length) {
-        _inputLine = _inputLine.slice(0, -1);
-        process.stdout.write("\b \b");
-      }
-    } else if (ch === "\x03") {
-      process.stdout.write("^C\n");
-      process.exit(130);
-    } else if (ch >= " ") {
-      _inputLine += ch;
-      process.stdout.write(_echoMask ?? ch);
-    }
-  }
-}
-
-async function ask(text, { hidden = false } = {}) {
-  process.stdout.write(text);
-  hookStdin();
-  _echoMask = hidden ? "*" : null;
-  const line = _lineQueue.length
-    ? _lineQueue.shift()
-    : await new Promise((resolve) => { _lineWaiter = resolve; });
-  _echoMask = null;
-  return line.trim();
-}
-const askHidden = (text) => ask(text, { hidden: true });
-// Mật khẩu phòng: chủ máy tự đặt; Enter để trống thì dùng mặc định 12345678 —
-// đỡ vắt óc đặt pass cho phòng dùng thử. Đổi sau bằng revoke + add.
-const DEFAULT_TENANT_PASS = "12345678";
-async function askTenantPass() {
-  const pass = await askHidden("  Mật khẩu (Enter = dùng mặc định 12345678): ");
-  if (!pass) {
-    console.log("  → Dùng mật khẩu mặc định 12345678 (muốn đổi: revoke rồi add lại).");
-    return DEFAULT_TENANT_PASS;
-  }
-  const pass2 = await askHidden("  Nhập lại lần nữa: ");
-  if (pass !== pass2) {
-    console.log("❌ Hai lần nhập không khớp — chạy lại lệnh.");
-    process.exit(1);
-  }
-  if (pass.length < 8 || /[\s:&]/.test(pass)) {
-    console.log("❌ Mật khẩu cần ≥ 8 ký tự, không chứa dấu cách, ':' hay '&' (phải nằm gọn trong link mời).");
-    process.exit(1);
-  }
-  return pass;
 }
 function readPid() {
   try {
@@ -266,11 +162,10 @@ if (cmd === "status") {
     process.exit(1);
   }
   console.log(`✅ Bridge đang chạy (pid ${pid}).`);
-  try {
-    const config = loadConfig();
-    const mobilePreview = config.mobileToken ? `${config.mobileToken.slice(0, 8)}…` : "(chưa có)";
-    console.log(`   Master token: ${mobilePreview}  (QR master xem trong log)`);
-  } catch {}
+  const config = loadConfig();
+  if (config.lookupTenant) {
+    console.log(`   Phòng: ${config.lookupTenant}${config.machineName ? ` (${config.machineName})` : ""}`);
+  }
   console.log("   Chạy: openpocket code  để xem mã ghép + QR.");
   process.exit(0);
 }
@@ -423,149 +318,6 @@ if (cmd === "watchdog") {
   process.exit(0);
 }
 
-if (cmd === "edge") {
-  // Tham gia "phòng" trên worker chung (multi-tenant): cặp user/pass do chủ
-  // worker cấp, nhập 1 lần — bridge heartbeat lên phòng đó mãi về sau.
-  const sub = (args[1] || "status").toLowerCase();
-  const config = loadConfig();
-  const TENANT_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
-
-  if (sub === "join") {
-    const arg = String(args[2] ?? "").trim();
-    let workerUrl = (arg || config.lookupUrl || "").replace(/\/+$/, "");
-    let user = "";
-    let pass = "";
-    // Dán nguyên LINK MỜI (.../#i=user:secret) cũng được — tự bóc user/pass,
-    // khỏi gõ gì thêm.
-    const linkMatch = /#i=([A-Za-z0-9][A-Za-z0-9-]{0,31}):([^&\s]+)$/.exec(arg);
-    if (linkMatch) {
-      try {
-        workerUrl = new URL(arg).origin;
-      } catch {}
-      user = linkMatch[1].toLowerCase();
-      pass = linkMatch[2];
-      console.log(`Đọc được phòng "${user}" từ link mời.`);
-    }
-    if (!/^https:\/\//i.test(workerUrl)) {
-      console.log("Dùng: openpocket edge join <link-mời hoặc địa-chỉ-worker>");
-      console.log("vd:   openpocket edge join https://YOUR-WORKER.workers.dev/#i=nam:owes_xxx");
-      process.exit(1);
-    }
-
-    let name = "";
-    if (user) {
-      console.log(`Tham gia phòng trên worker: ${workerUrl}`);
-      name = await ask("Tên máy hiển thị trên web (Enter để bỏ qua): ");
-    } else {
-      console.log(`Tham gia phòng trên worker: ${workerUrl}`);
-      user = (await ask("Tên đăng nhập (mã phòng): ")).toLowerCase();
-      pass = await askHidden("Mật khẩu: ");
-      name = await ask("Tên máy hiển thị trên web (Enter để bỏ qua): ");
-    }
-    if (!TENANT_RE.test(user)) {
-      console.log("❌ Tên đăng nhập chỉ gồm a-z, 0-9 và dấu gạch ngang, 2-32 ký tự (vd: nam).");
-      process.exit(1);
-    }
-    if (!pass) {
-      console.log("❌ Chưa nhập mật khẩu.");
-      process.exit(1);
-    }
-    config.lookupUrl = workerUrl;
-    config.lookupTenant = user;
-    config.lookupSecret = pass;
-    if (name) config.machineName = name;
-    saveConfig(config);
-    console.log(`✅ Đã ghi phòng "${user}" vào config.`);
-    if (readPid()) {
-      console.log("🔁 Bridge đang chạy — khởi động lại để nhận phòng mới…");
-      const self = fileURLToPath(import.meta.url);
-      spawnSync(process.execPath, [self, "stop"], { stdio: "inherit" });
-      spawnSync(process.execPath, [self, "start"], { stdio: "inherit" });
-      console.log("   Xong! Đợi ~15s để bridge đăng ký tunnel lên worker.");
-    } else {
-      console.log("   Bridge chưa chạy — mở bằng: openpocket start");
-    }
-    process.exit(0);
-  }
-
-  if (sub === "status") {
-    const pid = readPid();
-    console.log(`Bridge     : ${pid ? `đang chạy (pid ${pid})` : "không chạy (openpocket start)"}`);
-    if (config.lookupTenant) {
-      console.log(`Phòng      : ${config.lookupTenant}${config.machineName ? ` (${config.machineName})` : ""}`);
-      console.log(`Worker     : ${config.lookupUrl}`);
-      console.log("Web        : mở worker ở trên → tab Đăng nhập, dùng cùng cặp user/pass.");
-    } else {
-      console.log("Phòng      : (không tham gia — chạy luồng máy chính machine:main)");
-      console.log("Muốn tham gia phòng: openpocket edge join <địa-chỉ-worker>");
-    }
-    process.exit(0);
-  }
-
-  console.log("Dùng: openpocket edge join <địa-chỉ-worker> | openpocket edge status");
-  process.exit(1);
-}
-
-if (cmd === "tenant") {
-  // Cấp/quản lý phòng multi-tenant mà KHÔNG cần nhớ đường dẫn script worker:
-  //   openpocket tenant add <user> "Tên hiển thị" [địa-chỉ-worker]
-  //   openpocket tenant list
-  //   openpocket tenant revoke <user>
-  // Không truyền URL worker thì tự lấy từ config máy này (lookupUrl) — máy đã
-  // heartbeat lên worker nào thì cấp phòng cho worker đó.
-  const sub = (args[1] || "list").toLowerCase();
-  const script = join(BIN_DIR, "..", "..", "worker", "scripts", "tenant.mjs");
-  if (!existsSync(script)) {
-    console.log("Không tìm thấy worker/scripts/tenant.mjs cạnh thư mục bridge — chạy từ repo dự án.");
-    process.exit(1);
-  }
-  const config = loadConfig();
-  const rest = args.slice(2);
-  if (sub === "add" && !rest.includes("--pass")) {
-    // --pass có sẵn (đường scripted/không tương tác) thì đi thẳng, không hỏi.
-    if (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(rest[0] || "")) {
-      console.log('Dùng: openpocket tenant add <user> "Tên hiển thị" [địa-chỉ-worker]');
-      console.log("      user chỉ gồm a-z, 0-9, dấu gạch ngang (vd: nam). Mật khẩu sẽ được hỏi sau.");
-      process.exit(1);
-    }
-    if (!rest.some((a) => /^https:\/\//i.test(a))) {
-      const url = process.env.OWM_WORKER_URL || config.lookupUrl;
-      if (url) rest.push(url.replace(/\/+$/, ""));
-    }
-    const pass = await askTenantPass();
-    rest.push("--pass", pass);
-  }
-  const result = spawnSync(process.execPath, [script, sub, ...rest], { stdio: "inherit" });
-  process.exit(result.status ?? 1);
-}
-
-if (cmd === "add") {
-  // openpocket add martinez  →  hỏi đặt mật khẩu → cấp phòng → hiện link mời.
-  // Chỉ CHỦ worker chạy được (cần wrangler login đúng tài khoản trên máy này).
-  const user = (args[1] || "").toLowerCase();
-  if (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(user)) {
-    console.log('Dùng: openpocket add <ten-dang-nhap> ["Tên hiển thị"]');
-    console.log("      ten-dang-nhap chỉ gồm a-z, 0-9, dấu gạch ngang (vd: martinez)");
-    process.exit(1);
-  }
-  const script = join(BIN_DIR, "..", "..", "worker", "scripts", "tenant.mjs");
-  if (!existsSync(script)) {
-    console.log("Không tìm thấy worker/scripts/tenant.mjs cạnh thư mục bridge — chạy từ repo dự án.");
-    process.exit(1);
-  }
-  console.log(`Tạo phòng "${user}" — mật khẩu gõ vào sẽ hiện thành *** (≥8 ký tự, không dấu cách / : / &; Enter để trống = mặc định 12345678):`);
-  const pass = await askTenantPass();
-  const config = loadConfig();
-  const url = process.env.OWM_WORKER_URL || config.lookupUrl;
-  if (!url || !/^https:\/\//i.test(url)) {
-    console.log("❌ Chưa biết địa chỉ worker — đặt env OWM_WORKER_URL hoặc chạy: openpocket edge status để xem.");
-    process.exit(1);
-  }
-  const nameArg = args[2] && !/^https?:/i.test(args[2]) ? [args[2]] : [];
-  const result = spawnSync(process.execPath, [script, "add", user, ...nameArg, url, "--pass", pass], { stdio: "inherit" });
-  process.exit(result.status ?? 1);
-}
-
 if (cmd === "code") {
   const { default: qrcode } = await import("qrcode-terminal");
   const config = loadConfig();
@@ -632,7 +384,7 @@ if (cmd === "code") {
   }
 
   console.log("");
-  console.log(`Địa chỉ cố định (bookmark 1 lần, dùng mãi): ${baseFixed || "chưa cấu hình (openpocket edge join)"}`);
+  console.log(`Địa chỉ cố định (bookmark 1 lần, dùng mãi): ${baseFixed || "chưa cấu hình"}`);
   process.exit(0);
 }
 
@@ -640,15 +392,9 @@ console.log(`openpocket — điều khiển OpenWork Mobile bridge
 Dùng:
   openpocket start    Chạy bridge nền (tự sinh mã, tunnel, heartbeat)
   openpocket stop     Dừng bridge
-  openpocket status   Xem bridge có chạy không
+  openpocket status   Xem bridge có chạy không + phòng
   openpocket logs     Xem log (tail 50 dòng, Ctrl+C để thoát)
-  openpocket code     Xem mã ghép + link mở trên điện thoại
-  openpocket edge join <link-mời|worker>  Tham gia "phòng" trên worker chung (dán link mời là được, 1 lần)
-  openpocket edge status                  Xem phòng đang tham gia
-  openpocket add <ten-dang-nhap> ["Tên"]  Cấp phòng cho bạn mới — hỏi đặt mật khẩu (Enter = 12345678), xong hiện link mời
-  openpocket tenant add <user> "Tên"      Cấp phòng — hỏi đặt mật khẩu (Enter = 12345678) + thẻ mời tự copy
-  openpocket tenant list                  Xem các phòng đang có
-  openpocket tenant revoke <user>         Xóa phòng
+  openpocket code     Xem mã ghép + QR quét bằng điện thoại
   openpocket autostart --enable [--with-openwork]   Tự chạy bridge khi đăng nhập Windows
   openpocket autostart --status                     Xem tự chạy đang bật hay tắt
   openpocket autostart --disable                    Tắt tự chạy

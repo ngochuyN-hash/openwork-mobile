@@ -136,15 +136,14 @@ The shared worker URL is an "apartment building": anyone can open it, but each p
 | Friend's PC | `openpocket edge join` → paste the invite link (user/pass are read from it; once, saved to config) — their bridge heartbeats into "their room" |
 | Friend's phone | Tap the invite link → signs in by itself and lands straight in the app (typing fallback: open the web → the **Sign in** form is all there is → same user/pass; a permanent key is received like a normal pair — the password is never stored on the web) |
 
-Owner-side commands (run in `worker/`, requires a logged-in `wrangler`):
+Owner-side room admin (rare; the CLI no longer carries these commands — call the script directly, requires a logged-in `wrangler`):
 
 ```bash
-openpocket add alice                       # ask for a password (Enter = auto-generates a strong random one), then print the invite link (auto-copied)
-openpocket tenant add alice "Alice's PC"   # same flow — asks for a password too (Enter = auto-generates a strong random one)
-openpocket tenant list                     # list rooms
-openpocket tenant revoke alice             # delete a room (that machine loses its address-reporting slot)
+node worker/scripts/tenant.mjs list                 # list rooms
+node worker/scripts/tenant.mjs revoke alice         # delete a room (that machine loses its address-reporting slot)
 ```
-Runs from any terminal — without an explicit worker URL it takes `lookupUrl` from this machine's bridge config (or env `OWM_WORKER_URL`). Same thing via `node worker/scripts/tenant.mjs …`.
+
+(The old `openpocket add` / `openpocket tenant add` / `openpocket edge join` CLI commands were REMOVED 13/09 with the one-PC simplification — rooms are self-serve now and the desktop exe provisions its machine silently. `worker/scripts/tenant.mjs add` still works for the owner who wants to pre-create a room by hand.)
 
 **Self-serve rooms (owner not required)**: a friend who installed the GUI never needs the owner to issue anything — the desktop app's **"Create room & connect"** button calls `POST /api/tenant/create` (open, but rate-limited 5/min/IP, rooms capped at 50, `main` reserved): type your own room name + password (≥8 chars) and the room is permanent on the KV. Re-installing the machine = type the **same name + same password** again and you're back in (exact password match reconnects; a mismatch returns the same generic 401 as sign-in). The success dialog copies a `#i=user:pass` tap-to-login link to the clipboard — send it to yourself on the phone via Zalo and tap it.
 
