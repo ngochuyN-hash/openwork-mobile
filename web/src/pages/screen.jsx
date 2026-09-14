@@ -42,21 +42,22 @@
 // v5.1: TRÀN VIỀN MẶC ĐỊNH (học 9remote) — có hình là tự phóng COVER cho ảnh phủ
 // kín khung xem (bỏ băng đen quanh, nhất là toàn màn hình máy dọc), pan để xem
 // phần tràn; đang phóng thì bỏ khung viền quanh ô ảnh + dải nút (⛶ + chip zoom)
-// gom 1 cục gọn một bên. Chip bấm = về tràn viền; véo nhỏ ra 1x = xem nguyên
-// màn hình.
+// gom 1 cục gọn một bên. Chip bấm = về bố cục mặc định; véo nhỏ ra 1x = xem
+// nguyên màn hình.
 // v5.2: TAB SCREEN = TOÀN MÀN HÌNH LUÔN (9remote không có chế độ có khung) —
 // vào tab là lớp full phủ viewport, topbar/thanh tab nằm dưới; ⤡ thu gọn về bố
 // cục khung khi cần. Bàn phím + gõ chữ ẨN sau nút ⌨ trên dải nút (mặc định
 // đóng — hình trọn viewport, hết bị cột phím che mép phải); dải nút dời sát
 // MÉP ĐÁY (vland nằm đáy-trái né cột phím xoay); banner lỗi đè mỏng trên đỉnh
 // ảnh trong full (trước đây nằm ngoài portal nên bị lớp full che mùi).
-// v5.5: DESKTOP LẤP KÍN VÙNG NHÌN (cover everywhere) — cover áp cả bố cục khung
-// lẫn toàn màn hình; isCropped() = stage không phủ ≥96% ảnh → focus-rect chỉ
-// truyền phần đang thấy (native, trần 1920) để vùng nhìn nét đúng chữ. GESTURE
-// v5.5: vuốt 1 NGÓN = CUỘN PC LUÔN (kể cả đang xem crop) và gửi kèm toạ độ ngón
-// tay để daemon đưa con trỏ tới đúng nội dung dưới ngón rồi mới xoay wheel —
-// cuộn cửa sổ nào thấy ngay cửa sổ đó; dời khung nhìn khi crop = KÉO 2 NGÓN;
-// giữ-lâu-rồi-kéo = kéo chuột PC; véo = zoom.
+// v5.5: FOCUS-RECT VÙNG NHÌN + gesture — isCropped() = stage không phủ ≥96% ảnh
+// (đang xem CROP) → focus-rect chỉ truyền phần đang thấy (native, trần 1920) để
+// vùng nhìn nét đúng chữ. GESTURE v5.5: vuốt 1 NGÓN = CUỘN PC LUÔN (kể cả đang
+// xem crop) và gửi kèm toạ độ ngón tay để daemon đưa con trỏ tới đúng nội dung
+// dưới ngón rồi mới xoay wheel — cuộn cửa sổ nào thấy ngay cửa sổ đó; dời khung
+// nhìn khi crop = KÉO 2 NGÓN; giữ-lâu-rồi-kéo = kéo chuột PC; véo = zoom.
+// v5.7: XEM TRỌN MẶC ĐỊNH (15/09) — mở tab thu gọn = contain (desktop trọn trong
+// khung, hết gọt 2 bên); ⤡ toàn màn hình = cover lấp kín (xem defaultView).
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { apiScreenInfo, owScreenInput, owScreenStream, owWebrtcIce, owWebrtcSignal } from "../api.js";
@@ -250,8 +251,8 @@ export function ScreenPage() {
       // v5.5: "đang xem CROP" (isCropped) — stage không phủ ≥96% ảnh — là lúc
       // focus-rect chỉ mã hóa VÙNG NHÌN nên master to không tốn đường: nhảy
       // thẳng lên native (trần 1920) để vùng đang thấy NÉT ĐÚNG chữ ở mọi mức
-      // zoom VÀ cả màn rộng ở 1x (xem dải desktop bị crop dọc); xem trọn desktop
-      // (kể cả thu nhỏ xuống <1x) là về feed 880 rẻ cũ.
+      // zoom (phóng tay, hay full tràn viền); xem trọn desktop (contain mặc
+      // định, kể cả thu nhỏ xuống <1x) là về feed 880 rẻ cũ.
       const img = imgRef.current, stage = stageRef.current;
       let cropped = false;
       if (img && stage) {
@@ -331,24 +332,34 @@ export function ScreenPage() {
     sendFocus(null); // hết phóng — daemon về crop vùng-đổi như cũ
     syncCapture();
   }, [syncCapture, sendFocus]);
-  // ---- TRÀN VIỀN MẶC ĐỊNH (học 9remote edge-to-edge): mở màn hình là tính
-  // cover — scale tối thiểu để ảnh phủ KÍN khung xem (bỏ băng đen quanh), pan
-  // để xem phần tràn. v5.5: áp cho CẢ compact lẫn fullscreen — vùng hiển thị
-  // luôn là desktop lấp kín (không còn khung thu nhỏ trọn desktop giữa nền), pan
-  // xem phần tràn, véo/lăn phóng thu tùy ý, focus-rect chỉ truyền phần đang thấy.
-  // Chip zoom bấm = về đây.
+  // ---- BỐ CỤC MẶC ĐỊNH: mở tab Screen = XEM TRỌN desktop (contain, 15/09 —
+  // trước v5.5 cover mọi bố cục là gọt 2 bên desktop trên khung thu gọn hẹp, user
+  // báo "không hiển thị hết"); bấm ⤡ toàn màn hình mới TRÀN VIỀN (cover, học
+  // 9remote edge-to-edge) cho desktop phủ kín màn hình. Đang phóng (véo/lăn) thì
+  // bỏ khung viền quanh ô ảnh + dải nút gom 1 cục; focus-rect chỉ truyền phần
+  // đang thấy. Chip zoom bấm = về bố cục mặc định này.
   const defaultView = useCallback(() => {
     const img = imgRef.current, stage = stageRef.current;
     if (!img || !stage || !img.width || !img.height) return;
     // Về 1x TRƯỚC khi đo: bố cục vừa đổi (fullscreen/xoay) mà zoom cũ còn dính
-    // trên transform thì rect ảnh đo nhầm theo cỡ đã phóng → cover sai.
+    // trên transform thì rect ảnh đo nhầm theo cỡ đã phóng → scale sai.
     zoomRef.current = { s: 1, x: 0, y: 0 };
     applyZoom();
     const R = img.getBoundingClientRect(), S = stage.getBoundingClientRect();
     if (R.width < 2 || R.height < 2 || S.width < 2 || S.height < 2) return;
-    const cover = Math.max(S.width / R.width, S.height / R.height);
-    if (cover <= 1.02) { resetZoom(); return; } // đã kín — giữ 1x (resetZoom đồng bộ focus/cap)
-    zoomRef.current = { s: Math.min(ZOOM_MAX, cover), x: 0, y: 0 };
+    if (fullRef.current) {
+      // Toàn màn hình: cover — scale tối thiểu cho ảnh phủ KÍN khung (bỏ băng đen).
+      const cover = Math.max(S.width / R.width, S.height / R.height);
+      if (cover <= 1.02) { resetZoom(); return; } // đã kín — giữ 1x (resetZoom đồng bộ focus/cap)
+      zoomRef.current = { s: Math.min(ZOOM_MAX, cover), x: 0, y: 0 };
+    } else {
+      // Bố cục khung: contain — scale tối đa cho desktop TRỌN trong khung (không
+      // gọt 2 bên). Khung đủ rộng (image CSS width:100%) thì giữ 1x, khung hẹp
+      // hơn ảnh theo chiều cao thì thu nhỏ đúng tỉ lệ.
+      const contain = Math.min(S.width / R.width, S.height / R.height);
+      if (contain >= 0.98) { resetZoom(); return; }
+      zoomRef.current = { s: Math.max(ZOOM_MIN, contain), x: 0, y: 0 };
+    }
     applyZoom();
     sendFocus(computeFocus());
     syncCapture();
@@ -1030,8 +1041,10 @@ export function ScreenPage() {
       return;
     }
     // idle: đi quá ngưỡng — đã "giữ" thì kéo tiếp = kéo chuột PC (down tại điểm
-    // giữ); thường thì vuốt = cuộn PC, KỂ CẢ đang xem crop (v5.5 — 1 ngón luôn
-    // cuộn nội dung dưới ngón; dời khung nhìn khi crop dùng KÉO 2 NGÓN).
+    // giữ); thường thì vuốt = cuộn PC (v5.5 — 1 ngón luôn cuộn nội dung dưới
+    // ngón). Đang xem CROP thì CHIA TRỤC: vuốt NGANG = dời khung trái/phải như
+    // cũ, vuốt DỌC = cuộn PC (Zalo lăn chat được); dời khung theo trục dọc khi
+    // crop vẫn dùng KÉO 2 NGÓN.
     const dist = Math.hypot(e.clientX - st.scx, e.clientY - st.scy);
     if (dist > SLOP) {
       clearTimeout(st.lpTimer);
@@ -1044,9 +1057,14 @@ export function ScreenPage() {
         posEcho(e.clientX, e.clientY);
         return;
       }
+      const dx = e.clientX - st.scx, dy = e.clientY - st.scy;
+      if (isCropped() && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) >= SLOP) {
+        startPan(e.clientX, e.clientY);
+        return;
+      }
       st.mode = "scroll";
       st.lastMidY = e.clientY;
-      st.accY = e.clientY - st.scy; // tính cả đoạn vừa vuốt, khỏi bỏ sót nấc đầu
+      st.accY = dy; // tính cả đoạn vừa vuốt, khỏi bỏ sót nấc đầu
     }
   };
 
