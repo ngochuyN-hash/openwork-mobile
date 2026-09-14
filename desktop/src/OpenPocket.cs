@@ -96,7 +96,7 @@ namespace OpenPocket.Desktop
             private static readonly Color CSuccess = Color.FromArgb(48, 164, 108);   // #30A46C
             private static readonly Color CSuccessHover = Color.FromArgb(240, 250, 245);
 
-            private readonly ButtonKind kind;
+            private ButtonKind kind; // SetKind() đổi kind lúc chạy (toggle dialog QR)
             private Color fill, stroke, textColor;
             private bool hover;
             // Bán kính bo góc — icon tròn để = chiều cao/2
@@ -115,6 +115,15 @@ namespace OpenPocket.Desktop
                 SetStyle(ControlStyles.AllPaintingInWmPaint |
                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
                     ControlStyles.ResizeRedraw, true);
+                ApplyLook(true);
+            }
+
+            // Đổi kind lúc chạy (dialog QR toggle "Mã 1 lần" ↔ "Mã vĩnh viễn" —
+            // trước đây nút Button đảo BackColor tay, RoundedButton tự vẽ nên
+            // phải tái áp màu qua kind)
+            public void SetKind(ButtonKind kind)
+            {
+                this.kind = kind;
                 ApplyLook(true);
             }
 
@@ -595,12 +604,6 @@ namespace OpenPocket.Desktop
         }
 
         // ================= UI HELPERS =================
-
-        // Bo góc control (Region) — WinForms không có borderRadius sẵn
-        private static void Round(Control c, int r)
-        {
-            c.Region = new Region(RoundedPath(c.Width, c.Height, r));
-        }
 
     private Panel CreateCard(int x, ref int y, int width, int height, Panel parent)
     {
@@ -1454,11 +1457,11 @@ namespace OpenPocket.Desktop
         private Label lblMasterNote;
         private TextBox txtPairUrl;
         private TextBox txtMasterUrl;
-        private Button btnCopyUrl;
-        private Button btnCopyMaster;
-        private Button btnShowLive;
-        private Button btnShowMaster;
-        private Button btnClose;
+        private MainForm.RoundedButton btnCopyUrl;
+        private MainForm.RoundedButton btnCopyMaster;
+        private MainForm.RoundedButton btnShowLive;
+        private MainForm.RoundedButton btnShowMaster;
+        private MainForm.RoundedButton btnClose;
 
         private string liveQr = "";
         private string masterQr = "";
@@ -1517,30 +1520,18 @@ namespace OpenPocket.Desktop
             this.Controls.Add(lblExpiry);
 
             // Toggle: QR mã 1 lần (30 phút) hay QR master (vĩnh viễn)
-            btnShowLive = new Button();
+            btnShowLive = new MainForm.RoundedButton(MainForm.ButtonKind.Primary);
             btnShowLive.Text = "Mã 1 lần";
             btnShowLive.Location = new Point(120, 102);
             btnShowLive.Size = new Size(130, 26);
-            btnShowLive.FlatStyle = FlatStyle.Flat;
-            btnShowLive.FlatAppearance.BorderSize = 0;
-            btnShowLive.BackColor = ColorPrimary;
-            btnShowLive.ForeColor = Color.White;
-            btnShowLive.Cursor = Cursors.Hand;
             btnShowLive.Click += delegate { ShowQr(false); };
-            Round(btnShowLive);
             this.Controls.Add(btnShowLive);
 
-            btnShowMaster = new Button();
+            btnShowMaster = new MainForm.RoundedButton(MainForm.ButtonKind.Ghost);
             btnShowMaster.Text = "⭐ Mã vĩnh viễn";
             btnShowMaster.Location = new Point(258, 102);
             btnShowMaster.Size = new Size(142, 26);
-            btnShowMaster.FlatStyle = FlatStyle.Flat;
-            btnShowMaster.FlatAppearance.BorderSize = 0;
-            btnShowMaster.BackColor = Color.FromArgb(236, 236, 238);
-            btnShowMaster.ForeColor = ColorText;
-            btnShowMaster.Cursor = Cursors.Hand;
             btnShowMaster.Click += delegate { ShowQr(true); };
-            Round(btnShowMaster);
             this.Controls.Add(btnShowMaster);
 
             // QR render ASCII (nền trắng, chữ đen — font monospace giữ khối vuông).
@@ -1575,16 +1566,11 @@ namespace OpenPocket.Desktop
             txtPairUrl.ReadOnly = true;
             this.Controls.Add(txtPairUrl);
 
-            btnCopyUrl = new Button();
+            btnCopyUrl = new MainForm.RoundedButton(MainForm.ButtonKind.Primary);
             btnCopyUrl.Text = "📋 Sao chép link ghép";
             btnCopyUrl.Location = new Point(24, 544);
             btnCopyUrl.Size = new Size(200, 30);
-            btnCopyUrl.FlatStyle = FlatStyle.Flat;
-            btnCopyUrl.FlatAppearance.BorderSize = 0;
-            btnCopyUrl.BackColor = ColorPrimary;
-            btnCopyUrl.ForeColor = Color.White;
             btnCopyUrl.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
-            btnCopyUrl.Cursor = Cursors.Hand;
             btnCopyUrl.Click += delegate {
                 if (!string.IsNullOrEmpty(livePairUrl))
                 {
@@ -1592,7 +1578,6 @@ namespace OpenPocket.Desktop
                     MessageBox.Show(this, "Đã sao chép link ghép vào bộ nhớ tạm!", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             };
-            Round(btnCopyUrl);
             this.Controls.Add(btnCopyUrl);
 
             // Master token
@@ -1613,15 +1598,10 @@ namespace OpenPocket.Desktop
             txtMasterUrl.ReadOnly = true;
             this.Controls.Add(txtMasterUrl);
 
-            btnCopyMaster = new Button();
+            btnCopyMaster = new MainForm.RoundedButton(MainForm.ButtonKind.Ghost);
             btnCopyMaster.Text = "📋 Sao chép link master";
             btnCopyMaster.Location = new Point(24, 634);
             btnCopyMaster.Size = new Size(200, 30);
-            btnCopyMaster.FlatStyle = FlatStyle.Flat;
-            btnCopyMaster.FlatAppearance.BorderSize = 0;
-            btnCopyMaster.BackColor = Color.FromArgb(236, 236, 238);
-            btnCopyMaster.ForeColor = ColorText;
-            btnCopyMaster.Cursor = Cursors.Hand;
             btnCopyMaster.Click += delegate {
                 if (!string.IsNullOrEmpty(liveMasterUrl))
                 {
@@ -1629,20 +1609,14 @@ namespace OpenPocket.Desktop
                     MessageBox.Show(this, "Đã sao chép link master!", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             };
-            Round(btnCopyMaster);
             this.Controls.Add(btnCopyMaster);
 
             // Close Button
-            btnClose = new Button();
+            btnClose = new MainForm.RoundedButton(MainForm.ButtonKind.Ghost);
             btnClose.Text = "Đóng";
             btnClose.Location = new Point(200, 668);
             btnClose.Size = new Size(120, 28);
-            btnClose.FlatStyle = FlatStyle.Flat;
-            btnClose.FlatAppearance.BorderSize = 0;
-            btnClose.BackColor = ColorCard;
-            btnClose.ForeColor = ColorText;
             btnClose.Click += delegate { this.Close(); };
-            Round(btnClose);
             this.Controls.Add(btnClose);
 
             // Lấy mã live từ bridge — SAU khi form có handle (Load event): gọi
@@ -1687,17 +1661,11 @@ namespace OpenPocket.Desktop
             string qrText = master ? masterQr : liveQr;
             lblQrRender.Text = string.IsNullOrEmpty(qrText) ? "\n\n   (chưa có QR)" : qrText;
             // Viên ĐANG CHỌN = nền đen chữ trắng; viên còn lại = nền trắng chữ đen
-            // (trước đây chỉ đảo nền, chữ cứ trắng mãi → nút đang tắt thành vô hình)
-            btnShowLive.BackColor = master ? ColorCard : ColorPrimary;
-            btnShowLive.ForeColor = master ? ColorText : Color.White;
-            btnShowMaster.BackColor = master ? ColorPrimary : ColorCard;
-            btnShowMaster.ForeColor = master ? Color.White : ColorText;
+            // RoundedButton tự vẽ màu theo kind — toggle bằng SetKind: nút ĐANG chọn là
+            // Primary (đen), nút còn lại Ghost (trắng viền nhạt)
+            btnShowLive.SetKind(master ? MainForm.ButtonKind.Ghost : MainForm.ButtonKind.Primary);
+            btnShowMaster.SetKind(master ? MainForm.ButtonKind.Primary : MainForm.ButtonKind.Ghost);
             Relayout();
-        }
-
-        private static void Round(Control c)
-        {
-            c.Region = new Region(MainForm.RoundedPath(c.Width, c.Height, 8));
         }
 
         private void FetchLiveCode(int port, string mobileToken)

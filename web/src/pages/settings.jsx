@@ -11,6 +11,7 @@ import {
   apiWakeOpenWork,
 } from "../api.js";
 import { useConfirm } from "../components/ui.jsx";
+import { PcsIcon } from "../components/icons.jsx";
 import { navigate } from "../app.jsx";
 
 export function SettingsPage({ state, onRecheck, onUnpaired }) {
@@ -143,7 +144,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
           <div>
             {devices.map((d) => (
               <div class="file-row" key={d.id} style="cursor:default">
-                <span class="icon">📱</span>
+                <span class="icon"><PcsIcon size={20} /></span>
                 <span class="name">
                   {d.label}
                   <span class="pair-hint" style="display:block">

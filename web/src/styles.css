@@ -851,6 +851,12 @@ label.field {
   padding: 4px;
   min-width: 32px;
   min-height: 32px;
+  position: relative; /* anchor ::after — vùng chạm ≥44px (skill), hình giữ 32px */
+}
+.attach-chip button::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
 }
 .composer {
   position: sticky;
@@ -881,7 +887,7 @@ label.field {
 }
 .composer .model-picker {
   margin-bottom: 6px;
-  font-size: 12px;
+  font-size: 16px; /* skill: select ≥16px — iOS zoom khi focus nếu nhỏ hơn */
   padding: 6px 8px;
 }
 /* Nút gửi morph thành nút dừng khi agent đang chạy (như ChatGPT/Gemini). */
@@ -944,7 +950,7 @@ label.field {
 .file-editor textarea {
   min-height: 50vh;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
+  font-size: 16px; /* skill: textarea ≥16px — iOS zoom khi focus */
 }
 .crumbs {
   color: var(--text-dim);
@@ -1100,6 +1106,7 @@ label.field {
   z-index: 4;
 }
 .corner-btn {
+  position: relative; /* anchor ::after mở rộng vùng chạm */
   width: 34px;
   height: 34px;
   border: none;
@@ -1114,6 +1121,13 @@ label.field {
   cursor: pointer;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+}
+/* Vùng chạm ≥44px (skill pwa-workspace-ui) — nút vẫn 34px mờ như đã duyệt,
+   ::after trong suốt loe ra ngoài thành vùng bấm thật */
+.corner-btn::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
 }
 .corner-btn:active {
   opacity: 1;
@@ -1153,6 +1167,12 @@ label.field {
 }
 .zoom-chip:active { opacity: 1; background: rgba(255, 255, 255, 0.22); }
 .zoom-chip.show { display: block; }
+/* Vùng chạm ≥44px (skill) — chip giữ 34px như duyệt, ::after loe thêm vùng bấm */
+.zoom-chip::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+}
 /* Toàn màn hình kiểu faux (Fullscreen API trên iOS chỉ dành cho <video>): cả
    cụm hình + nút góc cố định kín màn, ảnh co vừa trong vùng an toàn. Bấm nút
    góc là lớp này "mở ra" (hiệu ứng phóng nhẹ), nút góc đổi thành Thu nhỏ. */
@@ -1239,11 +1259,13 @@ label.field {
   box-shadow: 0 10px 34px rgba(0, 0, 0, 0.35);
 }
 .screen-view.vland .screen-textrow {
-  margin: 6px 0 0; /* ô nhập hàng cuối của giải */
+  margin: 0;
 }
 .screen-view.vland .screen-textrow input {
-  min-height: 34px;
-  font-size: 14px;
+  /* skill: input ≥16px (iOS zoom khi focus) + touch ≥44px — gộp 2 block từng
+     khai trùng (34px/36px, bản sau thắng) thành một */
+  min-height: 44px;
+  font-size: 16px;
 }
 /* Phím gọn lại cho vừa giải 180px (4 hàng không cần cuộn) */
 .screen-view.vland .screen-key {
@@ -1254,13 +1276,6 @@ label.field {
 .screen-view.vland .screen-row {
   gap: 4px;
   margin-bottom: 4px;
-}
-.screen-view.vland .screen-textrow {
-  margin: 0;
-}
-.screen-view.vland .screen-textrow input {
-  min-height: 36px;
-  font-size: 14px;
 }
 /* Trang Màn hình (mode thường): KHUNG XEM + NÚT CHỨC NĂNG CỐ ĐỊNH — không
    trôi theo cuộn trang. Cả trang khớp đúng một màn hình: ảnh PC chiếm phần
