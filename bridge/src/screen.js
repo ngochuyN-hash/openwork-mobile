@@ -355,10 +355,20 @@ export class ScreenService {
       this.touch();
       const dimsChanged = !this.dimsCache || this.dimsCache.width !== m.w || this.dimsCache.height !== m.h;
       this.dimsCache = { width: m.w, height: m.h };
-      // GDI luôn chụp full khung tại cỡ m.w×m.h — xem như cỡ chụp thật hiện hành.
-      this.shotDims = { width: m.w, height: m.h };
+      // v4.1.6 (review 14/09): meta phải khai cỡ DELIVERY (width viewer lớn nhất ×
+      // tỉ lệ native) chứ không phải cỡ native — gate "khung full" web
+      // (isFullFrameShot ≥95% shotW/shotH) so với mốc này, mà khung GDI luôn được
+      // resize về width viewer rồi mới nén. Khai native (2880×1800) trong khi khung
+      // gửi đi là 880×550 làm MỌI khung GDI bị loại sạch = đường fallback (VM/RDP/
+      // thiếu driver) màn đen. Khác DXGI ở chỗ mỗi viewer GDI nhận đúng width mình:
+      // cỡ khai theo viewer lớn nhất; 2 viewer khác width cùng lúc trên máy GDI là
+      // edge hiếm (mô hình 1 người dùng) — ghi nhận, không xử.
+      const dw = this.viewers.size ? Math.max(...[...this.viewers].map((v) => v.width)) : 880;
+      const dh = Math.round((dw * m.h) / m.w);
+      const shotChanged = !this.shotDims || this.shotDims.width !== dw || this.shotDims.height !== dh;
+      this.shotDims = { width: dw, height: dh };
       if (this.workerWaiters.length) for (const r of this.workerWaiters.splice(0)) r();
-      if (dimsChanged && this.viewers.size > 0) this.broadcastMeta();
+      if ((dimsChanged || shotChanged) && this.viewers.size > 0) this.broadcastMeta();
       if (!m.changed) {
         this.changedStreak = 0;
         this.unchangedStreak += 1;

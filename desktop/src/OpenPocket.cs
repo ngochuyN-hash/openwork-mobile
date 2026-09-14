@@ -355,7 +355,7 @@ namespace OpenPocket.Desktop
             this.pnlContent = pnlContent;
 
             int yL = 0;
-            cardStatus = CreateCard(0, ref yL, 496, 164, pnlContent, false);
+            cardStatus = CreateCard(0, ref yL, 496, 164, pnlContent);
             CreateCardTitle("TRẠNG THÁI KẾT NỐI", cardStatus);
 
             lblStatusBridge = CreateStatusLabel("● Bridge: Đang kiểm tra...", 16, 39, cardStatus);
@@ -402,7 +402,7 @@ namespace OpenPocket.Desktop
             // điện thoại đọc, chỉ hết chỗ trên GUI). Không cần tiêu đề khối —
             // checkbox tự giải thích.
             yL += 8;
-            cardConfig = CreateCard(0, ref yL, 496, 24, pnlContent, false);
+            cardConfig = CreateCard(0, ref yL, 496, 24, pnlContent);
             chkAutostart = new CheckBox();
             chkAutostart.Text = "Tự khởi động cùng Windows (ngầm, quyền Admin)";
             chkAutostart.ForeColor = ColorText;
@@ -418,7 +418,7 @@ namespace OpenPocket.Desktop
             // nên hạ vai + tách mép phải (ux-layout-rules 13/09: solid đỏ đứng
             // giữa hàng giật attention khỏi QR, ngang vai nút lành) — ghost
             // viền đỏ chữ đỏ trên nền trắng, khoá thì về xám như mọi nút.
-            cardPair = CreateCard(0, ref yL, 496, 120, pnlContent, false);
+            cardPair = CreateCard(0, ref yL, 496, 120, pnlContent);
 
             btnStartBridge = CreateButton("Bật Bridge", ButtonKind.SuccessGhost, 16, 14, 149, 40, cardPair);
             btnStartBridge.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
@@ -602,23 +602,12 @@ namespace OpenPocket.Desktop
             c.Region = new Region(RoundedPath(c.Width, c.Height, r));
         }
 
-    private Panel CreateCard(int x, ref int y, int width, int height, Panel parent, bool bordered)
+    private Panel CreateCard(int x, ref int y, int width, int height, Panel parent)
     {
         Panel card = new Panel();
         card.Location = new Point(x, y);
         card.Size = new Size(width, height);
         card.BackColor = ColorCard;
-        if (bordered)
-        {
-            // Viền nhạt bo tròn tự vẽ (kiểu thẻ OpenWork) + Region cắt góc
-            card.Paint += delegate(object s, PaintEventArgs e) {
-                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                using (Pen pen = new Pen(ColorCardBorder)) {
-                    e.Graphics.DrawPath(pen, RoundedPath(card.Width, card.Height, 12));
-                }
-            };
-            Round(card, 12);
-        }
         card.Padding = new Padding(12);
         parent.Controls.Add(card);
         y += height;
@@ -646,17 +635,6 @@ namespace OpenPocket.Desktop
             lbl.Size = new Size(388, 20);
             parent.Controls.Add(lbl);
             return lbl;
-        }
-
-        private void CreateFieldLabel(string text, int x, int y, Panel parent)
-        {
-            Label lbl = new Label();
-            lbl.Text = text;
-            lbl.Font = new Font("Segoe UI", 8.5f);
-            lbl.ForeColor = ColorMuted;
-            lbl.Location = new Point(x, y);
-            lbl.AutoSize = true;
-            parent.Controls.Add(lbl);
         }
 
         private RoundedButton CreateButton(string text, ButtonKind kind, int x, int y, int width, int height, Panel parent)

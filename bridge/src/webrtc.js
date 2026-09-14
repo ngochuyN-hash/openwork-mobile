@@ -181,8 +181,4 @@ export class WebRtcService {
     if (pc._viewer) { try { this.screen.removeViewer(pc._viewer); } catch {} pc._viewer = null; }
     try { pc.close(); } catch {}
   }
-
-  disposeAll() {
-    for (const pc of [...this.actors]) this.dispose(pc);
-  }
 }

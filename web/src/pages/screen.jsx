@@ -963,7 +963,7 @@ export function ScreenPage() {
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
-              onPointerCancel={onPointerUp}
+              onPointerCancel={onPointerCancel}
             />
           ) : (
             <div class="screen-placeholder" style={`aspect-ratio:${screenRatio}`}>

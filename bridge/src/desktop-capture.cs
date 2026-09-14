@@ -261,6 +261,7 @@ class DesktopCapture
     static byte[] lastPixels;   // bản cache (row-pitch layout) để vẽ con trỏ khi màn đứng yên
     static int lastPitch;
     static long lastCursorX = long.MinValue, lastCursorY = long.MinValue;
+    static long prevCursorX = long.MinValue, prevCursorY = long.MinValue; // v4.1.6: vị trí frame trước — DiffBbox union cả 2 kẻo ghost
     static long lastKeyframeMs; // đầy 2s là ép nén nguyên khung (người vào trễ tự lành)
     static volatile bool nextFull = true; // khung đầu + lệnh KEY (viewer mới) = full
     static volatile bool keyWanted = false; // KEY tới lúc màn đang im → đánh thức duplication
@@ -620,6 +621,7 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
 
                 bool contentChanged = info.LastPresentTime != 0;
                 bool cursorMoved = (info.PointerX != lastCursorX || info.PointerY != lastCursorY) && info.PointerVisible != 0;
+                prevCursorX = lastCursorX; prevCursorY = lastCursorY; // giữ vị trí cũ trước khi ghi đè — union cả 2 vùng cursor (14/09)
                 lastCursorX = info.PointerX; lastCursorY = info.PointerY;
 
                 // Copy desktop về texture riêng rồi ReleaseFrame NGAY để khung kế không kẹt.
@@ -702,13 +704,18 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
             if (R <= L) { L = 0; R = w; }
             box = new RECT { L = L, T = firstRow, R = R, B = lastRow + 1 };
         }
-        // cursor cũ/mới (tọa độ frame nhỏ)
+        // cursor cũ + mới (tọa độ frame nhỏ): cursor vẽ ở encode thread nên pixel
+        // chụp không chứa cursor — bbox phải union CẢ vị trí cũ (đã vẽ lên khung
+        // trước) lẫn mới, thiếu vị trí cũ là ghost treo tới keyframe (14/09)
         double sx = (double)w / screenW, sy = (double)h / screenH;
         int cw = Math.Max(20, (int)(GetSystemMetrics(SM_CXCURSOR) * sx)) + 6;
         int ch = Math.Max(20, (int)(GetSystemMetrics(SM_CYCURSOR) * sy)) + 6;
-        long cx = lastCursorX, cy = lastCursorY;
-        if (cx > long.MinValue)
+        long[] cxs = { prevCursorX, lastCursorX }, cys = { prevCursorY, lastCursorY };
+        for (int i = 0; i < 2; i++)
         {
+            long cx = cxs[i];
+            if (cx <= long.MinValue) continue;
+            long cy = cys[i];
             box.L = Math.Max(0, Math.Min(box.L, (int)(cx * sx) - cw));
             box.T = Math.Max(0, Math.Min(box.T, (int)(cy * sy) - ch));
             box.R = Math.Min(w, Math.Max(box.R, (int)(cx * sx) + cw));
@@ -791,18 +798,30 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                     double sx = (double)targetW / screenW, sy = (double)targetH / screenH;
                     int cw = Math.Max(20, (int)(GetSystemMetrics(SM_CXCURSOR) * sx)) + 6;
                     int ch = Math.Max(20, (int)(GetSystemMetrics(SM_CYCURSOR) * sy)) + 6;
-                    RECT cur = new RECT
+                    // v4.1.6 (14/09): cursor chạy nhưng pixel giống hệt → union CẢ vị
+                    // trí cũ lẫn mới; chỉ crop vị trí mới là vùng cursor cũ treo trên
+                    // canvas phone tới keyframe.
+                    RECT cur = new RECT { L = targetW, T = targetH, R = 0, B = 0 };
+                    long[] cxs = { prevCursorX, lastCursorX }, cys = { prevCursorY, lastCursorY };
+                    for (int i = 0; i < 2; i++)
                     {
-                        L = Math.Max(0, (int)(lastCursorX * sx) - cw), T = Math.Max(0, (int)(lastCursorY * sy) - ch),
-                        R = Math.Min(targetW, (int)(lastCursorX * sx) + cw), B = Math.Min(targetH, (int)(lastCursorY * sy) + ch),
-                    };
-                    if (focusMode)
-                    {
-                        RECT f = Intersect(fv.Value, cur);
-                        if (f.R > f.L && f.B > f.T) crop = f;
-                        else skip = true; // con trỏ nằm ngoài vùng nhìn — không gửi (đỡ băng thông)
+                        if (cxs[i] <= long.MinValue) continue;
+                        cur.L = Math.Max(0, Math.Min(cur.L, (int)(cxs[i] * sx) - cw));
+                        cur.T = Math.Max(0, Math.Min(cur.T, (int)(cys[i] * sy) - ch));
+                        cur.R = Math.Min(targetW, Math.Max(cur.R, (int)(cxs[i] * sx) + cw));
+                        cur.B = Math.Min(targetH, Math.Max(cur.B, (int)(cys[i] * sy) + ch));
                     }
-                    else crop = cur;
+                    if (cur.R > cur.L && cur.B > cur.T)
+                    {
+                        if (focusMode)
+                        {
+                            RECT f = Intersect(fv.Value, cur);
+                            if (f.R > f.L && f.B > f.T) crop = f;
+                            else skip = true; // con trỏ nằm ngoài vùng nhìn — không gửi (đỡ băng thông)
+                        }
+                        else crop = cur;
+                    }
+                    else skip = true;
                 }
             }
             prevPixels = pixels;
@@ -909,7 +928,6 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
         }
     }
 
-    static void DrawCursor(Bitmap bmp) { DrawCursorOffset(bmp, 0, 0); }
     static void DrawCursorOffset(Bitmap bmp, int offX, int offY)
     {
         CURSORINFO ci; ci.cbSize = Marshal.SizeOf(typeof(CURSORINFO)); ci.flags = 0; ci.hCursor = IntPtr.Zero; ci.ptScreenPos = new Point();
