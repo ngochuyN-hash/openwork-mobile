@@ -166,6 +166,12 @@ export class WebRtcService {
       this.screen.input(m).catch((e) => {
         try { ch.sendMessage(JSON.stringify({ t: "ierr", m: String(e.message ?? e) })); } catch {}
       });
+    } else if (m.t === "focus") {
+      // Focus-rect zoom: vùng nhìn chuẩn hóa 0..1 (m.clear = hết zoom). Viewer
+      // phải tồn tại — nếu control mở trước khi screen channel tạo xong thì bỏ;
+      // client tự gửi lại sau meta (addDcViewer bắn meta đầu khi đã có viewer).
+      const v = pc._viewer;
+      if (v) this.screen.setFocus(v, m.clear ? null : m);
     }
   }
 

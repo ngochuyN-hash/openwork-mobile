@@ -394,9 +394,14 @@ export async function owWebrtcSignal(payload) {
  * Nối stream frame màn hình từ bridge. Mỗi frame trên đường truyền là
  * [4 byte độ dài][1 byte type][payload]: 0 = màn đứng yên, 1 = JPEG,
  * 2 = meta JSON, 3 = lỗi JSON. Promise kết thúc khi server ngắt hoặc signal abort.
+ * focus: {x,y,w,h} chuẩn hóa 0..1 của khung chụp — zoom sâu qua HTTP (dự phòng)
+ * chỉ gửi vùng nhìn ngay từ lúc nối; bỏ qua khi null (không zoom).
  */
-export async function owScreenStream({ w = 880, q = 55, signal, onFrame, onMeta, onUnchanged, onError }) {
-  const res = await fetch(`/api/screen/stream?w=${w}&q=${q}`, { headers: authHeaders(), signal });
+export async function owScreenStream({ w = 880, q = 55, focus = null, signal, onFrame, onMeta, onUnchanged, onError }) {
+  const fq = focus && typeof focus.w === "number"
+    ? `&f=${encodeURIComponent(JSON.stringify(focus))}`
+    : "";
+  const res = await fetch(`/api/screen/stream?w=${w}&q=${q}${fq}`, { headers: authHeaders(), signal });
   if (res.status === 401) throw new Error("UNPAIRED");
   if (!res.ok || !res.body) {
     const p = await res.json().catch(() => null);

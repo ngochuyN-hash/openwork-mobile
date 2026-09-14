@@ -257,6 +257,9 @@ export class ScreenService {
           }
           if (this.workerWaiters.length) for (const r of this.workerWaiters.splice(0)) r();
           if (this.viewers.size && (screenChanged || shotChanged)) this.broadcastMeta();
+          // Focus-rect: cỡ chụp vừa đổi (zoom sâu nới master) → quy đổi lại rect
+          // từ chuẩn hóa 0..1 sang px theo cỡ MỚI, đừng để daemon crop sai toạ độ.
+          this.syncDaemonFocus?.();
         },
         onError: (msg) => {
           // daemon chết giữa phiên: báo + chạy GDI thay ngay
@@ -287,10 +290,11 @@ export class ScreenService {
     }
     if (this.viewers.size) this.broadcast(FRAME_JPEG, jpeg);
     // viewer tham số khác (zoom) vẫn nhận khung này hiển thị co giãn CSS,
-    // nhưng tối ưu: nếu viewer muốn width lớn hơn đang chạy → nới daemon
+    // nhưng tối ưu: nới daemon theo width lớn nhất đang xem và THU NHỎ lại khi
+    // không ai cần nữa (về 1x trả lại 880 rẻ cũ — van 15% chống nhảy tới lui).
     let maxW = 0, maxQ = 0;
     for (const v of this.viewers) { if (v.width > maxW) { maxW = v.width; maxQ = v.quality; } }
-    if (maxW && (maxW > this.dxgi.width || maxQ !== this.dxgi.quality)) {
+    if (maxW && (maxW > this.dxgi.width || maxQ !== this.dxgi.quality || maxW * 1.15 < this.dxgi.width)) {
       this.dxgi.reconfigure(maxW, maxQ);
     }
   }
@@ -445,7 +449,7 @@ export class ScreenService {
   }
 
   // ----------------------------------------------------------------- stream
-  addViewer(req, res, { w, q }) {
+  addViewer(req, res, { w, q, focus }) {
     if (!this.available) {
       res.writeHead(503, { "content-type": "application/json" });
       res.end(JSON.stringify({ code: "screen_unavailable", message: this.setupError ?? "Chỉ hỗ trợ Windows" }));
@@ -456,9 +460,11 @@ export class ScreenService {
       res.end(JSON.stringify({ code: "too_many_viewers", message: `Tối đa ${MAX_VIEWERS} người xem cùng lúc` }));
       return;
     }
-    const width = Math.min(1600, Math.max(320, Math.round(Number(w) || 880)));
+    // 1920 = native màn FHD — zoom sâu cần master đủ to cho vùng nhìn nét
+    // (trần 1600 cũ làm ảnh nhòe từ ~2.2x; 4K chưa hỗ trợ — tránh readback nặng).
+    const width = Math.min(1920, Math.max(320, Math.round(Number(w) || 880)));
     const quality = Math.min(85, Math.max(30, Math.round(Number(q) || 55)));
-    const viewer = { res, width, quality, alive: true };
+    const viewer = { res, width, quality, alive: true, focus: focus ?? null };
 
     res.writeHead(200, {
       "content-type": "application/octet-stream",
@@ -468,6 +474,7 @@ export class ScreenService {
     this.viewers.add(viewer);
     req.on("close", () => this.removeViewer(viewer));
     res.on("error", () => this.removeViewer(viewer));
+    this.syncDaemonFocus();
 
     // Meta báo ngay cỡ khung chụp web sẽ nhận (shotDims nếu pipeline đã chạy;
     // chưa chạy thì báo width viewer đã xin, shotH = 0 — meta tiếp theo từ daemon
@@ -501,12 +508,14 @@ export class ScreenService {
     }
     const viewer = {
       dc: true, ctl, scr,
-      width: Math.min(1600, Math.max(320, Math.round(Number(w) || 880))),
+      width: Math.min(1920, Math.max(320, Math.round(Number(w) || 880))),
       quality: Math.min(85, Math.max(30, Math.round(Number(q) || 55))),
       alive: true,
+      focus: null,
     };
     this.viewers.add(viewer);
     scr.onClosed(() => this.removeViewer(viewer));
+    this.syncDaemonFocus();
     const dshot = this.shotDims ? { width: this.shotDims.width, height: this.shotDims.height } : { width: viewer.width, height: 0 };
     this.sendTo(viewer, FRAME_META, Buffer.from(JSON.stringify({
       screenW: this.dimsCache?.width ?? 0,
@@ -539,7 +548,56 @@ export class ScreenService {
     if (!viewer || !this.viewers.has(viewer)) return;
     viewer.alive = false;
     this.viewers.delete(viewer);
-    if (this.viewers.size === 0) this.scheduleIdleStop();
+    if (this.viewers.size === 0) {
+      this.scheduleIdleStop();
+    } else {
+      // Viewer còn lại có thể là người đang phóng — áp lại focus cho daemon.
+      this.syncDaemonFocus();
+    }
+  }
+
+  /**
+   * Focus-rect zoom (học 9remote set-focus): viewer đang phóng báo vùng nhìn
+   * (chuẩn hóa 0..1 CỦA KHUNG CHỤP — client tính từ rect ảnh nên độc lập với cỡ
+   * master). Bridge giữ chuẩn hóa, quy đổi px theo shotDims HIỆN HÀNH mỗi lần
+   * áp — meta đổi cỡ (zoom sâu nới master) là áp lại tự động không cần phone.
+   */
+  setFocus(viewer, rect) {
+    if (!viewer || !this.viewers.has(viewer)) return;
+    const ok = rect && typeof rect.x === "number" && typeof rect.y === "number"
+      && typeof rect.w === "number" && typeof rect.h === "number"
+      && rect.w > 0 && rect.w <= 1 && rect.h > 0 && rect.h <= 1;
+    viewer.focus = ok ? { x: rect.x, y: rect.y, w: rect.w, h: rect.h } : null;
+    this.syncDaemonFocus();
+  }
+
+  /**
+   * Đồng bộ trạng thái FOCUS của daemon theo tập viewer hiện hành. Crop daemon
+   * là TOÀN CỤC (1 luồng JPEG cho mọi viewer) nên chỉ bật khi đúng 1 viewer và
+   * người đó đang phóng; từ viewer thứ 2 trở đi hạ về full để họ không nhận
+   * vùng cắt của người khác (thực tế 1 phone 1 viewer).
+   */
+  syncDaemonFocus() {
+    if (!this.dxgi || !this.dxgi.proc || !this.shotDims) return;
+    const list = [...this.viewers];
+    const focused = list.filter((v) => v.focus);
+    try {
+      if (focused.length === 1 && list.length === 1) {
+        const f = focused[0].focus;
+        const s = this.shotDims;
+        const clamp01 = (v) => Math.min(1, Math.max(0, Number(v) || 0));
+        const x = Math.round(clamp01(f.x) * (s.width - 1));
+        const y = Math.round(clamp01(f.y) * (s.height - 1));
+        const w = Math.max(8, Math.round(clamp01(f.w) * s.width));
+        const h = Math.max(8, Math.round(clamp01(f.h) * s.height));
+        this.dxgi.setFocus({ x, y, w, h });
+        // Master phải đủ to cho vùng nhìn nét (native, trần 1920) — nới khi thiếu.
+        const need = Math.min(1920, this.dimsCache?.width ?? 1920);
+        if (this.dxgi.width < need) this.dxgi.reconfigure(need, focused[0].quality);
+      } else {
+        this.dxgi.setFocus(null);
+      }
+    } catch {}
   }
 
   sendTo(viewer, type, payload) {

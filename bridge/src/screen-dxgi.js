@@ -2,7 +2,7 @@
 // chụp màn hình GPU-direct: DWM đã pha khung sẵn, daemon mượn khung đó qua
 // duplication, thu nhỏ TRÊN GPU bằng shader, nén JPEG song song 2 thread.
 // Giao thức stdout: [4B BE len][1B type][payload] — 0=đứng yên 1=JPEG 2=meta 3=lỗi.
-// stdin (dòng): PING | START|<w>|<q> | STOP | QUIT
+// stdin (dòng): PING | START|<w>|<q> | STOP | KEY | FOCUS|<x>|<y>|<w>|<h> | FOCUSOFF | QUIT
 //
 // Daemon chết/không khởi tạo được (máy ảo, thiếu GPU driver, RDP) → caller tự
 // rơi về đường GDI worker cũ (screen-capture.worker.js) — không gì vỡ.
@@ -161,6 +161,21 @@ export class DxgiCaptureService {
   /** Xin khung FULL kế tiếp (viewer vừa vào cần nền nguyên khung, đừng chờ keyframe 2s). */
   requestKey() {
     try { this.proc?.stdin.write("KEY\n"); } catch {}
+  }
+
+  /**
+   * Focus-rect zoom (học 9remote): rect px theo khung chụp hiện hành — daemon
+   * chỉ mã hóa vùng đang nhìn. null = tắt, trả về crop vùng-đổi như cũ.
+   */
+  setFocus(rect) {
+    if (!this.proc || this.dead) return;
+    try {
+      if (rect) {
+        this.proc.stdin.write(`FOCUS|${Math.round(rect.x)}|${Math.round(rect.y)}|${Math.round(rect.w)}|${Math.round(rect.h)}\n`);
+      } else {
+        this.proc.stdin.write("FOCUSOFF\n");
+      }
+    } catch {}
   }
 
   async stop() {

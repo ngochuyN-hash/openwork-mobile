@@ -32,6 +32,11 @@
 // STUN công khai giúp xuyên NAT; thất bại thì tự lùi về stream HTTP như cũ.
 // Lệnh gõ phím không còn chờ hồi âm (fire-and-forget) — gõ liền tay không
 // khóa nút; badge hiện ping thật đo trên datachannel.
+// v5.0: FOCUS-RECT ZOOM (học 9remote set-focus) — đang phóng thì phone báo vùng
+// đang nhìn (chuẩn hóa 0..1) cho bridge; daemon nới master = native (trần 1920)
+// và CHỈ mã hóa vùng đó ∩ vùng đổi: zoom sâu NÉT hơn trần 1600 cũ (nhòe từ
+// ~2.2x) mà băng thông chỉ bằng phần màn đang xem. Pan → focus chạy theo
+// (throttle 180ms); về 1x → clear + master thu về 880 rẻ cũ.
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { apiScreenInfo, owScreenInput, owScreenStream, owWebrtcIce, owWebrtcSignal } from "../api.js";
@@ -193,15 +198,64 @@ export function ScreenPage() {
     capTimer.current = setTimeout(() => {
       const s = zoomRef.current.s;
       if (s <= 1.02) { setCapW((w) => (w === 880 ? w : 880)); return; }
-      const need = Math.min(1600, nativeWRef.current, Math.round((880 * s) / 80) * 80);
+      // Focus-rect chỉ mã hóa VÙNG NHÌN nên master to không tốn đường — nhảy
+      // thẳng lên native (trần 1920) để vùng nhìn NÉT ĐÚNG chữ ở mọi mức zoom
+      // (công thức 880×zoom cũ vừa thừa ở zoom nhỏ vừa thiếu ở zoom sâu).
+      const need = Math.min(1920, nativeWRef.current);
       setCapW((w) => (need > w * 1.15 || need < w * 0.8 ? Math.max(880, need) : w));
     }, 350);
   }, []);
+  // ---- FOCUS-RECT ZOOM (học 9remote set-focus): đang phóng thì báo cho bridge
+  // vùng đang nhìn (chuẩn hóa 0..1 CỦA KHUNG CHỤP — độc lập cỡ master) để daemon
+  // chỉ mã hóa + gửi đúng vùng đó ở độ nét native thay vì nửa cái màn hình.
+  const focusRef = useRef(null); // rect gần nhất — HTTP nối lại (viewer MỚI) đọc để chèn query
+  const panFocusTimer = useRef(0); // pan đang zoom: gửi focus theo nhịp, không spam
+  const computeFocus = useCallback(() => {
+    const z = zoomRef.current;
+    if (z.s <= 1.02) return null;
+    const img = imgRef.current, stage = stageRef.current;
+    if (!img || !stage) return null;
+    const R = img.getBoundingClientRect(), S = stage.getBoundingClientRect();
+    if (R.width < 2 || R.height < 2) return null;
+    // Vùng STAGE lọt vào ảnh đã scale+translate → về tọa độ nội dung (canvas)
+    // theo từng trục; scale tự triệt tiêu (cả offset lẫn cỡ đều chia cho s).
+    const vxL = Math.max(R.left, S.left), vxR = Math.min(R.right, S.right);
+    const vyT = Math.max(R.top, S.top), vyB = Math.min(R.bottom, S.bottom);
+    if (vxR <= vxL || vyB <= vyT) return null;
+    const clamp01 = (v) => Math.min(1, Math.max(0, v));
+    let nxL, nxR, nyT, nyB;
+    if (vlandRef.current) {
+      // ảnh xoay 90°: trục nội dung đổi chỗ như normXY
+      nxL = clamp01((vyT - R.top) / R.height); nxR = clamp01((vyB - R.top) / R.height);
+      nyT = clamp01((R.right - vxR) / R.width); nyB = clamp01((R.right - vxL) / R.width);
+    } else {
+      nxL = clamp01((vxL - R.left) / R.width); nxR = clamp01((vxR - R.left) / R.width);
+      nyT = clamp01((vyT - R.top) / R.height); nyB = clamp01((vyB - R.top) / R.height);
+    }
+    const x = Math.min(nxL, nxR), xx = Math.max(nxL, nxR);
+    const y = Math.min(nyT, nyB), yy = Math.max(nyT, nyB);
+    if (xx - x < 0.02 || yy - y < 0.02) return null;
+    return { x, y, w: xx - x, h: yy - y };
+  }, []);
+  const sendFocus = useCallback((rect) => {
+    focusRef.current = rect;
+    const ctl = ctlRef.current;
+    if (ctl && ctl.readyState === "open") {
+      try { ctl.send(JSON.stringify(rect ? { t: "focus", ...rect } : { t: "focus", clear: true })); } catch {}
+    }
+    // HTTP (dự phòng, không có control channel): rect đi qua query LÚC NỐI LẠI —
+    // focusRef được effect stream đọc mỗi khi capW đổi; pan giữa phiên không tới.
+  }, []);
+  const resyncFocus = useCallback(() => {
+    if (zoomRef.current.s <= 1.02) return;
+    sendFocus(computeFocus()); // nối lại viewer MỚI / meta đổi cỡ — báo lại vùng nhìn
+  }, [sendFocus, computeFocus]);
   const resetZoom = useCallback(() => {
     zoomRef.current = { s: 1, x: 0, y: 0 };
     applyZoom();
+    sendFocus(null); // hết phóng — daemon về crop vùng-đổi như cũ
     syncCapture();
-  }, [syncCapture]);
+  }, [syncCapture, sendFocus]);
   // Biên dời pan theo 1 trục: ảnh DÀI hơn khung thì được trượt tới khi mép ảnh
   // chạm mép khung (không lộ nền), ảnh NGẮN hơn thì kẹp giữa không cho trôi.
   const panBounds = (sz, st, bc) =>
@@ -353,6 +407,7 @@ export function ScreenPage() {
           await owScreenStream({
             w: capW,
             q,
+            focus: focusRef.current, // viewer MỚI: chèn vùng nhìn nếu đang phóng
             signal: abort.signal,
             onFrame: (payload) => {
               frameCount += 1;
@@ -367,6 +422,7 @@ export function ScreenPage() {
               }
               if (meta.screenW > 0 && meta.screenH > 0) screenDimsRef.current = { width: meta.screenW, height: meta.screenH };
               setInfo((i) => (i ? { ...i, screen: { width: meta.screenW, height: meta.screenH } } : i));
+              resyncFocus(); // nối lại = viewer mới — báo lại vùng nhìn (nếu đang phóng)
             },
             onError: (m) => setErrorMsg(m),
           });
@@ -396,7 +452,7 @@ export function ScreenPage() {
       clearInterval(fpsTimer);
       setStatus("paused");
     };
-  }, [info?.available, paused, capW, wrtc, pushFrame]);
+  }, [info?.available, paused, capW, wrtc, pushFrame, resyncFocus]);
 
   // ---- WebRTC P2P: frame + lệnh đi datachannel NỐI THẲNG phone<->PC — bridge
   // chỉ làm mối SDP/ICE đúng một lượt, sau đó đường hình không qua tunnel/worker
@@ -475,6 +531,7 @@ export function ScreenPage() {
             }
             if (m.screenW > 0 && m.screenH > 0) screenDimsRef.current = { width: m.screenW, height: m.screenH };
             setInfo((i) => (i ? { ...i, screen: { width: m.screenW, height: m.screenH } } : i));
+            resyncFocus(); // hello đổi cỡ master / kết nối mới — báo lại vùng nhìn
           }
           else if (m.t === "pong") setPing(Math.max(0, Math.round(performance.now() - m.ts)));
           else if (m.t === "ierr") setErrorMsg(m.m);
@@ -514,7 +571,7 @@ export function ScreenPage() {
         setStatus("paused");
       }
     };
-  }, [info?.available, paused, attempt, pushFrame]);
+  }, [info?.available, paused, attempt, pushFrame, resyncFocus]);
 
   // Zoom sâu đổi độ nét (capW) → báo bridge đổi cỡ ảnh trên datachannel luôn,
   // không phải dựng lại kết nối như đường HTTP.
@@ -551,6 +608,7 @@ export function ScreenPage() {
   // lỡ routes đi khi còn toàn màn hình thì nhả khoá xoay + thoát fullscreen.
   useEffect(() => () => {
     clearTimeout(capTimer.current);
+    if (panFocusTimer.current) { clearTimeout(panFocusTimer.current); panFocusTimer.current = 0; }
     try { screen.orientation?.unlock?.(); } catch {}
     try { if (document.fullscreenElement) void document.exitFullscreen(); } catch {}
   }, []);
@@ -607,7 +665,7 @@ export function ScreenPage() {
   const WHEEL_STEP = 24; // ngón đi được từng này px thì cuộn một nấc
   const PINCH_PX = 12; // hai ngón nở/thu được từng này px thì tính là véo (zoom)
   const SCROLL_GATE = 14; // hai ngón trượt được từng này px thì tính là cuộn
-  const ZOOM_MAX = 3; // trần zoom — ảnh gốc 880px, phóng quá là vỡ nét
+  const ZOOM_MAX = 3; // trần zoom — master nới tới native (1920) + focus-rect nên 3x vẫn nét
 
   const onPointerDown = (e) => {
     const n = normXY(e.clientX, e.clientY);
@@ -726,6 +784,13 @@ export function ScreenPage() {
       const py = Math.min(Math.max(st.ply0 + (e.clientY - st.panSY), st.plminY), st.plmaxY);
       zoomRef.current = { s: z.s, x: px, y: py };
       applyZoom();
+      // rect chạy theo pan như 9remote set-focus — gửi theo nhịp, không spam
+      if (!panFocusTimer.current) {
+        panFocusTimer.current = setTimeout(() => {
+          panFocusTimer.current = 0;
+          sendFocus(computeFocus());
+        }, 180);
+      }
       return;
     }
     if (st.mode === "press") {
@@ -782,6 +847,7 @@ export function ScreenPage() {
         // véo về ~1x là về nguyên vị trí giữa, khỏi lệch nửa chừng
         if (zoomRef.current.s <= 1.02) { zoomRef.current = { s: 1, x: 0, y: 0 }; applyZoom(); }
         syncCapture(); // tay vừa buông: cân lại độ nét ảnh stream theo zoom
+        sendFocus(computeFocus()); // về 1x = clear; đang phóng = báo vùng nhìn cho daemon
         st.mode = "idle";
       } else st.mode = "pinch-end"; // ngón còn lại: bỏ qua tới khi nhấc hết
       return;

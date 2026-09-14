@@ -483,9 +483,22 @@ async function handleRequest(req, res) {
         if (!Number.isFinite(n) || n <= 0) return fallback;
         return Math.min(max, Math.max(min, Math.round(n)));
       };
+      // Focus-rect zoom qua đường HTTP DỰ PHÒNG (không có control channel): vùng
+      // nhìn chuẩn hóa 0..1 đóng gói JSON — áp ngay cho viewer kết nối này.
+      let focus = null;
+      const fq = url.searchParams.get("f");
+      if (fq) {
+        try {
+          const f = JSON.parse(fq);
+          if (f && Number.isFinite(f.x) && Number.isFinite(f.y) && Number.isFinite(f.w) && Number.isFinite(f.h)) {
+            focus = { x: f.x, y: f.y, w: f.w, h: f.h };
+          }
+        } catch {}
+      }
       screen.addViewer(req, res, {
         w: clamp(url.searchParams.get("w"), 320, 1920, 880),
         q: clamp(url.searchParams.get("q"), 30, 90, 55),
+        focus,
       });
       return;
     }

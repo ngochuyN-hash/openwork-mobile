@@ -12,7 +12,14 @@
 // chéo với AutoHotkey ScreenBuffer (Map=14, CopyResource=47, DuplicateOutput=22)
 // — khai báo sai 1 slot là crash native, KHÔNG sửa thứ tự khi chưa kiểm chứng.
 //
-// stdin (dòng lệnh): PING | START|<width>|<quality> | STOP | QUIT
+// stdin (dòng lệnh): PING | START|<width>|<quality> | STOP | KEY |
+//   FOCUS|<x>|<y>|<w>|<h> | FOCUSOFF | QUIT
+// Focus-rect zoom (học 9remote set-focus): khi phone đang PHÓNG, chỉ mã hóa +
+// gửi vùng đang nhìn (crop = focus ∩ vùng đổi) — băng thông = đúng vùng nhìn
+// dù master to = native (1920) để vùng đó nét thật; keyframe 2s trong focus
+// cũng chỉ tươi cả vùng nhìn, không phải cả màn native. FOCUSOFF trả về crop
+// vùng-đổi như cũ. Tọa độ theo khung chụp HIỆN HÀNH (targetW×targetH) — bridge
+// quy đổi từ chuẩn hóa 0..1 rồi gửi lại mỗi khi meta đổi cỡ.
 // stdout: nhị phân khung [4B BE len][1B type][payload]
 //   0 = đứng yên (rỗng) · 1 = JPEG · 2 = meta JSON · 3 = lỗi JSON
 // Máy yếu / máy ảo / thiếu GPU driver: daemon trả lỗi -> node tự rơi về
@@ -263,6 +270,9 @@ class DesktopCapture
     static volatile bool streaming = false;
     static volatile bool quitting = false;
     static volatile bool pendingReconfigure = false;
+    // Focus-rect zoom: vùng đang nhìn (targetW×targetH, chuẩn bị intersect với
+    // vùng đổi mỗi nhịp). null = tắt — crop vùng-đổi như cũ.
+    static RECT? focusRect = null;
     static Stream stdout;
     static object stdoutLock = new object();
 
@@ -321,11 +331,31 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                 continue;
             }
             if (line == "KEY") { nextFull = true; keyWanted = true; continue; } // viewer mới vào — khung kế nén full
+            if (line.StartsWith("FOCUS|"))
+            {
+                // Focus-rect zoom: vùng nhìn do phone báo (px, khung chụp hiện hành).
+                // nextFull + keyWanted = khung kế tươi cả vùng nhìn dù màn đang im
+                // (re-dup như KEY); biên được intersect với khung thật mỗi nhịp chụp.
+                string[] p = line.Split('|');
+                try
+                {
+                    int fx = int.Parse(p[1]), fy = int.Parse(p[2]), fw = int.Parse(p[3]), fh = int.Parse(p[4]);
+                    if (fw > 0 && fh > 0)
+                    {
+                        focusRect = new RECT { L = fx, T = fy, R = fx + fw, B = fy + fh };
+                        nextFull = true;
+                        keyWanted = true;
+                    }
+                }
+                catch { }
+                continue;
+            }
+            if (line == "FOCUSOFF") { focusRect = null; nextFull = true; continue; }
             if (line.StartsWith("START|"))
             {
                 string[] p = line.Split('|');
                 int w = targetW, q = quality;
-                if (p.Length >= 2) w = Math.Max(320, Math.Min(1600, int.Parse(p[1])));
+                if (p.Length >= 2) w = Math.Max(320, Math.Min(1920, int.Parse(p[1])));
                 if (p.Length >= 3) q = Math.Max(30, Math.Min(85, int.Parse(p[2])));
                 // Tạo texture là việc của capture thread (đụng D3D chung) —
                 // main thread chỉ ghi ý định, vòng chụp áp đầu nhịp kế.
@@ -628,6 +658,15 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
         }
     }
 
+    /** Giao của 2 hình chữ nhật — trả về 0,0,0,0 khi rời nhau (gọi nhiều lần/nhịp). */
+    static RECT Intersect(RECT a, RECT b)
+    {
+        int l = Math.Max(a.L, b.L), t = Math.Max(a.T, b.T);
+        int r = Math.Min(a.R, b.R), btm = Math.Min(a.B, b.B);
+        if (r <= l || btm <= t) return new RECT { L = 0, T = 0, R = 0, B = 0 };
+        return new RECT { L = l, T = t, R = r, B = btm };
+    }
+
     /**
      * Vùng ĐỔI giữa 2 frame nhỏ (driver này KHÔNG trả metadata dirty rects —
      * AMD trả TotalMetadataBufferSize=0, dính thật 13/09 — nên tự so như 9remote,
@@ -716,19 +755,35 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
             finally { ctx.Unmap(staging, 0); }
             while (encodeQueue.Count >= 3) { EncodeJob drop; encodeQueue.TryDequeue(out drop); }
             RECT? crop = null;
+            bool skip = false; // biến đổi nhưng NGOÀI vùng nhìn — không cần nén/gửi gì
             long nowMs = Environment.TickCount;
+            // Focus-rect: vùng nhìn giới hạn trong khung thật (bridge có thể gửi
+            // rect tính theo cỡ cũ khi daemon đang đổi cỡ — chống tràn biên).
+            RECT? fv = null;
+            if (focusRect != null)
+            {
+                RECT f = Intersect(focusRect.Value, new RECT { L = 0, T = 0, R = targetW, B = targetH });
+                if (f.R > f.L && f.B > f.T) fv = f;
+            }
+            bool focusMode = fv != null;
             if (nextFull || nowMs - lastKeyframeMs >= 2000)
             {
                 nextFull = false;
                 lastKeyframeMs = nowMs;
+                if (focusMode) crop = fv; // keyframe trong focus = tươi cả vùng nhìn, không phải cả màn native
             }
             else if (prevPixels != null && prevPixels.Length == pixels.Length)
             {
                 RECT c = DiffBbox(prevPixels, pixels, lastPitch, targetW, targetH);
                 if (c.R > c.L && c.B > c.T)
                 {
-                    // vùng đổi quá lớn (video toàn màn) → full luôn, khỏiCrop overhead
-                    if ((long)(c.R - c.L) * (c.B - c.T) * 10 < 6L * targetW * targetH) crop = c;
+                    if (focusMode)
+                    {
+                        RECT f = Intersect(fv.Value, c);
+                        if (f.R > f.L && f.B > f.T) crop = f;
+                        else skip = true; // mọi thay đổi đều ngoài vùng đang nhìn (video ở màn bên)
+                    }
+                    else if ((long)(c.R - c.L) * (c.B - c.T) * 10 < 6L * targetW * targetH) crop = c;
                 }
                 // R==L == 0: hai frame giống hệt (chỉ cursor vẽ CPU) — coi như crop cursor
                 else if (lastCursorX > long.MinValue)
@@ -736,15 +791,22 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                     double sx = (double)targetW / screenW, sy = (double)targetH / screenH;
                     int cw = Math.Max(20, (int)(GetSystemMetrics(SM_CXCURSOR) * sx)) + 6;
                     int ch = Math.Max(20, (int)(GetSystemMetrics(SM_CYCURSOR) * sy)) + 6;
-                    crop = new RECT
+                    RECT cur = new RECT
                     {
                         L = Math.Max(0, (int)(lastCursorX * sx) - cw), T = Math.Max(0, (int)(lastCursorY * sy) - ch),
                         R = Math.Min(targetW, (int)(lastCursorX * sx) + cw), B = Math.Min(targetH, (int)(lastCursorY * sy) + ch),
                     };
+                    if (focusMode)
+                    {
+                        RECT f = Intersect(fv.Value, cur);
+                        if (f.R > f.L && f.B > f.T) crop = f;
+                        else skip = true; // con trỏ nằm ngoài vùng nhìn — không gửi (đỡ băng thông)
+                    }
+                    else crop = cur;
                 }
             }
             prevPixels = pixels;
-            encodeQueue.Enqueue(new EncodeJob { Pixels = pixels, Crop = crop });
+            if (!skip) encodeQueue.Enqueue(new EncodeJob { Pixels = pixels, Crop = crop });
             return true;
         }
         finally { Marshal.Release(tex); }
