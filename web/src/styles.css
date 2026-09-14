@@ -1172,11 +1172,13 @@ label.field {
   position: absolute;
   inset: -5px;
 }
-/* Toàn màn hình tràn viền (padding đã bỏ) — nút nổi phải tự né notch/home-bar
-   (safe-area), không nằm dưới vùng cắt của máy. */
+/* Toàn màn hình tràn viền (padding đã bỏ) — v5.2: dải nút ĐÁY-PHẢI sát mép dưới
+   (full là mặc định nên hình là chính, phần trên để nguyên cho ảnh), bù
+   safe-area cho notch/home-bar của máy. */
 .view-full .stage-corner {
-  top: calc(8px + env(safe-area-inset-top));
-  right: calc(8px + env(safe-area-inset-right));
+  top: auto;
+  right: calc(10px + env(safe-area-inset-right));
+  bottom: calc(10px + env(safe-area-inset-bottom));
 }
 /* Tràn viền kiểu 9remote khi ĐANG PHÓNG: bỏ khung viền + bo góc quanh ô ảnh —
    nội dung phủ kín, không còn "khung" như app. Ở 1x (xem nguyên màn hình) giữ
@@ -1193,11 +1195,25 @@ label.field {
   right: calc(10px + env(safe-area-inset-right));
   bottom: calc(10px + env(safe-area-inset-bottom));
 }
-/* Trong virtual-landscape (máy dọc toàn màn hình) cột phải là bàn phím xoay 90°
-   phủ kín chiều cao — dải nút dời SANG TRÁI nằm trên cột ảnh, không bị phím đè. */
-.screen-view.vland.zoomed .stage-corner {
+/* Virtual-landscape (máy dọc toàn màn hình): dải nút nằm ĐÁY-TRÁI trên cột ảnh
+   (v5.2 — áp cho MỌI trạng thái full, không chỉ lúc phóng) để khi ⌨ bật, cột
+   phím xoay 90° bên phải không đè mất nút. */
+.screen-view.vland .stage-corner {
   right: auto;
   left: calc(10px + env(safe-area-inset-left));
+}
+/* Banner lỗi trong lớp full: đè MỎNG trên đỉnh ảnh, không đẩy layout (stage
+   phải giữ nguyên kích thước cho cover-zoom). */
+.view-full .screen-banners {
+  position: absolute;
+  top: calc(8px + var(--sat));
+  left: calc(8px + var(--sal));
+  right: calc(8px + var(--sar));
+  z-index: 6;
+}
+.view-full .screen-banners .banner {
+  margin: 0;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
 }
 
 /* Toàn màn hình kiểu faux (Fullscreen API trên iOS chỉ dành cho <video>): cả

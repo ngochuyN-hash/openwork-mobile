@@ -42,6 +42,12 @@
 // phần tràn; đang phóng thì bỏ khung viền quanh ô ảnh + dải nút (⛶ + chip zoom)
 // gom 1 cục gọn một bên. Chip bấm = về tràn viền; véo nhỏ ra 1x = xem nguyên
 // màn hình.
+// v5.2: TAB SCREEN = TOÀN MÀN HÌNH LUÔN (9remote không có chế độ có khung) —
+// vào tab là lớp full phủ viewport, topbar/thanh tab nằm dưới; ⤡ thu gọn về bố
+// cục khung khi cần. Bàn phím + gõ chữ ẨN sau nút ⌨ trên dải nút (mặc định
+// đóng — hình trọn viewport, hết bị cột phím che mép phải); dải nút dời sát
+// MÉP ĐÁY (vland nằm đáy-trái né cột phím xoay); banner lỗi đè mỏng trên đỉnh
+// ảnh trong full (trước đây nằm ngoài portal nên bị lớp full che mùi).
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { apiScreenInfo, owScreenInput, owScreenStream, owWebrtcIce, owWebrtcSignal } from "../api.js";
@@ -50,6 +56,7 @@ import { isFullFrameShot } from "../lib/fullframe.js";
 import {
   ExpandIcon,
   Icon,
+  KeyboardIcon,
   SendIcon,
 } from "../components/icons.jsx";
 
@@ -85,13 +92,34 @@ export function ScreenPage() {
   const [fps, setFps] = useState(0);
   const [hasFrame, setHasFrame] = useState(false); // canvas đã có khung đầu
   const [text, setText] = useState("");
-  const [full, setFull] = useState(false); // toàn màn hình kiểu faux (áp dụng mọi trình duyệt)
+  // v5.2: mặc định TOÀN MÀN HÌNH — vào tab là lớp full phủ kín viewport (faux
+  // CSS, áp dụng mọi trình duyệt); ⤡ thu gọn về bố cục khung khi cần.
+  const [full, setFull] = useState(true);
+  const userCollapsedRef = useRef(false); // user vừa TỰ bấm thu gọn → mở lại app đừng tự bật full
+  const [keysOn, setKeysOn] = useState(false); // full: bàn phím ẩn sau nút ⌨, bấm mới trượt lên
   const [capW, setCapW] = useState(880); // bề rộng ảnh stream — tăng theo zoom để giữ nét
   const [wrtc, setWrtc] = useState(null); // null | trying | active | failed — đường truyền hình
   const [ping, setPing] = useState(0); // RTT đo trên datachannel (chỉ khi WebRTC active)
   const [attempt, setAttempt] = useState(0); // tăng = thử lại cả hai đường kết nối
 
   const imgRef = useRef(null);
+  const paintedRef = useRef(false); // canvas đã vẽ hình thật chưa — meta không được resize đè
+  const pendingBmpRef = useRef(null); // bitmap chờ canvas mount (khung đầu tới sớm hơn hasFrame)
+  const snapRef = useRef(null); // bản sao canvas tại khung FULL mới nhất — để phục hồi khi remount
+  // Ref callback của canvas: chạy ĐÚNG lúc canvas gắn vào cây (mỗi lần ⤡↔full là
+  // portal↔inline = remount, canvas mới ra đời với buffer 300×150 trống) — vẽ TRẢ
+  // bản sao chụp tại khung FULL gần nhất, trước cả effect cover nên cover được đo
+  // trên ảnh thật. useCallback([]) để Preact không gọi lại mỗi render (vẽ đè mất
+  // các crop mới hơn snapshot).
+  const attachCanvas = useCallback((c) => {
+    imgRef.current = c;
+    if (!c) return;
+    const s = snapRef.current;
+    if (!s || !s.width) return;
+    if (c.width !== s.width || c.height !== s.height) { c.width = s.width; c.height = s.height; }
+    c.getContext("2d").drawImage(s, 0, 0);
+    paintedRef.current = true;
+  }, []);
   const viewRef = useRef(null); // .screen-view — đối tượng Fullscreen API thật
   const stageRef = useRef(null); // .screen-stage — đo kích thước cho ảnh xoay
 
@@ -343,6 +371,14 @@ export function ScreenPage() {
     const cw = c && c.width > 2 ? c.width : 300, ch = c && c.height > 2 ? c.height : 150;
     return w * h >= 0.9 * cw * ch;
   }, [expShotDims]);
+  // Bản sao nội dung canvas hiện tại sang canvas lưu bền (chỉ gọi tại khung
+  // FULL — crop không cần, phục hồi thiếu vài crop tự lành bởi keyframe ~2s).
+  const snapCanvas = (c) => {
+    let s = snapRef.current;
+    if (!s) s = snapRef.current = document.createElement("canvas");
+    if (s.width !== c.width || s.height !== c.height) { s.width = c.width; s.height = c.height; }
+    s.getContext("2d").drawImage(c, 0, 0);
+  };
   // Ghép khung lên canvas — dùng CHUNG cho cả hai đường truyền. Payload từ v4.1:
   // [2B x][2B y][2B w][2B h] LE + JPEG — vùng đổi vẽ ĐÈ đúng chỗ, vùng đứng yên
   // giữ nguyên trên canvas (không phải truyền lại như <img> src nguyên khung).
@@ -374,23 +410,56 @@ export function ScreenPage() {
       try {
         const bmp = await createImageBitmap(new Blob([raw ? u8 : u8.subarray(8)], { type: "image/jpeg" }));
         const c = imgRef.current;
-        if (c) {
-          const fw = w || bmp.width, fh = h || bmp.height;
-          if (full && (c.width !== fw || c.height !== fh)) {
-            c.width = fw; // resize tự xóa canvas — chỉ khung full từ gốc
-            c.height = fh;
-          }
-          c.getContext("2d").drawImage(bmp, x, y, fw, fh);
+        if (!c) {
+          // Khung đầu tới TRƯỚC khi canvas mount (placeholder còn hiển thị thì
+          // hasFrame còn false): GIỮ bitmap, effect [hasFrame] dưới vẽ bù ngay
+          // khi canvas gắn vào. Vứt thì khung đầu mất hẳn — màn PC đang im
+          // không bao giờ có khung sau để vẽ nữa → canvas đen trơ (14/09,
+          // lộ hẳn khi vào tab là full-by-default trên màn đứng yên).
+          pendingBmpRef.current?.close?.();
+          pendingBmpRef.current = bmp;
+          setHasFrame(true);
+          return;
         }
+        const fw = w || bmp.width, fh = h || bmp.height;
+        if (full && (c.width !== fw || c.height !== fh)) {
+          c.width = fw; // resize tự xóa canvas — chỉ khung full từ gốc
+          c.height = fh;
+        }
+        c.getContext("2d").drawImage(bmp, x, y, fw, fh);
+        paintedRef.current = true;
+        if (full) snapCanvas(c);
         bmp.close?.();
         setHasFrame(true);
       } catch {}
     });
   }, [isFullFrame]);
-  // Meta đổi cỡ ảnh (zoom sâu v3.0 / kết nối mới) — canvas theo cỡ mới.
+  // Vẽ bù bitmap đã chờ ngay sau khi canvas mount xong (chỉ khung ĐẦU TIÊN rơi
+  // vào đường này — luôn là khung full làm nền cho các crop về sau). Vẽ xong gọi
+  // lại defaultView vì effect cover đã chạy TRƯỚC đó trên canvas còn trống.
+  useEffect(() => {
+    if (!hasFrame) return;
+    const bmp = pendingBmpRef.current;
+    if (!bmp) return;
+    pendingBmpRef.current = null;
+    const c = imgRef.current;
+    if (!c) { bmp.close?.(); return; }
+    if (c.width !== bmp.width || c.height !== bmp.height) { c.width = bmp.width; c.height = bmp.height; }
+    c.getContext("2d").drawImage(bmp, 0, 0);
+    paintedRef.current = true;
+    snapCanvas(c);
+    bmp.close?.();
+    defaultView();
+  }, [hasFrame, defaultView]);
+  // Meta đổi cỡ ảnh (zoom sâu v3.0 / kết nối mới) — canvas theo cỡ mới. CHỈ fit
+  // canvas còn TRỐNG (chưa vẽ khung nào): meta báo cỡ CHỤP native, đang phiên
+  // thì buffer phải theo cỡ DELIVERED của khung FULL gần nhất — resize đè giữa
+  // chừng là xoá sạch hình (FOCUSOFF sau ⤡ thu gọn gửi meta 1920×1200, canvas
+  // 880×550 vừa phục hồi thành trắng/mờ cho tới khung full kế — 14/09).
   const fitCanvas = useCallback((w, h) => {
     const c = imgRef.current;
-    if (c && w > 0 && h > 0 && (c.width !== w || c.height !== h)) { c.width = w; c.height = h; }
+    if (paintedRef.current || !c || w <= 0 || h <= 0) return;
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
   }, []);
   const ctlRef = useRef(null); // datachannel "control" khi WebRTC active
   const wrtcRef = useRef(null); // mirror của wrtc cho effect (không stale)
@@ -618,11 +687,14 @@ export function ScreenPage() {
     setFull(false);
   }, []);
 
-  // Ẩn app thì ngắt stream cho đỡ pin/3G, quay lại thì nối tiếp; thoát faux-full khi ẩn.
+  // Ẩn app thì ngắt stream cho đỡ pin/3G, quay lại thì nối tiếp; thoát faux-full
+  // khi ẩn. Quay lại thì TỰ VÀO LẠI full (mặc định tràn màn hình) — trừ khi user
+  // vừa TỰ bấm thu gọn thì tôn trọng bố cục khung.
   useEffect(() => {
     const onVis = () => {
       setPaused(document.hidden);
       if (document.hidden) exitFull();
+      else if (!userCollapsedRef.current) setFull(true);
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
@@ -929,7 +1001,8 @@ export function ScreenPage() {
   // Gọi trong effect SAU khi portal mount xong (bấm xong element được dời sang
   // body — fullscreen phần tử cũ rồi tháo ra là tự thoát ngay).
   const toggleFull = () => {
-    if (full) { exitFull(); return; }
+    if (full) { userCollapsedRef.current = true; exitFull(); return; }
+    userCollapsedRef.current = false;
     setFull(true);
   };
   useEffect(() => {
@@ -966,17 +1039,38 @@ export function ScreenPage() {
     setAttempt((a) => a + 1);
   }, []);
 
+  // Banner lỗi dùng ở CẢ HAI bố cục: mode thường nằm đầu trang như cũ; mode
+  // full thì nằm trong viewNode (lớp portal) đè mỏng trên đỉnh ảnh — trước đây
+  // banner ở ngoài portal nên vào full là bị che mùi, đang lỗi mà không thấy.
+  const banners = (
+    <>
+      {unavailable && (
+        <Banner kind="warn">
+          Máy tính không xem/điều khiển màn hình được: {info.message || "chỉ hỗ trợ Windows"}.
+        </Banner>
+      )}
+      {errorMsg && status === "error" && (
+        <Banner kind="err" actionLabel="Thử lại" onAction={reconnect}>
+          {errorMsg}
+        </Banner>
+      )}
+    </>
+  );
+
   // Layer toàn màn hình render qua PORTAL ra document.body: vài trình duyệt
   // (iOS Safari…) biến position:fixed thành "absolute" khi tổ tiên có
   // filter/backdrop-filter — portal thì layer luôn bám viewport, phủ kín máy nào
   // cũng đúng. Mode thường viewNode nằm nguyên trong trang như cũ.
   const viewNode = (
     <div ref={viewRef} class={`screen-view ${full ? "view-full " : ""}${vland ? "vland" : ""}`}>
+        {full && (unavailable || (errorMsg && status === "error")) ? (
+          <div class="screen-banners">{banners}</div>
+        ) : null}
         {/* stage tự ôm cao đúng ảnh (hết band đen); placeholder tự giữ tỉ lệ */}
         <div ref={stageRef} class="screen-stage">
           {hasFrame ? (
             <canvas
-              ref={imgRef}
+              ref={attachCanvas}
               class="screen-img control"
               draggable={false}
               style={vland && vbox ? {
@@ -1002,8 +1096,10 @@ export function ScreenPage() {
             </div>
           )}
           <span ref={echoRef} class="touch-echo" aria-hidden="true" />
-          {/* Nút MỜ góc trên-phải: toàn màn hình ↔ thu nhỏ. Bàn phím + gõ chữ
-              KHÔNG cần nút — toàn màn hình thì 2 panel luôn hiển thị ở cột phải. */}
+          {/* Dải nút nổi GỐC ĐÁY trong full (v5.2): ⛶/⤡ toàn màn hình + ⌨ bàn
+              phím (chỉ ở full — mode thường panel hiển thị sẵn dưới ảnh) + chip
+              zoom. Bàn phím mặc định ẪN: hình trọn viewport, bấm ⌨ mới trượt
+              lên (vland = cột phải xoay 90°, thường = overlay đáy). */}
           <div class="stage-corner">
             <button
               class="corner-btn"
@@ -1013,6 +1109,16 @@ export function ScreenPage() {
             >
               {full ? <CollapseIcon size={17} /> : <ExpandIcon size={17} />}
             </button>
+            {full && (
+              <button
+                class={`corner-btn${keysOn ? " on" : ""}`}
+                onClick={() => setKeysOn((v) => !v)}
+                aria-label={keysOn ? "Ẩn bàn phím" : "Bàn phím"}
+                aria-pressed={keysOn}
+              >
+                <KeyboardIcon size={17} />
+              </button>
+            )}
             {/* Chip zoom GOM CHUNG 1 dải với nút toàn màn hình (9remote: cụm nút
                 gọn 1 bên khi phóng, không rời rạc 2 góc). Bấm là về tràn viền
                 mặc định — véo nhỏ ra 1x vẫn còn đó để xem nguyên màn hình. */}
@@ -1026,8 +1132,10 @@ export function ScreenPage() {
           </div>
         </div>
 
-        {/* Gõ chữ + bàn phím GỘP MỘT KHUNG luôn hiển thị: mode thường nằm dưới
-            ảnh, toàn màn hình thì CSS dựng thành cột phải xoay 90°. */}
+        {/* Gõ chữ + bàn phím GỘP MỘT KHUNG: mode thường nằm dưới ảnh (luôn
+            hiện); full thì CHỈ hiện khi ⌨ bật — CSS dựng thành cột phải xoay 90°
+            (vland) hoặc overlay đáy (thường). */}
+        {(!full || keysOn) && (
         <div class="screen-panel screen-panel-main">
             <div class="screen-row">
               {COMBOS.map((c) => (
@@ -1063,21 +1171,13 @@ export function ScreenPage() {
             </button>
           </form>
         </div>
+        )}
       </div>
   );
 
   return (
     <div class="screen-page">
-      {unavailable && (
-        <Banner kind="warn">
-          Máy tính không xem/điều khiển màn hình được: {info.message || "chỉ hỗ trợ Windows"}.
-        </Banner>
-      )}
-      {errorMsg && status === "error" && (
-        <Banner kind="err" actionLabel="Thử lại" onAction={reconnect}>
-          {errorMsg}
-        </Banner>
-      )}
+      {!full && banners}
       {full ? createPortal(viewNode, document.body) : viewNode}
 
       <div class="screen-bar">
