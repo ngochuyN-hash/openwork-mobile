@@ -112,10 +112,16 @@ h3 {
   max-width: 720px;
   width: 100%;
   margin: 0 auto;
+  overflow-x: clip; /* tab Screen tràn khổ 100vw — chặn thanh cuộn ngang giả */
 }
 
 .view.no-nav {
   padding-bottom: var(--sp-6);
+}
+/* Tab Screen: trang tự quản chiều cao (100dvh−154) — trừ bớt đệm đáy 108 của
+   .view cho khớp số, không thì #app trượt dài ~26px gây thanh cuộn rác. */
+.view:has(> .screen-page) {
+  padding-bottom: calc(82px + var(--sab));
 }
 
 /* ---------- Top bar: logo lục giác chính chủ + title ---------- */
@@ -1350,7 +1356,13 @@ label.field {
    hình, nền TRẮNG như app (user chốt: đen chìm quá). Ảnh là thẻ tối trên
    trắng, gõ chữ + bàn phím GỘP MỘT KHUNG trắng gọn dock dưới đáy. */
 .screen-page {
-  height: calc(100dvh - 190px);
+  /* v5.4: TRÀN KHỎI cột 720px của .view — vùng hiển thị rộng bằng đúng CỬA SỔ
+     trên MỌI thiết bị (full-bleed: margin-left 50%−50vw đưa mép về 0 viewport),
+     không còn "khung bó" riêng cho điện thoại. Cao = viewport trừ topbar +
+     khoảng nav nổi → khối phím ép sát đáy như app, trang không cuộn. */
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  height: calc(100dvh - 154px);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -1361,7 +1373,10 @@ label.field {
   min-height: 0;
 }
 .screen-page .screen-stage {
-  flex: none;
+  /* v5.4: đầy TẤT CẢ khoảng trống topbar → khối phím trên mọi thiết bị
+     (trước đây chỉ điện thoại dọc được hưởng — laptop rơi về bố cục cũ). */
+  flex: 1;
+  min-height: 0;
   margin: 0;
 }
 /* Badge thành chip nhỏ góc trên-trái của ảnh */
@@ -1372,9 +1387,11 @@ label.field {
   margin: 0;
   z-index: 6;
 }
-/* Khung chức năng GỘP (gõ chữ + phím) trắng gọn, dock đáy */
+/* Khung chức năng GỘP (gõ chữ + phím) trắng gọn, dock đáy. v5.4: rộng bằng
+   vùng nhìn nhưng chặn 760px canh giữa — màn siêu rộng không dàn nút trôi. */
 .screen-page .screen-panel-main {
-  margin: 10px var(--sp-3) 8px;
+  width: min(760px, calc(100% - 24px));
+  margin: 10px auto 8px;
   margin-top: auto;
   padding: 10px;
 }
@@ -1390,11 +1407,13 @@ label.field {
 .screen-page .screen-panel-main .screen-key {
   min-height: 38px;
 }
-/* Điện thoại XOAY NGANG — trang Màn hình tự thành "player" như YouTube tự lật
-   ngang, KHÔNG cần bấm toàn màn hình: hình bên trái, thanh chức năng đứng dọc
-   bên phải, panel tự mở nổi góc dưới-trái (chủ động mở mới có, tắt là hết).
-   Toàn màn hình (.view-full) dùng chung bố cục này, chỉ thêm nền đen kín. */
-@media (orientation: landscape) {
+/* Điện thoại XOAY NGANG / tablet cảm ứng — trang Màn hình tự thành "player" như
+   YouTube tự lật ngang, KHÔNG cần bấm toàn màn hình: hình bên trái, thanh chức
+   năng nổi góc dưới-trái (chủ động mở mới có, tắt là hết). v5.4: CHỈ thiết bị
+   CHẠM (pointer: coarse) mới ăn bố cục player này — laptop/desktop màn ngang
+   giờ đi bố cục dọc chuẩn phía trên (vùng hiển thị tràn hết cửa sổ, wheel =
+   zoom), không còn bị nhốt player cũ chặn max-height ảnh. */
+@media (orientation: landscape) and (pointer: coarse) {
   .screen-view {
     flex-direction: row;
     align-items: stretch;
@@ -1621,19 +1640,5 @@ a {
 @media (prefers-reduced-motion: reduce) {
   .pc-dot.checking {
     animation: none;
-  }
-}
-
-/* v5.3 — DỌC (máy dọc cảm ứng/màn hẹp — cùng media query của portraitMobile
-   trong screen.jsx): STAGE trải hết khoảng topbar → khối phím (NỀN APP
-   bao quanh KHUNG desktop), KHUNG 1x = trọn desktop giữa canvas, khối phím ép
-   sát thanh tab (~8-10px). Ngang giữ nguyên bố cục player cũ. */
-@media (orientation: portrait) and ((pointer: coarse) or (max-width: 520px)) {
-  .screen-page {
-    height: calc(100dvh - 154px); /* 190 cũ → phím xuống sát thanh tab */
-  }
-  .screen-page .screen-stage {
-    flex: 1;
-    min-height: 0;
   }
 }

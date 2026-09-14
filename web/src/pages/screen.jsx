@@ -161,8 +161,6 @@ export function ScreenPage() {
   // closure stale của render đầu, 14/09: nhánh dọc 1x không bao giờ chạy).
   const fullRef = useRef(full);
   fullRef.current = full;
-  const portraitMobileRef = useRef(portraitMobile);
-  portraitMobileRef.current = portraitMobile;
   useEffect(() => {
     if (!vland) { setVbox(null); return; }
     // rAF bị throttle trên vài môi trường (PWA nền/IAB) — đo bằng ResizeObserver
@@ -303,16 +301,30 @@ export function ScreenPage() {
   }, [syncCapture, sendFocus]);
   // ---- TRÀN VIỀN MẶC ĐỊNH (học 9remote edge-to-edge): mở màn hình là tính
   // cover — scale tối thiểu để ảnh phủ KÍN khung xem (bỏ băng đen quanh), pan
-  // để xem phần tràn. Mode thường ảnh vốn đã kín khung (cover ~1) nên giữ 1x;
-  // toàn màn hình máy dọc cover lên vài lần — đó chính là "mức tối ưu" mà
-  // người dùng tự nhiên cần để đọc chữ/click ô nhỏ. Chip zoom bấm = về đây.
+  // để xem phần tràn. Mode thường (v5.4) = FIT trọn desktop trong vùng nhìn;
+  // toàn màn hình cover lên vài lần — đó chính là "mức tối ưu" mà người dùng
+  // tự nhiên cần để đọc chữ/click ô nhỏ. Chip zoom bấm = về đây.
   const defaultView = useCallback(() => {
     const img = imgRef.current, stage = stageRef.current;
     if (!img || !stage || !img.width || !img.height) return;
-    // v5.3: compact DỌC mặc định = 1x — KHUNG TRỌN desktop (đúng "kích thước
-    // như hiện tại"); chỉ toàn màn hình mới cover tràn viền (v5.1). Khung quanh
-    // là nền thẻ hiện tại, không chuyển đen. Đọc qua REF (closure stale).
-    if (!fullRef.current && portraitMobileRef.current) { resetZoom(); return; }
+    // v5.4: compact MỌI THIẾT BỊ (điện thoại lẫn laptop/desktop) mặc định = FIT —
+    // khung co vừa để THẤY TRỌN desktop trong vùng nhìn; điện thoại dọc vùng rộng
+    // hơn cao nên fit trùng 1x (đúng "kích thước như hiện tại" v5.3), màn rộng
+    // (laptop) fit theo CHIỀU CAO — desktop nguyên vẹn giữa nền app, muốn to hơn
+    // thì véo/lăn. Chỉ toàn màn hình mới cover tràn viền (v5.1). Đọc qua REF.
+    if (!fullRef.current) {
+      zoomRef.current = { s: 1, x: 0, y: 0 };
+      applyZoom();
+      const R0 = img.getBoundingClientRect(), S0 = stage.getBoundingClientRect();
+      if (R0.width < 2 || R0.height < 2 || S0.width < 2 || S0.height < 2) return;
+      const fit = Math.min(S0.width / R0.width, S0.height / R0.height);
+      if (fit >= 0.995) { resetZoom(); return; } // 1x đã vừa — giữ nguyên
+      zoomRef.current = { s: Math.max(ZOOM_MIN, fit), x: 0, y: 0 };
+      applyZoom();
+      sendFocus(computeFocus());
+      syncCapture();
+      return;
+    }
     // Về 1x TRƯỚC khi đo: bố cục vừa đổi (fullscreen/xoay) mà zoom cũ còn dính
     // trên transform thì rect ảnh đo nhầm theo cỡ đã phóng → cover sai.
     zoomRef.current = { s: 1, x: 0, y: 0 };
@@ -333,6 +345,16 @@ export function ScreenPage() {
   // Đổi bố cục (bật/tắt toàn màn hình, xoay ảo, đo lại khung) hay khung đầu tiên
   // về là ÁP LẠI tràn viền — ảnh theo bố cục mới, không giữ zoom lệch chỗ cũ.
   useEffect(() => { defaultView(); }, [full, portraitMobile, vbox, hasFrame, defaultView]);
+  // Cửa sổ đổi cỡ trên MÁY TÍNH (kéo giãn, split-screen): tính lại fit cho khung
+  // bám vùng nhìn. Điện thoại thì ĐỪNG — bàn phím ảo mở cũng phát resize, con
+  // trỏ fit lại là xoá mất zoom người dùng đang giữ.
+  useEffect(() => {
+    if (!window.matchMedia?.("(pointer: fine)").matches) return;
+    let t = 0;
+    const onR = () => { clearTimeout(t); t = setTimeout(defaultView, 150); };
+    window.addEventListener("resize", onR);
+    return () => { clearTimeout(t); window.removeEventListener("resize", onR); };
+  }, [defaultView]);
 
   // Gesture trên hình, kiểu màn cảm ứng: chạm = click · giữ lâu rồi nhả =
   // Right-click · GIỮ RỒI KÉO = kéo chuột (drag) · vuốt 1 ngón = cuộn PC ·
@@ -784,6 +806,38 @@ export function ScreenPage() {
   const ZOOM_MIN = 0.5; // sàn zoom — v5.3: kéo ra để KHUNG thu nhỏ dưới khớp (desktop vẫn trọn, băng nền quanh)
   const ZOOM_MAX = 4; // trần zoom — cover tràn viền máy dọc cần ~3.5-4x cho kín khung; focus-rect + master native giữ nét tới trần này
 
+  // ---- LĂN CHUỘT = ZOOM KHUNG (v5.4 — máy tính/laptop không véo được): wheel
+  // thường lẫn Ctrl+wheel (trackpad véo trên Chrome/Edge cũng phát wheel có
+  // Ctrl) đều co giãn KHUNG 0.5–4×, neo đúng nội dung đang nằm dưới con trỏ —
+  // rê tới đâu, phóng tới đó là thấy ngay đó, nên pan không cần phím phụ.
+  // Cùng công thức pan/kẹp biên với cú véo 2 ngón ở trên. vland (ảnh xoay 90°)
+  // không làm — thiết bị đó điều khiển bằng ngón, không có wheel.
+  const onStageWheel = (e) => {
+    const img = imgRef.current, stage = stageRef.current;
+    if (!img || !stage || vlandRef.current) return;
+    e.preventDefault(); // chặn cả Ctrl+wheel phóng trang của trình duyệt
+    const z = zoomRef.current;
+    const R = img.getBoundingClientRect(), S = stage.getBoundingClientRect();
+    if (R.width < 2 || R.height < 2 || S.width < 2 || S.height < 2) return;
+    const s = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z.s * Math.exp(-e.deltaY * 0.0016)));
+    if (Math.abs(s - z.s) < 0.004) return;
+    const bw = R.width / z.s, bh = R.height / z.s; // cỡ khung gốc s=1 (như pinch)
+    const bcx = R.left + R.width / 2 - S.left - z.x;
+    const bcy = R.top + R.height / 2 - S.top - z.y;
+    // tỉ lệ chỗ con trỏ trong ảnh (0..1) theo rect VISUAL hiện tại — giống pinch
+    const fax = Math.min(1, Math.max(0, (e.clientX - R.left) / R.width));
+    const fay = Math.min(1, Math.max(0, (e.clientY - R.top) / R.height));
+    const w = bw * s, h = bh * s;
+    let px = e.clientX - S.left - bcx - (fax - 0.5) * w;
+    let py = e.clientY - S.top - bcy - (fay - 0.5) * h;
+    const [xl, xr] = panBounds(w, S.width, bcx);
+    const [yt, yb] = panBounds(h, S.height, bcy);
+    px = Math.min(Math.max(px, xl), xr);
+    py = Math.min(Math.max(py, yt), yb);
+    zoomRef.current = { s, x: px, y: py };
+    applyZoom();
+  };
+
   const onPointerDown = (e) => {
     const n = normXY(e.clientX, e.clientY);
     if (!n) return;
@@ -1082,7 +1136,7 @@ export function ScreenPage() {
           <div class="screen-banners">{banners}</div>
         ) : null}
         {/* stage tự ôm cao đúng ảnh (hết band đen); placeholder tự giữ tỉ lệ */}
-        <div ref={stageRef} class="screen-stage">
+        <div ref={stageRef} class="screen-stage" onWheel={onStageWheel}>
           {hasFrame ? (
             <div
               ref={frameRef}
