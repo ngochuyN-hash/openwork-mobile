@@ -190,7 +190,7 @@ h3 {
 /* ---------- Bottom nav nổi ---------- */
 .bottomnav-wrap {
   position: fixed;
-  bottom: calc(10px + var(--sab));
+  bottom: calc(6px + var(--sab)); /* v5.5b: dời sát đáy hơn (10→6px) */
   left: var(--sp-4);
   right: var(--sp-4);
   z-index: 10;
@@ -1189,11 +1189,11 @@ label.field {
 }
 /* Toàn màn hình tràn viền (padding đã bỏ) — v5.2: dải nút ĐÁY-PHẢI sát mép dưới
    (full là mặc định nên hình là chính, phần trên để nguyên cho ảnh), bù
-   safe-area cho notch/home-bar của máy. */
+   safe-area cho notch/home-bar của máy. v5.5b: dời sát đáy hơn (10→6px). */
 .view-full .stage-corner {
   top: auto;
   right: calc(10px + env(safe-area-inset-right));
-  bottom: calc(10px + env(safe-area-inset-bottom));
+  bottom: calc(6px + env(safe-area-inset-bottom));
 }
 /* v5.3: đã BỎ rule "zoomed → nền đen + bỏ viền" của v5.1 — khung giờ co giãn
    NGUYÊN khối (viền + desktop cùng nhau trong .screen-frame), nền stage GIỮ
@@ -1203,7 +1203,7 @@ label.field {
 .screen-view.zoomed .stage-corner {
   top: auto;
   right: calc(10px + env(safe-area-inset-right));
-  bottom: calc(10px + env(safe-area-inset-bottom));
+  bottom: calc(6px + env(safe-area-inset-bottom));
 }
 /* Virtual-landscape (máy dọc toàn màn hình): dải nút nằm ĐÁY-TRÁI trên cột ảnh
    (v5.2 — áp cho MỌI trạng thái full, không chỉ lúc phóng) để khi ⌨ bật, cột
@@ -1273,7 +1273,7 @@ label.field {
   position: absolute;
   left: calc(8px + var(--sal));
   right: calc(8px + var(--sar));
-  bottom: calc(76px + var(--sab));
+  bottom: calc(72px + var(--sab)); /* v5.5b: dải nút dời thấp hơn → panel theo 76→72px */
   max-height: 46%;
   overflow-y: auto;
   margin: 0;
@@ -1359,7 +1359,7 @@ label.field {
      khoảng nav nổi → khối phím ép sát đáy như app, trang không cuộn. */
   width: 100vw;
   margin-left: calc(50% - 50vw);
-  height: calc(100dvh - 154px);
+  height: calc(100dvh - 150px); /* v5.5b: nav dời sát đáy 4px → gọt theo 154→150px */
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -1388,7 +1388,7 @@ label.field {
    vùng nhìn nhưng chặn 760px canh giữa — màn siêu rộng không dàn nút trôi. */
 .screen-page .screen-panel-main {
   width: min(760px, calc(100% - 24px));
-  margin: 10px auto 8px;
+  margin: 8px auto 6px; /* v5.5b: gọt không gian thừa quanh dock (10/8→8/6px) */
   margin-top: auto;
   padding: 10px;
 }
