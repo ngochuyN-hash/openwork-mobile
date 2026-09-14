@@ -1058,7 +1058,9 @@ export function ScreenPage() {
         return;
       }
       const dx = e.clientX - st.scx, dy = e.clientY - st.scy;
-      if (isCropped() && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) >= SLOP) {
+      // NGANG rõ rệt mới tính là dời khung: phải thắng dọc ít nhất 6px nữa,
+      // không thì vuốt cuộn dọc hơi lệch ngang đầu ngón bị ăn nhầm thành pan.
+      if (isCropped() && Math.abs(dx) > Math.abs(dy) + 6 && Math.abs(dx) >= SCROLL_GATE) {
         startPan(e.clientX, e.clientY);
         return;
       }
