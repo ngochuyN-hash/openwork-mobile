@@ -39,6 +39,19 @@ test("normalizeInput: wheel clamp ±10 notch, key/combo/text hợp lệ", () => 
   assert.equal(normalizeInput({ type: "wheel", dy: 3 }, { width: 100, height: 100 }), "WHEEL|0|3");
   assert.equal(normalizeInput({ type: "wheel", dy: 999 }, { width: 100, height: 100 }), "WHEEL|0|10");
   assert.equal(normalizeInput({ type: "wheel", dx: -50, dy: -1 }, { width: 100, height: 100 }), "WHEEL|-10|-1");
+  // v5.5: wheel kèm toạ độ 0..1 -> pixel — daemon đưa con trỏ tới đó rồi cuộn
+  assert.equal(
+    normalizeInput({ type: "wheel", dy: 2, x: 0.5, y: 0.5 }, { width: 2880, height: 1800 }),
+    "WHEEL|0|2|1440|900"
+  );
+  assert.equal(
+    normalizeInput({ type: "wheel", dy: -2, x: 0, y: 1 }, { width: 100, height: 100 }),
+    "WHEEL|0|-2|0|99"
+  );
+  assert.equal(
+    normalizeInput({ type: "wheel", dy: 3, x: undefined, y: undefined }, { width: 100, height: 100 }),
+    "WHEEL|0|3" // không có toạ độ vẫn ra dòng cũ (tương thích ngược)
+  );
   assert.equal(normalizeInput({ type: "key", key: "enter" }, { width: 100, height: 100 }), "KEY|enter");
   assert.equal(normalizeInput({ type: "key", key: "a" }, { width: 100, height: 100 }), "KEY|A");
   assert.equal(
@@ -52,6 +65,7 @@ test("normalizeInput: wheel clamp ±10 notch, key/combo/text hợp lệ", () => 
 test("normalizeInput: chặn đầu vào xấu", () => {
   const dims = { width: 100, height: 100 };
   assert.throws(() => normalizeInput({ type: "click", x: 5, y: 0.5 }, dims)); // x ngoài 0..1
+  assert.throws(() => normalizeInput({ type: "wheel", dy: 2, x: 5, y: 0.5 }, dims)); // x ngoài 0..1
   assert.throws(() => normalizeInput({ type: "click", x: "abc", y: 0.5 }, dims));
   assert.throws(() => normalizeInput({ type: "key", key: "winkey" }, dims)); // tên không có trong bảng
   assert.throws(() => normalizeInput({ type: "combo", mods: [], key: "a" }, dims)); // thiếu mods

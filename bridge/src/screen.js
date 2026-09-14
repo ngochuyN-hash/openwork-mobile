@@ -130,8 +130,15 @@ export function normalizeInput(body, dims) {
       const dbl = type === "dbl" ? 1 : 0;
       return `CLICK|${x}|${y}|${btn}|${dbl}`;
     }
-    case "wheel":
-      return `WHEEL|${clampNotch(body.dx)}|${clampNotch(body.dy)}`;
+    case "wheel": {
+      const dx = clampNotch(body.dx), dy = clampNotch(body.dy);
+      // Có toạ độ (v5.5: phone gửi kèm để daemon đưa con trỏ tới đúng nội dung
+      // đang nhìn trước khi cuộn) thì mở rộng dòng lệnh; thiếu thì giữ dòng cũ.
+      if (body.x !== undefined && body.x !== null && body.y !== undefined && body.y !== null) {
+        return `WHEEL|${dx}|${dy}|${px(body.x, dims.width, "x")}|${px(body.y, dims.height, "y")}`;
+      }
+      return `WHEEL|${dx}|${dy}`;
+    }
     case "key":
       return `KEY|${keyToDaemon(body.key)}`;
     case "combo": {

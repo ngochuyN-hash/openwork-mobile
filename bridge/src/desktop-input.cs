@@ -8,7 +8,7 @@
 //     CLICK <x> <y> <btn> <dbl>   -> bấm (btn 1 trái 2 phải 3 giữa, dbl 1 = double)
 //     DOWN <x> <y> <btn>          -> nhấn giữ
 //     UP <x> <y> <btn>            -> nhả
-//     WHEEL <dx> <dy>             -> cuộn (notch, dương = lên/phải)
+//     WHEEL <dx> <dy> [x y]       -> đưa con trỏ tới (x,y) rồi cuộn (notch, dương = lên/phải)
 //     KEY <name>                  -> bấm 1 phím (enter/esc/tab/…, chữ, số, f1..f12)
 //     COMBO <k1,k2> <key>         -> giữ k1..k2 (ctrl/alt/shift/win) rồi bấm key
 //     TEXT <base64-utf8>          -> set clipboard rồi Ctrl+V (an toàn tiếng Việt:
@@ -233,6 +233,11 @@ class DesktopInput
             Console.WriteLine(id + "|OK");
             break;
           case "WHEEL":
+            // Có toạ độ (phone gửi kèm) thì đưa con trỏ tới đúng nội dung đang
+            // nhìn trước khi cuộn — Windows gửi WM_MOUSEWHEEL cho cửa sổ dưới
+            // con trỏ, không đưa trước thì cuộn nhầm cửa sổ đang nằm dưới vị
+            // trí con trỏ CŨ. Thiếu toạ độ = giữ hành vi cũ (cuộn tại chỗ).
+            if (f.Length > 4) Send(new INPUT[] { AbsMove(int.Parse(f[4]), int.Parse(f[5])) });
             DoWheel(int.Parse(f[2]), int.Parse(f[3]));
             Console.WriteLine(id + "|OK");
             break;
