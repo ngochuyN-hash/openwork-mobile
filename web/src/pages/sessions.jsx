@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { ow, unwrap, timeAgo, sseUrl } from "../api.js";
+import { ow, owDeleteSession, unwrap, timeAgo, sseUrl } from "../api.js";
 import { navigate } from "../app.jsx";
+import { Banner, Empty, SkeletonList, SwipeRow } from "../components/ui.jsx";
 import { PlusIcon } from "../components/icons.jsx";
-import { Banner, Empty, SkeletonList } from "../components/ui.jsx";
 
 export function SessionsPage({ route }) {
   const { wsId } = route;
   const [sessions, setSessions] = useState(null);
   const [statuses, setStatuses] = useState({});
   const [error, setError] = useState("");
+  const [openId, setOpenId] = useState(null);
   const esRef = useRef(null);
 
   async function load() {
@@ -72,6 +73,16 @@ export function SessionsPage({ route }) {
     }
   }
 
+  async function remove(s) {
+    setOpenId(null);
+    try {
+      await owDeleteSession(wsId, s.id);
+    } catch (e) {
+      setError(String(e.message || e));
+    }
+    load();
+  }
+
   return (
     <>
       {error && <Banner kind="err" actionLabel="Thử lại" onAction={load}>{error}</Banner>}
@@ -91,17 +102,21 @@ export function SessionsPage({ route }) {
       {sessions?.map((s) => {
         const status = statuses[s.id]?.type;
         return (
-          <div
+          <SwipeRow
             key={s.id}
-            class="card tap"
-            onClick={() => navigate(`#/ws/${encodeURIComponent(wsId)}/chat/${encodeURIComponent(s.id)}`)}
+            open={openId === s.id}
+            requestOpen={(v) => setOpenId(v ? s.id : null)}
+            onAction={() => remove(s)}
+            onTap={() => navigate(`#/ws/${encodeURIComponent(wsId)}/chat/${encodeURIComponent(s.id)}`)}
           >
-            <div class="row-between">
-              <h3>{s.title || "Không tiêu đề"}</h3>
-              <span class={`dot ${status === "busy" ? "busy" : "ok"}`} aria-label={status ?? "idle"} />
+            <div class="card tap">
+              <div class="row-between">
+                <h3>{s.title || "Không tiêu đề"}</h3>
+                <span class={`dot ${status === "busy" ? "busy" : "ok"}`} aria-label={status ?? "idle"} />
+              </div>
+              <div class="meta">{timeAgo(s.time?.updated)}</div>
             </div>
-            <div class="meta">{timeAgo(s.time?.updated)}</div>
-          </div>
+          </SwipeRow>
         );
       })}
 

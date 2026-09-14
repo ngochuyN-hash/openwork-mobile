@@ -454,6 +454,13 @@ export async function ow(path, { method = "GET", body, headers = {}, raw = false
   return res.json();
 }
 
+/** Xoá hẳn 1 hội thoại (session) trên máy tính — nút vuốt-trái ở màn Sessions/Home. */
+export async function owDeleteSession(wsId, sid) {
+  await ow(`/workspace/${encodeURIComponent(wsId)}/opencode/session/${encodeURIComponent(sid)}`, {
+    method: "DELETE",
+  });
+}
+
 /** Tải 1 file workspace về máy, có tiến trình + hủy được.
  * Trả về {blob, filename}. Dùng header Authorization (không lộ token trên URL),
  * đọc stream để hiện % cho file lớn chục MB. */

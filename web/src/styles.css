@@ -294,6 +294,44 @@ h3 {
   gap: var(--sp-3);
 }
 
+/* Vuốt trái để lộ nút Xoá (kiểu iOS/Zalo): nút nền đỏ nằm sau thẻ,
+   kéo ngang qua ngưỡng thì thẻ hụp sang trái. Kéo dọc vẫn cuộn trang. */
+.swipe-row {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius);
+  margin-bottom: var(--sp-3);
+}
+.swipe-row .card {
+  margin-bottom: 0;
+}
+.swipe-action {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--swipe-w, 84px);
+  border: none;
+  background: var(--danger);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 650;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.swipe-action:active {
+  filter: brightness(0.9);
+}
+.swipe-content {
+  position: relative;
+  touch-action: pan-y;
+  will-change: transform;
+  background: var(--bg-raised);
+}
+
 /* Chấm màu nhận diện workspace (đúng kiểu desktop: mỗi workspace 1 màu) */
 .ws-dot {
   width: 10px;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { ow, unwrap, timeAgo } from "../api.js";
+import { ow, owDeleteSession, unwrap, timeAgo } from "../api.js";
 import { navigate } from "../app.jsx";
-import { Banner, Empty, SkeletonList } from "../components/ui.jsx";
+import { Banner, Empty, SkeletonList, SwipeRow } from "../components/ui.jsx";
 
 /** Màu chấm nhận diện workspace — hash id, đúng kiểu desktop (mỗi ws 1 màu). */
 const WS_COLORS = ["#d6409f", "#30a46c", "#f76b15", "#0090ff", "#6e56cf", "#e2a336", "#12a594", "#e54666"];
@@ -17,6 +17,7 @@ export function HomePage() {
   const [items, setItems] = useState(null); // [{ws, session}]
   const [statuses, setStatuses] = useState({}); // key `${wsId}:${sid}` -> type
   const [error, setError] = useState("");
+  const [openId, setOpenId] = useState(null); // key `${wsId}:${sid}` — 1 dòng vuốt mở / lúc
   const timerRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -86,6 +87,16 @@ export function HomePage() {
 
   const busyCount = items?.filter((it) => statuses[`${it.ws.id}:${it.session.id}`] === "busy").length ?? 0;
 
+  async function remove(ws, session) {
+    setOpenId(null);
+    try {
+      await owDeleteSession(ws.id, session.id);
+    } catch (e) {
+      setError(String(e.message || e));
+    }
+    load();
+  }
+
   return (
     <>
       <div class="page-head">
@@ -108,24 +119,29 @@ export function HomePage() {
 
       {items?.map(({ ws, session }) => {
         const status = statuses[`${ws.id}:${session.id}`];
+        const key = `${ws.id}:${session.id}`;
         return (
-          <div
-            key={`${ws.id}:${session.id}`}
-            class="card tap"
-            onClick={() => navigate(`#/ws/${encodeURIComponent(ws.id)}/chat/${encodeURIComponent(session.id)}`)}
+          <SwipeRow
+            key={key}
+            open={openId === key}
+            requestOpen={(v) => setOpenId(v ? key : null)}
+            onAction={() => remove(ws, session)}
+            onTap={() => navigate(`#/ws/${encodeURIComponent(ws.id)}/chat/${encodeURIComponent(session.id)}`)}
           >
-            <div class="row-between">
-              <h3>{session.title || "Không tiêu đề"}</h3>
-              <span class={`dot ${status === "busy" ? "busy" : "ok"}`} aria-label={status ?? "idle"} />
+            <div class="card tap">
+              <div class="row-between">
+                <h3>{session.title || "Không tiêu đề"}</h3>
+                <span class={`dot ${status === "busy" ? "busy" : "ok"}`} aria-label={status ?? "idle"} />
+              </div>
+              <div class="row-between" style="margin-top:6px">
+                <span class="ws-chip" style={`--ws-c:${wsColor(ws.id)}`}>
+                  <span class="ws-dot" style={`background:${wsColor(ws.id)}`} aria-hidden="true" />
+                  <span class="ws-name">{ws.name || ws.displayName || ws.id}</span>
+                </span>
+                <span class="hint">{timeAgo(session.time?.updated)}</span>
+              </div>
             </div>
-            <div class="row-between" style="margin-top:6px">
-              <span class="ws-chip" style={`--ws-c:${wsColor(ws.id)}`}>
-                <span class="ws-dot" style={`background:${wsColor(ws.id)}`} aria-hidden="true" />
-                <span class="ws-name">{ws.name || ws.displayName || ws.id}</span>
-              </span>
-              <span class="hint">{timeAgo(session.time?.updated)}</span>
-            </div>
-          </div>
+          </SwipeRow>
         );
       })}
 
