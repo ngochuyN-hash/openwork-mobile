@@ -34,7 +34,12 @@ const CAPTURE_BURST_MS = 15; // sau lệnh điều khiển: chụp liên tục 1
 const BURST_MS = 1500;
 const IDLE_AFTER_STILLS = 8;
 const MAX_PENDING_FRAMES = 2; // hàng chờ nén đầy thì vứt khung CŨ — luôn nén khung mới nhất
-const MAX_PENDING_BYTES = 3_000_000; // viewer chậm quá thì đá (client tự nối lại)
+const DROP_FRAME_AT_BYTES = 750_000; // SCTP tắc: bỏ frame MỚI để viewer bắt kịp hình hiện tại, không xếp trễ
+const MAX_PENDING_BYTES = 3_000_000; // viewer chậm/kẹt hẳn thì đá (client tự nối lại)
+
+export function shouldDropFrame(bufferedBytes) {
+  return Number(bufferedBytes) > DROP_FRAME_AT_BYTES;
+}
 
 export const FRAME_UNCHANGED = 0;
 export const FRAME_JPEG = 1;
@@ -623,12 +628,16 @@ export class ScreenService {
       if (viewer.dc) {
         // Datachannel: kiểm tra backlog riêng (SCTP tự kiểm soát lưu lượng, chỉ
         // cần đá viewer chậm quá để khỏi phình buffer), frame = 1 message nhị phân.
-        if (viewer.scr.bufferedAmount() > MAX_PENDING_BYTES) {
+        const bufferedBytes = viewer.scr.bufferedAmount();
+        if (bufferedBytes > MAX_PENDING_BYTES) {
           viewer.alive = false;
           this.viewers.delete(viewer);
           if (this.viewers.size === 0) this.scheduleIdleStop();
           return;
         }
+        // SCTP đang tắc: giữ frame mới nhất của browser, bỏ frame kế tiếp cho tới
+        // khi buffer hạ. Bỏ hình tốt hơn xếp hình cũ rồi tăng click-to-photon.
+        if (type === FRAME_JPEG && shouldDropFrame(bufferedBytes)) return;
         if (type === FRAME_JPEG) {
           if (viewer.scr.isOpen()) viewer.scr.sendMessageBinary(payload);
         } else if (type === FRAME_META) {

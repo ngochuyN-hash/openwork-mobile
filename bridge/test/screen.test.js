@@ -5,6 +5,7 @@ import {
   normalizeInput,
   createRateLimiter,
   isFullFrameForReplay,
+  shouldDropFrame,
   FRAME_UNCHANGED,
   FRAME_JPEG,
   FRAME_META,
@@ -93,6 +94,12 @@ test("encodeFrame + parse lại: meta JSON đi trọn vẹn", () => {
   const len = frame.readUInt32BE(0);
   assert.equal(frame.readUInt8(4), FRAME_META);
   assert.equal(JSON.parse(frame.subarray(5, 5 + len).toString("utf8")).screenW, 2880);
+});
+
+test("shouldDropFrame: bỏ hình mới khi SCTP backlog vượt ngưỡng mềm", () => {
+  assert.equal(shouldDropFrame(750_000), false);
+  assert.equal(shouldDropFrame(750_001), true);
+  assert.equal(shouldDropFrame(3_000_000), true);
 });
 
 test("isFullFrameForReplay: dải ngang (0,0) rộng-thấp KHÔNG được cache replay", () => {

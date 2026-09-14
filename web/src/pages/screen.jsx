@@ -108,6 +108,7 @@ export function ScreenPage() {
   const [keysOn, setKeysOn] = useState(false); // full: bàn phím ẩn sau nút ⌨, bấm mới trượt lên
   const [capW, setCapW] = useState(880); // bề rộng ảnh stream — tăng theo zoom để giữ nét
   const [wrtc, setWrtc] = useState(null); // null | trying | active | failed — đường truyền hình
+  const [route, setRoute] = useState(""); // P2P | TURN | HTTP — để biết 5G đang đi đường nào
   const [ping, setPing] = useState(0); // RTT đo trên datachannel (chỉ khi WebRTC active)
   const [attempt, setAttempt] = useState(0); // tăng = thử lại cả hai đường kết nối
 
@@ -547,6 +548,7 @@ export function ScreenPage() {
     if (!info?.available || paused) return;
     if (wrtcRef.current !== "failed") return; // WebRTC đang thử/đã chạy — HTTP chờ
     const myRun = ++runIdRef.current;
+    setRoute("HTTP");
     const { q } = STREAM_PARAMS;
     const abort = new AbortController();
     setStatus("connecting");
@@ -622,6 +624,7 @@ export function ScreenPage() {
     if (!info?.available || paused) return;
     if (wrtcRef.current === "active" || wrtcRef.current === "failed") return;
     wrtcRef.current = "trying";
+    setRoute("");
     gotFullRef.current = false; // kết nối mới — chờ khung full đầu tiên
     shotDimsRef.current = null; screenDimsRef.current = null; // cỡ mới do meta kết nối này báo
     setWrtc("trying");
@@ -631,12 +634,14 @@ export function ScreenPage() {
     let pingTimer = null;
     let fpsTimer = null;
     let frameTimer = null;
+    let routeTimer = null;
     let frameCount = 0;
     const fail = () => {
       if (dead) return;
       dead = true;
       clearInterval(pingTimer); clearInterval(fpsTimer);
       if (frameTimer) { clearTimeout(frameTimer); frameTimer = null; }
+      if (routeTimer) { clearTimeout(routeTimer); routeTimer = null; }
       try { pc?.close(); } catch {}
       ctlRef.current = null;
       wrtcRef.current = "failed";
@@ -708,6 +713,20 @@ export function ScreenPage() {
         fpsTimer = setInterval(() => { setFps(frameCount); frameCount = 0; }, 1000);
         wrtcRef.current = "active";
         setWrtc("active");
+        // Candidate pair thường chỉ có sau khi datachannel mở; relay = TURN,
+        // các loại còn lại là P2P. Nếu browser chưa công bố kịp, giữ nhãn P2P.
+        routeTimer = setTimeout(async () => {
+          try {
+            const stats = await pc.getStats();
+            let pair = null;
+            stats.forEach((s) => {
+              if (s.type === "transport" && s.selectedCandidatePairId) pair = stats.get(s.selectedCandidatePairId);
+              if (!pair && s.type === "candidate-pair" && (s.selected || (s.nominated && s.state === "succeeded"))) pair = s;
+            });
+            const local = pair && stats.get(pair.localCandidateId);
+            setRoute(local?.candidateType === "relay" ? "TURN" : "P2P");
+          } catch { setRoute("P2P"); }
+        }, 300);
         // Datachannel mở mà không có khung FULL nào (bridge đang lạnh: daemon
         // chụp phải compile/spawn lại sau idle-stop, hoặc màn im không sinh frame)
         // thì KHÔNG được đứng im — coi như thất bại để tự lùi về stream HTTP.
@@ -723,6 +742,7 @@ export function ScreenPage() {
       dead = true;
       clearInterval(pingTimer); clearInterval(fpsTimer);
       if (frameTimer) { clearTimeout(frameTimer); frameTimer = null; }
+      if (routeTimer) { clearTimeout(routeTimer); routeTimer = null; }
       try { pc?.close(); } catch {}
       ctlRef.current = null;
       if (wrtcRef.current !== "failed") {
@@ -1169,6 +1189,7 @@ export function ScreenPage() {
     setStatus("connecting");
     setWrtc(null);
     wrtcRef.current = null;
+    setRoute("");
     setPing(0);
     setAttempt((a) => a + 1);
   }, []);
@@ -1323,7 +1344,7 @@ export function ScreenPage() {
       <div class="screen-bar">
         <span class={`badge ${status === "live" ? "ok" : status === "error" ? "err" : "busy"}`}>
           {status === "live"
-            ? `Đang xem${fps ? ` · ${fps} hình/s` : ""}${wrtc === "active" && ping ? ` · ${ping}ms` : ""}`
+            ? `Đang xem${route ? ` · ${route}` : ""}${fps ? ` · ${fps} hình/s` : ""}${wrtc === "active" && ping ? ` · ${ping}ms` : ""}`
             : status === "connecting"
               ? "Đang nối…"
               : status === "paused"
