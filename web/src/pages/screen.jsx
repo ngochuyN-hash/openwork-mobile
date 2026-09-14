@@ -239,11 +239,20 @@ export function ScreenPage() {
   const syncCapture = useCallback(() => {
     clearTimeout(capTimer.current);
     capTimer.current = setTimeout(() => {
-      const s = zoomRef.current.s;
-      if (s <= 1.02) { setCapW((w) => (w === 880 ? w : 880)); return; }
-      // Focus-rect chỉ mã hóa VÙNG NHÌN nên master to không tốn đường — nhảy
-      // thẳng lên native (trần 1920) để vùng nhìn NÉT ĐÚNG chữ ở mọi mức zoom
-      // (công thức 880×zoom cũ vừa thừa ở zoom nhỏ vừa thiếu ở zoom sâu).
+      // v5.5: "đang xem CROP" (isCropped) — stage không phủ ≥96% ảnh — là lúc
+      // focus-rect chỉ mã hóa VÙNG NHÌN nên master to không tốn đường: nhảy
+      // thẳng lên native (trần 1920) để vùng đang thấy NÉT ĐÚNG chữ ở mọi mức
+      // zoom VÀ cả màn rộng ở 1x (xem dải desktop bị crop dọc); xem trọn desktop
+      // (kể cả thu nhỏ xuống <1x) là về feed 880 rẻ cũ.
+      const img = imgRef.current, stage = stageRef.current;
+      let cropped = false;
+      if (img && stage) {
+        const R = img.getBoundingClientRect(), S = stage.getBoundingClientRect();
+        const vw = Math.min(R.right, S.right) - Math.max(R.left, S.left);
+        const vh = Math.min(R.bottom, S.bottom) - Math.max(R.top, S.top);
+        cropped = vw * vh < 0.96 * R.width * R.height;
+      }
+      if (!cropped) { setCapW((w) => (w === 880 ? w : 880)); return; }
       const need = Math.min(1920, nativeWRef.current);
       setCapW((w) => (need > w * 1.15 || need < w * 0.8 ? Math.max(880, need) : w));
     }, 350);
@@ -253,15 +262,31 @@ export function ScreenPage() {
   // chỉ mã hóa + gửi đúng vùng đó ở độ nét native thay vì nửa cái màn hình.
   const focusRef = useRef(null); // rect gần nhất — HTTP nối lại (viewer MỚI) đọc để chèn query
   const panFocusTimer = useRef(0); // pan đang zoom: gửi focus theo nhịp, không spam
+  // v5.5: "đang xem CROP" = stage không phủ ≥96% ảnh (phóng to, hoặc màn rộng
+  // hơn ảnh theo một chiều ở 1x) — lúc này chỉ truyền phần nhìn + vuốt thành
+  // dời khung; xem trọn desktop (kể cả thu nhỏ xuống <1x) là full feed bình thường.
+  const isCropped = useCallback(() => {
+    const img = imgRef.current, stage = stageRef.current;
+    if (!img || !stage) return false;
+    const R = img.getBoundingClientRect(), S = stage.getBoundingClientRect();
+    if (R.width < 2 || R.height < 2 || S.width < 2 || S.height < 2) return false;
+    const vw = Math.min(R.right, S.right) - Math.max(R.left, S.left);
+    const vh = Math.min(R.bottom, S.bottom) - Math.max(R.top, S.top);
+    if (vw <= 0 || vh <= 0) return true;
+    return vw * vh < 0.96 * R.width * R.height;
+  }, []);
   const computeFocus = useCallback(() => {
-    const z = zoomRef.current;
-    if (z.s <= 1.02) return null;
     const img = imgRef.current, stage = stageRef.current;
     if (!img || !stage) return null;
     const R = img.getBoundingClientRect(), S = stage.getBoundingClientRect();
     if (R.width < 2 || R.height < 2) return null;
     // Vùng STAGE lọt vào ảnh đã scale+translate → về tọa độ nội dung (canvas)
     // theo từng trục; scale tự triệt tiêu (cả offset lẫn cỡ đều chia cho s).
+    // v5.5: KHÔNG gate theo zoom nữa — chỉ bỏ qua khi stage phủ ≥96% ảnh (nhìn
+    // trọn desktop); xem MỘT PHẦN desktop (crop) là gửi đúng vùng đang thấy.
+    const vw = Math.min(R.right, S.right) - Math.max(R.left, S.left);
+    const vh = Math.min(R.bottom, S.bottom) - Math.max(R.top, S.top);
+    if (vw * vh >= 0.96 * R.width * R.height) return null;
     const vxL = Math.max(R.left, S.left), vxR = Math.min(R.right, S.right);
     const vyT = Math.max(R.top, S.top), vyB = Math.min(R.bottom, S.bottom);
     if (vxR <= vxL || vyB <= vyT) return null;
@@ -290,7 +315,6 @@ export function ScreenPage() {
     // focusRef được effect stream đọc mỗi khi capW đổi; pan giữa phiên không tới.
   }, []);
   const resyncFocus = useCallback(() => {
-    if (zoomRef.current.s <= 1.02) return;
     sendFocus(computeFocus()); // nối lại viewer MỚI / meta đổi cỡ — báo lại vùng nhìn
   }, [sendFocus, computeFocus]);
   const resetZoom = useCallback(() => {
@@ -301,30 +325,13 @@ export function ScreenPage() {
   }, [syncCapture, sendFocus]);
   // ---- TRÀN VIỀN MẶC ĐỊNH (học 9remote edge-to-edge): mở màn hình là tính
   // cover — scale tối thiểu để ảnh phủ KÍN khung xem (bỏ băng đen quanh), pan
-  // để xem phần tràn. Mode thường (v5.4) = FIT trọn desktop trong vùng nhìn;
-  // toàn màn hình cover lên vài lần — đó chính là "mức tối ưu" mà người dùng
-  // tự nhiên cần để đọc chữ/click ô nhỏ. Chip zoom bấm = về đây.
+  // để xem phần tràn. v5.5: áp cho CẢ compact lẫn fullscreen — vùng hiển thị
+  // luôn là desktop lấp kín (không còn khung thu nhỏ trọn desktop giữa nền), pan
+  // xem phần tràn, véo/lăn phóng thu tùy ý, focus-rect chỉ truyền phần đang thấy.
+  // Chip zoom bấm = về đây.
   const defaultView = useCallback(() => {
     const img = imgRef.current, stage = stageRef.current;
     if (!img || !stage || !img.width || !img.height) return;
-    // v5.4: compact MỌI THIẾT BỊ (điện thoại lẫn laptop/desktop) mặc định = FIT —
-    // khung co vừa để THẤY TRỌN desktop trong vùng nhìn; điện thoại dọc vùng rộng
-    // hơn cao nên fit trùng 1x (đúng "kích thước như hiện tại" v5.3), màn rộng
-    // (laptop) fit theo CHIỀU CAO — desktop nguyên vẹn giữa nền app, muốn to hơn
-    // thì véo/lăn. Chỉ toàn màn hình mới cover tràn viền (v5.1). Đọc qua REF.
-    if (!fullRef.current) {
-      zoomRef.current = { s: 1, x: 0, y: 0 };
-      applyZoom();
-      const R0 = img.getBoundingClientRect(), S0 = stage.getBoundingClientRect();
-      if (R0.width < 2 || R0.height < 2 || S0.width < 2 || S0.height < 2) return;
-      const fit = Math.min(S0.width / R0.width, S0.height / R0.height);
-      if (fit >= 0.995) { resetZoom(); return; } // 1x đã vừa — giữ nguyên
-      zoomRef.current = { s: Math.max(ZOOM_MIN, fit), x: 0, y: 0 };
-      applyZoom();
-      sendFocus(computeFocus());
-      syncCapture();
-      return;
-    }
     // Về 1x TRƯỚC khi đo: bố cục vừa đổi (fullscreen/xoay) mà zoom cũ còn dính
     // trên transform thì rect ảnh đo nhầm theo cỡ đã phóng → cover sai.
     zoomRef.current = { s: 1, x: 0, y: 0 };
@@ -836,6 +843,10 @@ export function ScreenPage() {
     py = Math.min(Math.max(py, yt), yb);
     zoomRef.current = { s, x: px, y: py };
     applyZoom();
+    // v5.5: wheel phải báo vùng nhìn MỚI cho daemon (crop/native + focus-rect)
+    // — đủ 2 dòng: sendFocus tức thì, syncCapture debounce 350ms.
+    sendFocus(computeFocus());
+    syncCapture();
   };
 
   const onPointerDown = (e) => {
@@ -978,7 +989,9 @@ export function ScreenPage() {
     const dist = Math.hypot(e.clientX - st.scx, e.clientY - st.scy);
     if (dist > SLOP) {
       clearTimeout(st.lpTimer);
-      if (zoomRef.current.s > 1.02) {
+      // v5.5: vuốt = dời khung khi ĐANG XEM CROP (phóng to lẫn màn rộng 1x) —
+      // xem trọn desktop thì vuốt mới là cuộn PC như thường.
+      if (isCropped()) {
         st.mode = "pan";
         st.panSX = e.clientX; st.panSY = e.clientY;
         st.plx0 = zoomRef.current.x; st.ply0 = zoomRef.current.y;

@@ -1068,15 +1068,12 @@ label.field {
   -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
-/* v5.3 — KHUNG chứa canvas: viền + bo góc + nền thẻ dời sang WRAPPER, transform
-   zoom/pan cũng đặt trên wrapper (applyZoom ghi vào .screen-frame) → viền khung
-   + desktop co giãn như MỘT vật thể — "phóng to khung". Khung tràn vùng nhìn
-   thì pan, bị kẹp ở mép màn hình điện thoại (panBounds theo stage). */
+/* v5.3 — KHUNG chứa canvas: transform zoom/pan đặt trên wrapper (applyZoom ghi
+   vào .screen-frame) → desktop co giãn như MỘT vật thể; v5.5 BỎ viền + bo góc —
+   desktop lấp kín vùng nhìn nên không còn "khung bó" (viền chỉ lộ ra khi chủ
+   động thu nhỏ xuống <1x xem tổng quan, lúc đó cạnh không có viền sạch hơn). */
 .screen-frame {
   position: relative;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: #0b0c0e;
   transform-origin: 50% 50%;
   will-change: transform;
 }
