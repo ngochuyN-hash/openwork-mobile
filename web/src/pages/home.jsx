@@ -69,22 +69,6 @@ export function HomePage() {
     return () => clearInterval(timerRef.current);
   }, [load]);
 
-  async function newSession() {
-    const target = items?.[0]?.ws;
-    if (!target) return;
-    try {
-      const payload = await ow(`/workspace/${encodeURIComponent(target.id)}/opencode/session`, {
-        method: "POST",
-        // Không gửi title — để server tự sinh tên theo nội dung như desktop.
-        body: {},
-      });
-      const created = unwrap(payload);
-      if (created?.id) navigate(`#/ws/${encodeURIComponent(target.id)}/chat/${encodeURIComponent(created.id)}`);
-    } catch (e) {
-      setError(String(e.message || e));
-    }
-  }
-
   const busyCount = items?.filter((it) => statuses[`${it.ws.id}:${it.session.id}`] === "busy").length ?? 0;
 
   async function remove(ws, session) {
@@ -145,13 +129,6 @@ export function HomePage() {
         );
       })}
 
-      {items?.length > 0 && (
-        <button class="fab" aria-label="Tạo session mới" onClick={newSession}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-        </button>
-      )}
     </>
   );
 }
