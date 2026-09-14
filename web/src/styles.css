@@ -1094,7 +1094,7 @@ label.field {
 /* Chấm local echo: phản hồi tức thời cú chạm/giữ ngay trên điện thoại */
 .touch-echo {
   display: none;
-  position: absolute;
+  position: fixed; /* v5.5b: neo viewport — khớp đúng ngón tay mọi layout (frame transform/cover không còn làm lệch) */
   width: 10px;
   height: 10px;
   border-radius: 50%;

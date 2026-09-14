@@ -780,14 +780,16 @@ export function ScreenPage() {
   }, []);
 
   // Local echo: phản hồi tức thời tại ngón tay (không chờ mạng) — chấm trắng
-  // theo ngón khi kéo, biến đỏ + rung máy khi Right-click kịch phát.
+  // theo ngón khi kéo, biến đỏ + rung máy khi Right-click kịch phát. v5.5b: neo
+  // theo VIEWPORT (position: fixed + clientX/Y) — trước đây đo rect của
+  // .screen-frame ĐÃ transform rồi đặt chấm trong .screen-stage chưa transform:
+  // khi cover tràn viền, chấm lệch sang phải đúng phần ảnh tràn (~300-400px),
+  // "pointer cảm ứng không khớp chỗ click".
   const posEcho = (cx, cy, cls) => {
-    const stage = imgRef.current?.parentElement;
     const dot = echoRef.current;
-    if (!stage || !dot) return;
-    const r = stage.getBoundingClientRect();
-    dot.style.left = (cx - r.left) + "px";
-    dot.style.top = (cy - r.top) + "px";
+    if (!dot) return;
+    dot.style.left = cx + "px";
+    dot.style.top = cy + "px";
     dot.className = "touch-echo show " + (cls ?? "");
   };
   const hideEcho = () => { if (echoRef.current) echoRef.current.className = "touch-echo"; };
