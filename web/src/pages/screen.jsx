@@ -886,8 +886,8 @@ export function ScreenPage() {
       const bcy = R.top + R.height / 2 - S.top - z.y;
       const [x0, x1] = panBounds(R.width, S.width, bcx);
       const [y0, y1] = panBounds(R.height, S.height, bcy);
-      st.plminX = x0; st.plmaxX = x1;
-      st.plminY = y0; st.plmaxY = y1;
+      st.plminX = Math.min(x0, x1); st.plmaxX = Math.max(x0, x1);
+      st.plminY = Math.min(y0, y1); st.plmaxY = Math.max(y0, y1);
     } else { st.plminX = 0; st.plmaxX = 0; st.plminY = 0; st.plmaxY = 0; }
   };
 
@@ -960,13 +960,18 @@ export function ScreenPage() {
         st.mode = "pinch";
         // không return — xử luôn cú move này như một bước véo
       } else {
-        st.accY += my - st.lastMidY;
-        st.lastMidY = my;
-        if (Math.abs(st.accY) >= SCROLL_GATE) {
-          // đang xem CROP: 2 ngón kéo = DỜI KHUNG nhìn (1 ngón đã nhường cho
-          // cuộn PC); xem trọn desktop: 2 ngón vuốt = cuộn như cũ.
-          if (isCropped()) startPan(mx, my);
-          else st.mode = "scroll";
+        const moveDist = Math.hypot(mx - st.mx0, my - st.my0);
+        if (moveDist >= SCROLL_GATE) {
+          // 2 ngón trượt:
+          // ĐÃ ZOOM (hoặc đang xem crop): 2 NGÓN KÉO = TRƯỢT KHUNG HÌNH (Pan 360° trái/phải/trên/dưới)
+          // CHƯA ZOOM: 2 ngón vuốt = cuộn PC (scroll wheel)
+          if (isCropped() || zoomRef.current.s > 1.02) {
+            startPan(mx, my);
+          } else {
+            st.mode = "scroll";
+            st.lastMidY = my;
+            st.accY = my - st.my0;
+          }
         }
         return;
       }
@@ -1041,10 +1046,8 @@ export function ScreenPage() {
       return;
     }
     // idle: đi quá ngưỡng — đã "giữ" thì kéo tiếp = kéo chuột PC (down tại điểm
-    // giữ); thường thì vuốt = cuộn PC (v5.5 — 1 ngón luôn cuộn nội dung dưới
-    // ngón). Đang xem CROP thì CHIA TRỤC: vuốt NGANG = dời khung trái/phải như
-    // cũ, vuốt DỌC = cuộn PC (Zalo lăn chat được); dời khung theo trục dọc khi
-    // crop vẫn dùng KÉO 2 NGÓN.
+    // giữ); 1 ngón vuốt = cuộn PC (lướt Zalo / web mượt mà); dời khung nhìn
+    // khi zoom dùng 2 NGÓN KÉO (chuẩn 9Remote).
     const dist = Math.hypot(e.clientX - st.scx, e.clientY - st.scy);
     if (dist > SLOP) {
       clearTimeout(st.lpTimer);
@@ -1057,16 +1060,9 @@ export function ScreenPage() {
         posEcho(e.clientX, e.clientY);
         return;
       }
-      const dx = e.clientX - st.scx, dy = e.clientY - st.scy;
-      // NGANG rõ rệt mới tính là dời khung: phải thắng dọc ít nhất 6px nữa,
-      // không thì vuốt cuộn dọc hơi lệch ngang đầu ngón bị ăn nhầm thành pan.
-      if (isCropped() && Math.abs(dx) > Math.abs(dy) + 6 && Math.abs(dx) >= SCROLL_GATE) {
-        startPan(e.clientX, e.clientY);
-        return;
-      }
       st.mode = "scroll";
       st.lastMidY = e.clientY;
-      st.accY = dy; // tính cả đoạn vừa vuốt, khỏi bỏ sót nấc đầu
+      st.accY = e.clientY - st.scy; // tính cả đoạn vừa vuốt, khỏi bỏ sót nấc đầu
     }
   };
 
@@ -1086,6 +1082,8 @@ export function ScreenPage() {
     if (st.mode === "pan") {
       if (pointers.current.size === 0) {
         st.mode = "idle";
+        sendFocus(computeFocus());
+        syncCapture();
       } else if (pointers.current.size === 1) {
         // 2 ngón còn 1: điểm giữa biến mất nên delta tính từ gốc cũ sẽ GIẬT —
         // đổi gốc pan sang ngón còn lại (vị trí khung giữ nguyên).
