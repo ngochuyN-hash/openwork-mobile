@@ -1042,9 +1042,9 @@ label.field {
 }
 .screen-stage {
   position: relative;
-  background: #0b0c0e;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  /* v5.3: nền vùng hiển thị = NỀN APP OpenWork (var(--bg), sáng) — thẻ khung
+     desktop tối nổi trên nền app như bố cục đã duyệt, zoom không chuyển đen. */
+  background: var(--bg);
   overflow: hidden;
   min-height: 180px;
   display: flex;
@@ -1061,6 +1061,18 @@ label.field {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+}
+/* v5.3 — KHUNG chứa canvas: viền + bo góc + nền thẻ dời sang WRAPPER, transform
+   zoom/pan cũng đặt trên wrapper (applyZoom ghi vào .screen-frame) → viền khung
+   + desktop co giãn như MỘT vật thể — "phóng to khung". Khung tràn vùng nhìn
+   thì pan, bị kẹp ở mép màn hình điện thoại (panBounds theo stage). */
+.screen-frame {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #0b0c0e;
+  transform-origin: 50% 50%;
+  will-change: transform;
 }
 .screen-img.control {
   touch-action: none; /* chạm = điều khiển, không cuộn trang */
@@ -1180,14 +1192,9 @@ label.field {
   right: calc(10px + env(safe-area-inset-right));
   bottom: calc(10px + env(safe-area-inset-bottom));
 }
-/* Tràn viền kiểu 9remote khi ĐANG PHÓNG: bỏ khung viền + bo góc quanh ô ảnh —
-   nội dung phủ kín, không còn "khung" như app. Ở 1x (xem nguyên màn hình) giữ
-   thẻ card gọn như đã duyệt. */
-.screen-view.zoomed .screen-stage {
-  border: none;
-  border-radius: 0;
-  background: #000;
-}
+/* v5.3: đã BỎ rule "zoomed → nền đen + bỏ viền" của v5.1 — khung giờ co giãn
+   NGUYÊN khối (viền + desktop cùng nhau trong .screen-frame), nền stage GIỮ
+   màu thẻ hiện tại theo yêu cầu. Class .zoomed chỉ còn để định vị dải nút. */
 /* Dải nút gom 1 cụm khi phóng: dời xuống mép dưới (né vùng ngón cái + không
    che phần nội dung đang pan), bù safe-area cho đáy máy. */
 .screen-view.zoomed .stage-corner {
@@ -1242,6 +1249,14 @@ label.field {
   border-radius: 0;
   background: transparent;
 }
+.view-full .screen-frame {
+  /* Fullscreen: khung ôm đúng ảnh (auto) — không kéo dãn theo bề stage */
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  margin: auto;
+}
 .view-full .screen-img {
   width: auto;
   height: auto;
@@ -1277,10 +1292,15 @@ label.field {
   flex: 1;
   min-width: 0;
 }
-.screen-view.vland .screen-img {
-  position: absolute;
+.screen-view.vland .screen-frame {
+  position: absolute; /* nhận left/top + width/height từ inline style (vbox) */
   max-width: none;
   max-height: none;
+}
+.screen-view.vland .screen-frame .screen-img {
+  width: 100%;
+  height: 100%;
+  position: static;
 }
 .screen-view.vland .screen-placeholder {
   position: absolute;
@@ -1601,5 +1621,19 @@ a {
 @media (prefers-reduced-motion: reduce) {
   .pc-dot.checking {
     animation: none;
+  }
+}
+
+/* v5.3 — DỌC (máy dọc cảm ứng/màn hẹp — cùng media query của portraitMobile
+   trong screen.jsx): STAGE trải hết khoảng topbar → khối phím (NỀN APP
+   bao quanh KHUNG desktop), KHUNG 1x = trọn desktop giữa canvas, khối phím ép
+   sát thanh tab (~8-10px). Ngang giữ nguyên bố cục player cũ. */
+@media (orientation: portrait) and ((pointer: coarse) or (max-width: 520px)) {
+  .screen-page {
+    height: calc(100dvh - 154px); /* 190 cũ → phím xuống sát thanh tab */
+  }
+  .screen-page .screen-stage {
+    flex: 1;
+    min-height: 0;
   }
 }

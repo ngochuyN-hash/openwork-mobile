@@ -103,6 +103,7 @@ export function ScreenPage() {
   const [attempt, setAttempt] = useState(0); // tăng = thử lại cả hai đường kết nối
 
   const imgRef = useRef(null);
+  const frameRef = useRef(null); // .screen-frame — KHUNG chứa canvas; transform áp lên ĐÂY (khung + desktop co giãn như MỘT vật thể, v5.3)
   const paintedRef = useRef(false); // canvas đã vẽ hình thật chưa — meta không được resize đè
   const pendingBmpRef = useRef(null); // bitmap chờ canvas mount (khung đầu tới sớm hơn hasFrame)
   const snapRef = useRef(null); // bản sao canvas tại khung FULL mới nhất — để phục hồi khi remount
@@ -156,6 +157,12 @@ export function ScreenPage() {
   const vland = full && portraitMobile; // chỉ fullscreen mới xoay ảnh
   const vlandRef = useRef(false); // mirror cho pointer handler (không stale)
   vlandRef.current = vland;
+  // Mirror cho defaultView (useCallback deps ổn định — đọc state trực tiếp là
+  // closure stale của render đầu, 14/09: nhánh dọc 1x không bao giờ chạy).
+  const fullRef = useRef(full);
+  fullRef.current = full;
+  const portraitMobileRef = useRef(portraitMobile);
+  portraitMobileRef.current = portraitMobile;
   useEffect(() => {
     if (!vland) { setVbox(null); return; }
     // rAF bị throttle trên vài môi trường (PWA nền/IAB) — đo bằng ResizeObserver
@@ -212,7 +219,10 @@ export function ScreenPage() {
   };
   const applyZoom = () => {
     const z = zoomRef.current;
-    if (imgRef.current) imgRef.current.style.transform = zoomStr();
+    // v5.3: transform đặt trên WRAPPER .screen-frame — viền khung + desktop co
+    // giãn như MỘT vật thể ("phóng to khung"); imgRect (cho normXY/focus/pan)
+    // vẫn đo qua getBoundingClientRect vì nó tính cả transform của tổ tiên.
+    if (frameRef.current) frameRef.current.style.transform = zoomStr();
     if (chipRef.current) {
       const on = z.s > 1.02;
       chipRef.current.classList.toggle("show", on);
@@ -299,6 +309,10 @@ export function ScreenPage() {
   const defaultView = useCallback(() => {
     const img = imgRef.current, stage = stageRef.current;
     if (!img || !stage || !img.width || !img.height) return;
+    // v5.3: compact DỌC mặc định = 1x — KHUNG TRỌN desktop (đúng "kích thước
+    // như hiện tại"); chỉ toàn màn hình mới cover tràn viền (v5.1). Khung quanh
+    // là nền thẻ hiện tại, không chuyển đen. Đọc qua REF (closure stale).
+    if (!fullRef.current && portraitMobileRef.current) { resetZoom(); return; }
     // Về 1x TRƯỚC khi đo: bố cục vừa đổi (fullscreen/xoay) mà zoom cũ còn dính
     // trên transform thì rect ảnh đo nhầm theo cỡ đã phóng → cover sai.
     zoomRef.current = { s: 1, x: 0, y: 0 };
@@ -767,6 +781,7 @@ export function ScreenPage() {
   const WHEEL_STEP = 24; // ngón đi được từng này px thì cuộn một nấc
   const PINCH_PX = 12; // hai ngón nở/thu được từng này px thì tính là véo (zoom)
   const SCROLL_GATE = 14; // hai ngón trượt được từng này px thì tính là cuộn
+  const ZOOM_MIN = 0.5; // sàn zoom — v5.3: kéo ra để KHUNG thu nhỏ dưới khớp (desktop vẫn trọn, băng nền quanh)
   const ZOOM_MAX = 4; // trần zoom — cover tràn viền máy dọc cần ~3.5-4x cho kín khung; focus-rect + master native giữ nét tới trần này
 
   const onPointerDown = (e) => {
@@ -849,7 +864,7 @@ export function ScreenPage() {
       const pts = [...pointers.current.values()];
       const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
       const mx = (pts[0].x + pts[1].x) / 2, my = (pts[0].y + pts[1].y) / 2;
-      const s = Math.min(ZOOM_MAX, Math.max(1, (st.s0 * d) / st.d0));
+      const s = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, (st.s0 * d) / st.d0));
       const w = st.bw * s, h = st.bh * s;
       // đặt nội dung điểm neo dưới điểm giữa ngón, rồi chặn pan cho khung ảnh
       // không tuột khỏi cửa sổ xem (trục nào chưa đủ rộng thì kẹp giữa)
@@ -1069,26 +1084,32 @@ export function ScreenPage() {
         {/* stage tự ôm cao đúng ảnh (hết band đen); placeholder tự giữ tỉ lệ */}
         <div ref={stageRef} class="screen-stage">
           {hasFrame ? (
-            <canvas
-              ref={attachCanvas}
-              class="screen-img control"
-              draggable={false}
+            <div
+              ref={frameRef}
+              class="screen-frame"
               style={vland && vbox ? {
-                // khung ảnh TRƯỚC xoay: ngang pw'×ph' (sw/sh) — xoay 90° xong
+                // KHUNG ảnh TRƯỚC xoay: ngang pw'×ph' (sw/sh) — xoay 90° xong
                 // thành cột đứng rộng sh, cao sw, tâm neo tại (sh/2+m, giữa).
-                // transform đọc zoomStr() để zoom/pan không bị render đè mất.
+                // Transform (zoom/pan + xoay vland) đặt trên KHUNG để viền khung
+                // + desktop co giãn như MỘT vật thể ("phóng to khung", v5.3).
                 width: `${vbox.sw}px`,
                 height: `${vbox.sh}px`,
                 left: `${Math.round(vbox.sh / 2) + 4}px`,
                 top: "50%",
                 transform: zoomStr(),
               } : undefined}
-              onContextMenu={(e) => e.preventDefault()}
-              onPointerDown={onPointerDown}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-              onPointerCancel={onPointerCancel}
-            />
+            >
+              <canvas
+                ref={attachCanvas}
+                class="screen-img control"
+                draggable={false}
+                onContextMenu={(e) => e.preventDefault()}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerCancel}
+              />
+            </div>
           ) : (
             <div class="screen-placeholder" style={`aspect-ratio:${screenRatio}`}>
               {status === "connecting" && !unavailable ? <span class="spinner" /> : null}
