@@ -37,6 +37,11 @@
 // và CHỈ mã hóa vùng đó ∩ vùng đổi: zoom sâu NÉT hơn trần 1600 cũ (nhòe từ
 // ~2.2x) mà băng thông chỉ bằng phần màn đang xem. Pan → focus chạy theo
 // (throttle 180ms); về 1x → clear + master thu về 880 rẻ cũ.
+// v5.1: TRÀN VIỀN MẶC ĐỊNH (học 9remote) — có hình là tự phóng COVER cho ảnh phủ
+// kín khung xem (bỏ băng đen quanh, nhất là toàn màn hình máy dọc), pan để xem
+// phần tràn; đang phóng thì bỏ khung viền quanh ô ảnh + dải nút (⛶ + chip zoom)
+// gom 1 cục gọn một bên. Chip bấm = về tràn viền; véo nhỏ ra 1x = xem nguyên
+// màn hình.
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { apiScreenInfo, owScreenInput, owScreenStream, owWebrtcIce, owWebrtcSignal } from "../api.js";
@@ -185,6 +190,8 @@ export function ScreenPage() {
       chipRef.current.classList.toggle("show", on);
       if (on) chipRef.current.textContent = z.s.toFixed(1) + "×";
     }
+    // Tràn viền kiểu 9remote: đang phóng là bỏ khung viền quanh ô ảnh hẳn.
+    viewRef.current?.classList.toggle("zoomed", z.s > 1.02);
   };
   // ---- ẢNH STREAM NET THEO ZOOM (học 9remote nhưng tính mịn hơn): tay vừa buông
   // khỏi cú véo là tính "cần bao nhiêu px để nét ở mức zoom này" (880 × zoom,
@@ -256,13 +263,34 @@ export function ScreenPage() {
     sendFocus(null); // hết phóng — daemon về crop vùng-đổi như cũ
     syncCapture();
   }, [syncCapture, sendFocus]);
+  // ---- TRÀN VIỀN MẶC ĐỊNH (học 9remote edge-to-edge): mở màn hình là tính
+  // cover — scale tối thiểu để ảnh phủ KÍN khung xem (bỏ băng đen quanh), pan
+  // để xem phần tràn. Mode thường ảnh vốn đã kín khung (cover ~1) nên giữ 1x;
+  // toàn màn hình máy dọc cover lên vài lần — đó chính là "mức tối ưu" mà
+  // người dùng tự nhiên cần để đọc chữ/click ô nhỏ. Chip zoom bấm = về đây.
+  const defaultView = useCallback(() => {
+    const img = imgRef.current, stage = stageRef.current;
+    if (!img || !stage || !img.width || !img.height) return;
+    // Về 1x TRƯỚC khi đo: bố cục vừa đổi (fullscreen/xoay) mà zoom cũ còn dính
+    // trên transform thì rect ảnh đo nhầm theo cỡ đã phóng → cover sai.
+    zoomRef.current = { s: 1, x: 0, y: 0 };
+    applyZoom();
+    const R = img.getBoundingClientRect(), S = stage.getBoundingClientRect();
+    if (R.width < 2 || R.height < 2 || S.width < 2 || S.height < 2) return;
+    const cover = Math.max(S.width / R.width, S.height / R.height);
+    if (cover <= 1.02) { resetZoom(); return; } // đã kín — giữ 1x (resetZoom đồng bộ focus/cap)
+    zoomRef.current = { s: Math.min(ZOOM_MAX, cover), x: 0, y: 0 };
+    applyZoom();
+    sendFocus(computeFocus());
+    syncCapture();
+  }, [resetZoom, sendFocus, computeFocus, syncCapture]);
   // Biên dời pan theo 1 trục: ảnh DÀI hơn khung thì được trượt tới khi mép ảnh
   // chạm mép khung (không lộ nền), ảnh NGẮN hơn thì kẹp giữa không cho trôi.
   const panBounds = (sz, st, bc) =>
     sz >= st ? [st - sz / 2 - bc, sz / 2 - bc] : [sz / 2 - bc, st - sz / 2 - bc];
-  // Đổi bố cục (bật/tắt toàn màn hình, xoay ảo, đo lại khung) là pan/zoom tính
-  // theo bố cục cũ — trả về vừa khung cho khỏi lệch chết chỗ lạ.
-  useEffect(() => { resetZoom(); }, [full, portraitMobile, vbox, resetZoom]);
+  // Đổi bố cục (bật/tắt toàn màn hình, xoay ảo, đo lại khung) hay khung đầu tiên
+  // về là ÁP LẠI tràn viền — ảnh theo bố cục mới, không giữ zoom lệch chỗ cũ.
+  useEffect(() => { defaultView(); }, [full, portraitMobile, vbox, hasFrame, defaultView]);
 
   // Gesture trên hình, kiểu màn cảm ứng: chạm = click · giữ lâu rồi nhả =
   // Right-click · GIỮ RỒI KÉO = kéo chuột (drag) · vuốt 1 ngón = cuộn PC ·
@@ -619,7 +647,9 @@ export function ScreenPage() {
   const sendInput = useCallback((payload) => {
     const ctl = ctlRef.current;
     if (ctl && ctl.readyState === "open") {
-      try { ctl.send(JSON.stringify(payload)); } catch {}
+      // Hợp đồng kênh control: bridge onControl chỉ route message có t (xem
+      // bridge/src/webrtc.js) — thiếu t:"input" là rớt im lặng, không báo lỗi.
+      try { ctl.send(JSON.stringify({ t: "input", ...payload })); } catch {}
       return;
     }
     owScreenInput(payload).catch((e) => {
@@ -665,7 +695,7 @@ export function ScreenPage() {
   const WHEEL_STEP = 24; // ngón đi được từng này px thì cuộn một nấc
   const PINCH_PX = 12; // hai ngón nở/thu được từng này px thì tính là véo (zoom)
   const SCROLL_GATE = 14; // hai ngón trượt được từng này px thì tính là cuộn
-  const ZOOM_MAX = 3; // trần zoom — master nới tới native (1920) + focus-rect nên 3x vẫn nét
+  const ZOOM_MAX = 4; // trần zoom — cover tràn viền máy dọc cần ~3.5-4x cho kín khung; focus-rect + master native giữ nét tới trần này
 
   const onPointerDown = (e) => {
     const n = normXY(e.clientX, e.clientY);
@@ -983,16 +1013,17 @@ export function ScreenPage() {
             >
               {full ? <CollapseIcon size={17} /> : <ExpandIcon size={17} />}
             </button>
+            {/* Chip zoom GOM CHUNG 1 dải với nút toàn màn hình (9remote: cụm nút
+                gọn 1 bên khi phóng, không rời rạc 2 góc). Bấm là về tràn viền
+                mặc định — véo nhỏ ra 1x vẫn còn đó để xem nguyên màn hình. */}
+            <button
+              ref={chipRef}
+              type="button"
+              class="zoom-chip"
+              onClick={defaultView}
+              aria-label="Về chế độ tràn viền"
+            >1×</button>
           </div>
-          {/* Chip zoom góc dưới-trái: chỉ hiện khi đang phóng (véo 2 ngón) —
-              bấm là về vừa khung, khỏi phải véo nhỏ lại từng chút một. */}
-          <button
-            ref={chipRef}
-            type="button"
-            class="zoom-chip"
-            onClick={resetZoom}
-            aria-label="Về vừa khung"
-          >1×</button>
         </div>
 
         {/* Gõ chữ + bàn phím GỘP MỘT KHUNG luôn hiển thị: mode thường nằm dưới

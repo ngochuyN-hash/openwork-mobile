@@ -1143,11 +1143,10 @@ label.field {
 /* Chip zoom góc dưới-trái: chỉ hiện khi đang phóng (véo 2 ngón xem zoom) —
    bấm là về vừa khung. Cùng chất mờ blur với corner-btn, nhỏ gọn không che hình. */
 .zoom-chip {
-  position: absolute;
-  left: 8px;
-  bottom: 8px;
-  z-index: 4;
-  display: none;
+  /* Nằm trong dải .stage-corner (gom 1 cụm khi phóng) — relative để ::after
+     loe vùng chạm, không còn neo góc dưới-trái riêng rẽ. */
+  position: relative;
+  display: none; /* chỉ hiện khi đang phóng (.show) — 1x thì dải chỉ còn nút ⛶ */
   min-width: 34px;
   height: 34px;
   padding: 0 10px;
@@ -1173,6 +1172,34 @@ label.field {
   position: absolute;
   inset: -5px;
 }
+/* Toàn màn hình tràn viền (padding đã bỏ) — nút nổi phải tự né notch/home-bar
+   (safe-area), không nằm dưới vùng cắt của máy. */
+.view-full .stage-corner {
+  top: calc(8px + env(safe-area-inset-top));
+  right: calc(8px + env(safe-area-inset-right));
+}
+/* Tràn viền kiểu 9remote khi ĐANG PHÓNG: bỏ khung viền + bo góc quanh ô ảnh —
+   nội dung phủ kín, không còn "khung" như app. Ở 1x (xem nguyên màn hình) giữ
+   thẻ card gọn như đã duyệt. */
+.screen-view.zoomed .screen-stage {
+  border: none;
+  border-radius: 0;
+  background: #000;
+}
+/* Dải nút gom 1 cụm khi phóng: dời xuống mép dưới (né vùng ngón cái + không
+   che phần nội dung đang pan), bù safe-area cho đáy máy. */
+.screen-view.zoomed .stage-corner {
+  top: auto;
+  right: calc(10px + env(safe-area-inset-right));
+  bottom: calc(10px + env(safe-area-inset-bottom));
+}
+/* Trong virtual-landscape (máy dọc toàn màn hình) cột phải là bàn phím xoay 90°
+   phủ kín chiều cao — dải nút dời SANG TRÁI nằm trên cột ảnh, không bị phím đè. */
+.screen-view.vland.zoomed .stage-corner {
+  right: auto;
+  left: calc(10px + env(safe-area-inset-left));
+}
+
 /* Toàn màn hình kiểu faux (Fullscreen API trên iOS chỉ dành cho <video>): cả
    cụm hình + nút góc cố định kín màn, ảnh co vừa trong vùng an toàn. Bấm nút
    góc là lớp này "mở ra" (hiệu ứng phóng nhẹ), nút góc đổi thành Thu nhỏ. */
@@ -1181,7 +1208,9 @@ label.field {
   inset: 0;
   z-index: 70;
   background: #000;
-  padding: calc(8px + var(--sat)) calc(8px + var(--sar)) calc(8px + var(--sab)) calc(8px + var(--sal));
+  /* Tràn viền kiểu 9remote: stream chạm sát mép màn hình — nút nổi + panel tự
+     bù safe-area (notch/home-bar), không đẩy ảnh ra xa mép nữa. */
+  padding: 0;
   animation: stage-in 0.18s ease-out;
 }
 @keyframes stage-in {
