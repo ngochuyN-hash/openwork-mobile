@@ -16,7 +16,9 @@
 // bên phải; thanh nút nằm trong lớp toàn màn hình nên không còn bị đè mất.
 // v2.9: zoom xem cục bộ kiểu app remote desktop — véo 2 ngón phóng/thu
 // (1x..3x, điểm giữa 2 ngón là tâm, nội dung bám theo ngón), đang zoom thì
-// kéo 1 ngón = dời khung nhìn; vuốt 2 ngón vẫn cuộn máy PC. Zoom CHỈ phóng
+// kéo 1 ngón = dời khung nhìn; vuốt 2 ngón vẫn cuộn máy PC. (v5.5 đổi: 1
+// ngón LUÔN cuộn PC, dời khung chuyển sang KÉO 2 NGÓN khi đang xem crop.)
+// Zoom CHỈ phóng
 // ảnh trên điện thoại (CSS transform): tọa độ bấm tính qua rect ảnh đã phóng
 // nên vẫn trúng đích, stream không tốn thêm băng thông. Chip "1.5×" góc
 // dưới-trái chỉ hiện khi đang phóng, bấm là về vừa khung.
@@ -48,6 +50,13 @@
 // đóng — hình trọn viewport, hết bị cột phím che mép phải); dải nút dời sát
 // MÉP ĐÁY (vland nằm đáy-trái né cột phím xoay); banner lỗi đè mỏng trên đỉnh
 // ảnh trong full (trước đây nằm ngoài portal nên bị lớp full che mùi).
+// v5.5: DESKTOP LẤP KÍN VÙNG NHÌN (cover everywhere) — cover áp cả bố cục khung
+// lẫn toàn màn hình; isCropped() = stage không phủ ≥96% ảnh → focus-rect chỉ
+// truyền phần đang thấy (native, trần 1920) để vùng nhìn nét đúng chữ. GESTURE
+// v5.5: vuốt 1 NGÓN = CUỘN PC LUÔN (kể cả đang xem crop) và gửi kèm toạ độ ngón
+// tay để daemon đưa con trỏ tới đúng nội dung dưới ngón rồi mới xoay wheel —
+// cuộn cửa sổ nào thấy ngay cửa sổ đó; dời khung nhìn khi crop = KÉO 2 NGÓN;
+// giữ-lâu-rồi-kéo = kéo chuột PC; véo = zoom.
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { apiScreenInfo, owScreenInput, owScreenStream, owWebrtcIce, owWebrtcSignal } from "../api.js";
@@ -94,8 +103,7 @@ export function ScreenPage() {
   const [text, setText] = useState("");
   // v5.2: mặc định TOÀN MÀN HÌNH — vào tab là lớp full phủ kín viewport (faux
   // CSS, áp dụng mọi trình duyệt); ⤡ thu gọn về bố cục khung khi cần.
-  const [full, setFull] = useState(true);
-  const userCollapsedRef = useRef(false); // user vừa TỰ bấm thu gọn → mở lại app đừng tự bật full
+  const [full, setFull] = useState(false); // vào tab Screen mặc định thu gọn; bấm ⤡ mới full
   const [keysOn, setKeysOn] = useState(false); // full: bàn phím ẩn sau nút ⌨, bấm mới trượt lên
   const [capW, setCapW] = useState(880); // bề rộng ảnh stream — tăng theo zoom để giữ nét
   const [wrtc, setWrtc] = useState(null); // null | trying | active | failed — đường truyền hình
@@ -364,8 +372,9 @@ export function ScreenPage() {
   }, [defaultView]);
 
   // Gesture trên hình, kiểu màn cảm ứng: chạm = click · giữ lâu rồi nhả =
-  // Right-click · GIỮ RỒI KÉO = kéo chuột (drag) · vuốt 1 ngón = cuộn PC ·
-  // hai ngón vuốt = cuộn · véo 2 ngón = zoom (đang zoom thì vuốt = dời khung).
+  // Right-click · GIỮ RỒI KÉO = kéo chuột (drag) · vuốt 1 ngón = cuộn PC LUÔN
+  // (kèm toạ độ → daemon đưa con trỏ tới đó rồi cuộn) · đang xem crop thì kéo
+  // 2 NGÓN = dời khung nhìn · véo 2 ngón = zoom.
   const pointers = useRef(new Map()); // pointerId -> {x, y} (client px)
   const g = useRef({
     // idle | press (đang kéo chuột PC) | scroll (vuốt cuộn, 1 hay 2 ngón đều được)
@@ -730,14 +739,12 @@ export function ScreenPage() {
     setFull(false);
   }, []);
 
-  // Ẩn app thì ngắt stream cho đỡ pin/3G, quay lại thì nối tiếp; thoát faux-full
-  // khi ẩn. Quay lại thì TỰ VÀO LẠI full (mặc định tràn màn hình) — trừ khi user
-  // vừa TỰ bấm thu gọn thì tôn trọng bố cục khung.
+  // Ẩn app thì ngắt stream cho đỡ pin/3G + thoát faux-full khi ẩn, quay lại thì
+  // nối tiếp. KHÔNG tự vào lại full — mặc định đã là thu gọn (15/09).
   useEffect(() => {
     const onVis = () => {
       setPaused(document.hidden);
       if (document.hidden) exitFull();
-      else if (!userCollapsedRef.current) setFull(true);
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
@@ -849,6 +856,28 @@ export function ScreenPage() {
     syncCapture();
   };
 
+  // Bắt đầu DỜI KHUNG NHÌN (pan) — v5.5 dành cho KÉO 2 NGÓN khi đang zoom (1
+  // ngón đã nhường cho cuộn PC). Cùng công thức pan/kẹp biên với cú véo: ảnh
+  // lớn hơn khung thì trượt tới khi mép chạm mép, ảnh nhỏ hơn thì kẹp giữa.
+  // Tính sẵn biên (plmin/plmax) để mỗi cú kéo không phải đo lại mỗi frame.
+  const startPan = (mx, my) => {
+    const st = g.current;
+    st.mode = "pan";
+    st.panSX = mx; st.panSY = my;
+    st.plx0 = zoomRef.current.x; st.ply0 = zoomRef.current.y;
+    const img = imgRef.current, stage = stageRef.current;
+    if (img && stage) {
+      const R = img.getBoundingClientRect(), S = stage.getBoundingClientRect();
+      const z = zoomRef.current;
+      const bcx = R.left + R.width / 2 - S.left - z.x;
+      const bcy = R.top + R.height / 2 - S.top - z.y;
+      const [x0, x1] = panBounds(R.width, S.width, bcx);
+      const [y0, y1] = panBounds(R.height, S.height, bcy);
+      st.plminX = x0; st.plmaxX = x1;
+      st.plminY = y0; st.plmaxY = y1;
+    } else { st.plminX = 0; st.plmaxX = 0; st.plminY = 0; st.plmaxY = 0; }
+  };
+
   const onPointerDown = (e) => {
     const n = normXY(e.clientX, e.clientY);
     if (!n) return;
@@ -920,7 +949,12 @@ export function ScreenPage() {
       } else {
         st.accY += my - st.lastMidY;
         st.lastMidY = my;
-        if (Math.abs(st.accY) >= SCROLL_GATE) st.mode = "scroll";
+        if (Math.abs(st.accY) >= SCROLL_GATE) {
+          // đang xem CROP: 2 ngón kéo = DỜI KHUNG nhìn (1 ngón đã nhường cho
+          // cuộn PC); xem trọn desktop: 2 ngón vuốt = cuộn như cũ.
+          if (isCropped()) startPan(mx, my);
+          else st.mode = "scroll";
+        }
         return;
       }
     }
@@ -946,24 +980,33 @@ export function ScreenPage() {
     if (st.mode === "pinch-end") return; // ngón còn lại sau véo: bỏ tới khi nhấc hết
     if (st.mode === "scroll") {
       // 1 hay 2 ngón đều cuộn cùng nhịp: điểm dò = ngón một (1 ngón) / điểm
-      // giữa hai ngón (2 ngón)
+      // giữa hai ngón (2 ngón). Gửi kèm toạ độ chuẩn hoá để daemon đưa con
+      // trỏ tới ĐÚNG nội dung dưới ngón rồi mới cuộn (v5.5) — cuộn cửa sổ nào
+      // nhìn thấy ngay cửa sổ đó, không phụ thuộc con trỏ PC đang nằm đâu.
       const pts = [...pointers.current.values()];
+      const refX = pts.length >= 2 ? (pts[0].x + pts[1].x) / 2 : pts[0]?.x;
       const refY = pts.length >= 2 ? (pts[0].y + pts[1].y) / 2 : pts[0]?.y;
       if (refY != null) {
         st.accY += refY - st.lastMidY;
         st.lastMidY = refY;
+        const n = normXY(refX, refY);
         while (Math.abs(st.accY) >= WHEEL_STEP) {
           // ngón vuốt lên (accY âm) = cuộn xem nội dung dưới = wheel âm
-          sendInput({ type: "wheel", dy: st.accY > 0 ? 2 : -2 });
+          sendInput({ type: "wheel", dy: st.accY > 0 ? 2 : -2, ...(n || {}) });
           st.accY -= st.accY > 0 ? WHEEL_STEP : -WHEEL_STEP;
         }
       }
       return;
     }
     if (st.mode === "pan") {
+      // 2 ngón kéo = dời khung (v5.5); nhấc bớt 1 ngón giữa chừng thì tiếp tục
+      // với ngón còn lại (gốc pan đã được rebase ở finishPointer, khỏi giật).
+      const pts = [...pointers.current.values()];
+      const mx = pts.length >= 2 ? (pts[0].x + pts[1].x) / 2 : e.clientX;
+      const my = pts.length >= 2 ? (pts[0].y + pts[1].y) / 2 : e.clientY;
       const z = zoomRef.current;
-      const px = Math.min(Math.max(st.plx0 + (e.clientX - st.panSX), st.plminX), st.plmaxX);
-      const py = Math.min(Math.max(st.ply0 + (e.clientY - st.panSY), st.plminY), st.plmaxY);
+      const px = Math.min(Math.max(st.plx0 + (mx - st.panSX), st.plminX), st.plmaxX);
+      const py = Math.min(Math.max(st.ply0 + (my - st.panSY), st.plminY), st.plmaxY);
       zoomRef.current = { s: z.s, x: px, y: py };
       applyZoom();
       // rect chạy theo pan như 9remote set-focus — gửi theo nhịp, không spam
@@ -984,30 +1027,12 @@ export function ScreenPage() {
       if (n) sendInput({ type: "move", ...n });
       return;
     }
-    // idle: đi quá ngưỡng — đang zoom thì vuốt = dời khung nhìn; đã "giữ" thì
-    // kéo tiếp = kéo chuột PC (down tại điểm giữ); thường thì vuốt = cuộn PC.
+    // idle: đi quá ngưỡng — đã "giữ" thì kéo tiếp = kéo chuột PC (down tại điểm
+    // giữ); thường thì vuốt = cuộn PC, KỂ CẢ đang xem crop (v5.5 — 1 ngón luôn
+    // cuộn nội dung dưới ngón; dời khung nhìn khi crop dùng KÉO 2 NGÓN).
     const dist = Math.hypot(e.clientX - st.scx, e.clientY - st.scy);
     if (dist > SLOP) {
       clearTimeout(st.lpTimer);
-      // v5.5: vuốt = dời khung khi ĐANG XEM CROP (phóng to lẫn màn rộng 1x) —
-      // xem trọn desktop thì vuốt mới là cuộn PC như thường.
-      if (isCropped()) {
-        st.mode = "pan";
-        st.panSX = e.clientX; st.panSY = e.clientY;
-        st.plx0 = zoomRef.current.x; st.ply0 = zoomRef.current.y;
-        const img = imgRef.current, stage = stageRef.current;
-        if (img && stage) {
-          const R = img.getBoundingClientRect(), S = stage.getBoundingClientRect();
-          const z = zoomRef.current;
-          const bcx = R.left + R.width / 2 - S.left - z.x;
-          const bcy = R.top + R.height / 2 - S.top - z.y;
-          const [x0, x1] = panBounds(R.width, S.width, bcx);
-          const [y0, y1] = panBounds(R.height, S.height, bcy);
-          st.plminX = x0; st.plmaxX = x1;
-          st.plminY = y0; st.plmaxY = y1;
-        } else { st.plminX = 0; st.plmaxX = 0; st.plminY = 0; st.plmaxY = 0; }
-        return;
-      }
       if (st.held) {
         const n = normXY(st.scx, st.scy);
         if (n) sendInput({ type: "down", ...n });
@@ -1037,7 +1062,15 @@ export function ScreenPage() {
       return;
     }
     if (st.mode === "pan") {
-      if (pointers.current.size === 0) st.mode = "idle";
+      if (pointers.current.size === 0) {
+        st.mode = "idle";
+      } else if (pointers.current.size === 1) {
+        // 2 ngón còn 1: điểm giữa biến mất nên delta tính từ gốc cũ sẽ GIẬT —
+        // đổi gốc pan sang ngón còn lại (vị trí khung giữ nguyên).
+        const [p] = [...pointers.current.values()];
+        st.panSX = p.x; st.panSY = p.y;
+        st.plx0 = zoomRef.current.x; st.ply0 = zoomRef.current.y;
+      }
       return; // dời khung nhìn không đụng tới máy PC
     }
     if (st.mode === "scroll") {
@@ -1083,8 +1116,7 @@ export function ScreenPage() {
   // Gọi trong effect SAU khi portal mount xong (bấm xong element được dời sang
   // body — fullscreen phần tử cũ rồi tháo ra là tự thoát ngay).
   const toggleFull = () => {
-    if (full) { userCollapsedRef.current = true; exitFull(); return; }
-    userCollapsedRef.current = false;
+    if (full) { exitFull(); return; }
     setFull(true);
   };
   useEffect(() => {
