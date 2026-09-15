@@ -528,6 +528,8 @@ export function ScreenPage() {
   const ctlRef = useRef(null); // datachannel "control" khi WebRTC active
   const wrtcRef = useRef(null); // mirror của wrtc cho effect (không stale)
   const runIdRef = useRef(0); // hủy vòng nối lại khi pause/unmount đổi
+  const retryTimerRef = useRef(0); // lịch tự dựng lại WebRTC sau khi rớt (backoff)
+  const retryCountRef = useRef(0); // số lượt dựng lại liên tiếp chưa thành công
   const textInputRef = useRef(null);
   const echoRef = useRef(null); // chấm phản hồi cục bộ: cho biết cú chạm đã ăn, khỏi đoán qua mạng
 
@@ -541,6 +543,31 @@ export function ScreenPage() {
       alive = false;
     };
   }, []);
+
+  // ---- TỰ HỒI PHỤC WebRTC: trước đây 1 nhịp mạng chớp là disconnected bị coi
+  // là chết hẳn → khóa WebRTC cả phiên, kẹt vĩnh viễn ở HTTP chậm (~0.5-0.7s/ảnh
+  // trên 5G). Giờ sau khi rớt thì hẹn backoff dựng lại phiên P2P/TURN MỚI tự
+  // động (bridge tạo PC mới mỗi offer — bridge/src/webrtc.js — nên không thể
+  // "hồi sinh" PC cũ, phải signallại từ đầu; HTTP tạm chở hình trong lúc chờ).
+  const retryWebRTC = useCallback(() => {
+    if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = 0; }
+    wrtcRef.current = null;
+    setWrtc(null);
+    setRoute("");
+    setPing(0);
+    setAttempt((a) => a + 1);
+  }, []);
+  // Lịch hồi phục: 2s → 6s → 15s → trần 30s, tối đa 5 lượt liên tiếp rồi dừng
+  // chờ sự kiện mạng/vào lại tab. Mỗi lượt chỉ tốn 2 request nhỏ (ice + signal)
+  // qua worker — không đe dọa hạn mức CF.
+  const scheduleWebRtcRetry = useCallback(() => {
+    if (retryTimerRef.current) return;
+    const n = retryCountRef.current;
+    if (n >= 5) return;
+    const delay = n === 0 ? 2000 : n === 1 ? 6000 : n === 2 ? 15000 : 30000;
+    retryCountRef.current = n + 1;
+    retryTimerRef.current = setTimeout(retryWebRTC, delay);
+  }, [retryWebRTC]);
 
   // ---- vòng stream HTTP (DỰ PHÒNG khi WebRTC thất bại): nối lại khi đứt,
   // dừng khi app ẩn/unmount, đổi độ nét khi zoom sâu (capW đổi là nối vòng mới)
@@ -620,6 +647,8 @@ export function ScreenPage() {
   // chỉ làm mối SDP/ICE đúng một lượt, sau đó đường hình không qua tunnel/worker
   // nữa nên latency bằng mạng thật giữa hai máy (cùng WiFi ~2-10ms). STUN công
   // khai để phone tìm thấy PC sau NAT; NAT gắt/chặn UDP → lùi về stream HTTP.
+  // Rớt giữa chừng (5G chớp nhịp) thì tự dựng lại phiên mới theo lịch backoff
+  // (retryWebRTC phía trên) — không còn kẹt HTTP cả phiên như trước đây.
   useEffect(() => {
     if (!info?.available || paused) return;
     if (wrtcRef.current === "active" || wrtcRef.current === "failed") return;
@@ -635,6 +664,8 @@ export function ScreenPage() {
     let fpsTimer = null;
     let frameTimer = null;
     let routeTimer = null;
+    let graceTimer = null; // hẹn 3s cho disconnected — chờ tự lành, chưa kết luận rớt
+    let lastPong = -1; // performance.now() lúc pong gần nhất (-1 = chưa có pong nào)
     let frameCount = 0;
     const fail = () => {
       if (dead) return;
@@ -642,11 +673,13 @@ export function ScreenPage() {
       clearInterval(pingTimer); clearInterval(fpsTimer);
       if (frameTimer) { clearTimeout(frameTimer); frameTimer = null; }
       if (routeTimer) { clearTimeout(routeTimer); routeTimer = null; }
+      if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
       try { pc?.close(); } catch {}
       ctlRef.current = null;
       wrtcRef.current = "failed";
       setWrtc("failed");
       setPing(0);
+      scheduleWebRtcRetry(); // hẹn dựng phiên WebRTC mới — HTTP tạm chở hình trong lúc chờ
     };
     (async () => {
       try {
@@ -662,7 +695,16 @@ export function ScreenPage() {
           if (e.candidate) candidates.push({ candidate: e.candidate.candidate, mid: String(e.candidate.sdpMid ?? "0") });
         };
         pc.onconnectionstatechange = () => {
-          if (["failed", "closed", "disconnected"].includes(pc.connectionState)) fail();
+          const st = pc.connectionState;
+          if (st === "connected") {
+            if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; } // tự lành — hủy grắc
+          } else if (st === "disconnected") {
+            // KHÔNG chết ngay: disconnected thường tự hồi phục trong 1-2s khi
+            // WiFi/5G chớp nhịp — cho 3s grắc, quá đó vẫn đứt mới coi là rớt.
+            if (!graceTimer) graceTimer = setTimeout(() => { graceTimer = null; fail(); }, 3000);
+          } else if (st === "failed" || st === "closed") {
+            fail();
+          }
         };
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -698,17 +740,29 @@ export function ScreenPage() {
             setInfo((i) => (i ? { ...i, screen: { width: m.screenW, height: m.screenH } } : i));
             resyncFocus(); // hello đổi cỡ master / kết nối mới — báo lại vùng nhìn
           }
-          else if (m.t === "pong") setPing(Math.max(0, Math.round(performance.now() - m.ts)));
+          else if (m.t === "pong") { lastPong = performance.now(); setPing(Math.max(0, Math.round(lastPong - m.ts))); }
           else if (m.t === "ierr") setErrorMsg(m.m);
         };
         scr.onmessage = (e) => {
           frameCount += 1;
           setStatus("live");
           setErrorMsg("");
+          if (retryCountRef.current || retryTimerRef.current) {
+            retryCountRef.current = 0; // có hình thật rồi — xóa nợ retry
+            if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = 0; }
+          }
           pushFrame(e.data);
         };
+        // Canh sống bằng pong ĐỘC LẬP với hình: màn PC im thì hợp lệ không có
+        // frame nào về (daemon chỉ chụp khi màn đổi), nhưng bridge phải luôn
+        // thưa — ping mỗi 2s mà >10s không pong (hoặc 12s đầu chưa pong lần
+        // nào) nghĩa là datachannel treo ngầm → rớt, rót về đường hồi phục.
+        const pingsStartedAt = performance.now();
         pingTimer = setInterval(() => {
-          try { ctl.send(JSON.stringify({ t: "ping", ts: performance.now() })); } catch {}
+          const now = performance.now();
+          try { ctl.send(JSON.stringify({ t: "ping", ts: now })); } catch {}
+          if (lastPong >= 0 && now - lastPong > 10000) { fail(); return; }
+          if (lastPong < 0 && now - pingsStartedAt > 12000) { fail(); return; }
         }, 2000);
         fpsTimer = setInterval(() => { setFps(frameCount); frameCount = 0; }, 1000);
         wrtcRef.current = "active";
@@ -743,6 +797,7 @@ export function ScreenPage() {
       clearInterval(pingTimer); clearInterval(fpsTimer);
       if (frameTimer) { clearTimeout(frameTimer); frameTimer = null; }
       if (routeTimer) { clearTimeout(routeTimer); routeTimer = null; }
+      if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
       try { pc?.close(); } catch {}
       ctlRef.current = null;
       if (wrtcRef.current !== "failed") {
@@ -776,10 +831,37 @@ export function ScreenPage() {
     const onVis = () => {
       setPaused(document.hidden);
       if (document.hidden) exitFull();
+      else if (wrtcRef.current === "failed" && !retryTimerRef.current) {
+        // Vào lại app mà đường P2P đang chết: hẹn dựng lại sau 1s (HTTP kịp cho
+        // hình trước) — vào tab là có hình liền, P2P lên được là tự nhường.
+        retryCountRef.current = 0;
+        retryTimerRef.current = setTimeout(retryWebRTC, 1000);
+      }
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
-  }, [exitFull]);
+  }, [exitFull, retryWebRTC]);
+
+  // Mạng điện thoại đổi/chập (5G rớt-được-lại, WiFi↔cellular): xóa nợ retry và
+  // nếu đường P2P đang chết thì dựng lại sớm — không đợi hết backoff dài. iOS
+  // Safari không có navigator.connection — optional chaining tự bỏ qua.
+  useEffect(() => {
+    const onNet = () => {
+      retryCountRef.current = 0;
+      if (wrtcRef.current === "failed" && !retryTimerRef.current) {
+        retryTimerRef.current = setTimeout(retryWebRTC, 1000);
+      }
+    };
+    window.addEventListener("online", onNet);
+    window.addEventListener("offline", onNet);
+    const conn = navigator.connection ?? navigator.webkitConnection ?? navigator.mozConnection;
+    conn?.addEventListener?.("change", onNet);
+    return () => {
+      window.removeEventListener("online", onNet);
+      window.removeEventListener("offline", onNet);
+      conn?.removeEventListener?.("change", onNet);
+    };
+  }, [retryWebRTC]);
 
   // Dọn lúc rời trang. Cleanup unmount TUYỆT ĐỐI không được ném lỗi: Preact
   // chạy cleanup NGAY GIỮA đường tháo DOM, ném là cả nhánh render chết giữa
@@ -789,6 +871,7 @@ export function ScreenPage() {
   // lỡ routes đi khi còn toàn màn hình thì nhả khoá xoay + thoát fullscreen.
   useEffect(() => () => {
     clearTimeout(capTimer.current);
+    if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = 0; }
     if (panFocusTimer.current) { clearTimeout(panFocusTimer.current); panFocusTimer.current = 0; }
     try { screen.orientation?.unlock?.(); } catch {}
     try { if (document.fullscreenElement) void document.exitFullscreen(); } catch {}
@@ -1183,7 +1266,8 @@ export function ScreenPage() {
     : "16 / 9";
 
   // Ép nối lại cả hai đường: tăng attempt là WebRTC thử lại từ đầu; WebRTC
-  // thất bại hẳn thì vòng HTTP dự phòng tự chạy.
+  // thất bại hẳn thì vòng HTTP dự phòng tự chạy. Nút tay cũng xóa nợ retry —
+  // user chủ ý thì cho đủ chu kỳ backoff.
   const reconnect = useCallback(() => {
     setErrorMsg("");
     setStatus("connecting");
@@ -1191,6 +1275,8 @@ export function ScreenPage() {
     wrtcRef.current = null;
     setRoute("");
     setPing(0);
+    if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = 0; }
+    retryCountRef.current = 0;
     setAttempt((a) => a + 1);
   }, []);
 
