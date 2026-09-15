@@ -58,6 +58,10 @@
 // nhìn khi crop = KÉO 2 NGÓN; giữ-lâu-rồi-kéo = kéo chuột PC; véo = zoom.
 // v5.7: XEM TRỌN MẶC ĐỊNH (15/09) — mở tab thu gọn = contain (desktop trọn trong
 // khung, hết gọt 2 bên); ⤡ toàn màn hình = cover lấp kín (xem defaultView).
+// v5.8: GESTURE MỚI (bỏ pan 2 ngón của v5.5) — ĐANG ZOOM (s>1.02): 1 ngón kéo =
+// dời khung nhìn, chạm BIÊN (hết chỗ trượt) mà kéo tiếp = CUỘN PC CẢ 4 HƯỚNG
+// (WHEEL dx lẫn dy, ngón đi hướng nào cuộn hướng đó, nội dung bám theo ngón);
+// CHƯA ZOOM: 1 ngón vuốt = cuộn PC như v5.5; 2 ngón chỉ còn véo (zoom) + cuộn.
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { apiScreenInfo, owScreenInput, owScreenStream, owWebrtcIce, owWebrtcSignal } from "../api.js";
@@ -405,6 +409,11 @@ export function ScreenPage() {
     // pan 1 ngón khi đã zoom: điểm bắt đầu, pan lúc đầu, biên dời từng trục
     panSX: 0, panSY: 0, plx0: 0, ply0: 0,
     plminX: 0, plmaxX: 0, plminY: 0, plmaxY: 0,
+    // edgeX/edgeY: phần kéo VƯỢT BIÊN pan (bị clamp cắt đi) dồn lại — qua một
+    // nấc wheel (WHEEL_STEP) là phát lệnh cuộn PC hướng đó (edge-scroll).
+    // lastBlocked* = phần vượt TUYỆT ĐỐI của nấc trước — chỉ chênh lệch giữa
+    // hai nấc mới được cộng vào nợ (không dồn cả quãng đường cũ).
+    edgeX: 0, edgeY: 0, lastBlockedX: 0, lastBlockedY: 0,
   });
   const drawChain = useRef(Promise.resolve()); // vẽ tuần tự — crop về sau không nhảy hàng trước crop trước nó
   const gotFullRef = useRef(false); // đã có khung FULL cho kết nối hiện tại? crop lẻ không đủ làm nền
@@ -972,15 +981,17 @@ export function ScreenPage() {
     syncCapture();
   };
 
-  // Bắt đầu DỜI KHUNG NHÌN (pan) — v5.5 dành cho KÉO 2 NGÓN khi đang zoom (1
-  // ngón đã nhường cho cuộn PC). Cùng công thức pan/kẹp biên với cú véo: ảnh
-  // lớn hơn khung thì trượt tới khi mép chạm mép, ảnh nhỏ hơn thì kẹp giữa.
-  // Tính sẵn biên (plmin/plmax) để mỗi cú kéo không phải đo lại mỗi frame.
+// Bắt đầu DỜI KHUNG NHÌN (pan) — 1 NGÓN khi đang zoom (chưa zoom thì 1 ngón
+// là cuộn PC). Cùng công thức pan/kẹp biên với cú véo: ảnh lớn hơn khung thì
+// trượt tới khi mép chạm mép, ảnh nhỏ hơn thì kẹp giữa. Tính sẵn biên
+// (plmin/plmax) để mỗi cú kéo không phải đo lại mỗi frame.
   const startPan = (mx, my) => {
     const st = g.current;
     st.mode = "pan";
     st.panSX = mx; st.panSY = my;
     st.plx0 = zoomRef.current.x; st.ply0 = zoomRef.current.y;
+    st.edgeX = 0; st.edgeY = 0; // nợ edge-scroll: reset mỗi cú pan
+    st.lastBlockedX = 0; st.lastBlockedY = 0;
     const img = imgRef.current, stage = stageRef.current;
     if (img && stage) {
       const R = img.getBoundingClientRect(), S = stage.getBoundingClientRect();
@@ -1065,16 +1076,12 @@ export function ScreenPage() {
       } else {
         const moveDist = Math.hypot(mx - st.mx0, my - st.my0);
         if (moveDist >= SCROLL_GATE) {
-          // 2 ngón trượt:
-          // ĐÃ ZOOM (hoặc đang xem crop): 2 NGÓN KÉO = TRƯỢT KHUNG HÌNH (Pan 360° trái/phải/trên/dưới)
-          // CHƯA ZOOM: 2 ngón vuốt = cuộn PC (scroll wheel)
-          if (isCropped() || zoomRef.current.s > 1.02) {
-            startPan(mx, my);
-          } else {
-            st.mode = "scroll";
-            st.lastMidY = my;
-            st.accY = my - st.my0;
-          }
+          // 2 ngón trượt (không phải véo) = cuộn PC ở MỌI mức zoom. Pan khung
+          // giờ do 1 NGÓN đảm nhiệm khi đã zoom (kèm edge-scroll) — 2 ngón
+          // không còn chuyển khung nữa.
+          st.mode = "scroll";
+          st.lastMidY = my;
+          st.accY = my - st.my0;
         }
         return;
       }
@@ -1120,16 +1127,37 @@ export function ScreenPage() {
       return;
     }
     if (st.mode === "pan") {
-      // 2 ngón kéo = dời khung (v5.5); nhấc bớt 1 ngón giữa chừng thì tiếp tục
-      // với ngón còn lại (gốc pan đã được rebase ở finishPointer, khỏi giật).
-      const pts = [...pointers.current.values()];
-      const mx = pts.length >= 2 ? (pts[0].x + pts[1].x) / 2 : e.clientX;
-      const my = pts.length >= 2 ? (pts[0].y + pts[1].y) / 2 : e.clientY;
+      // 1 ngón kéo = dời khung (đang zoom). Chạm BIÊN (hết chỗ trượt mà ngón
+      // vẫn đi tiếp) thì phần vượt dồn vào edgeX/edgeY — qua 1 nấc wheel là
+      // cuộn PC ĐÚNG HƯỚNG ngón đang đẩy (cả 4 hướng: dx ngang lẫn dy dọc),
+      // tại nội dung dưới ngón (toạ độ chuẩn hoá gửi kèm). Nội dung vẫn bám
+      // theo ngón xuyên suốt pan → edge-scroll liền mạch, không giật ngược.
+      const mx = e.clientX, my = e.clientY;
       const z = zoomRef.current;
-      const px = Math.min(Math.max(st.plx0 + (mx - st.panSX), st.plminX), st.plmaxX);
-      const py = Math.min(Math.max(st.ply0 + (my - st.panSY), st.plminY), st.plmaxY);
+      const rawX = st.plx0 + (mx - st.panSX);
+      const rawY = st.ply0 + (my - st.panSY);
+      const px = Math.min(Math.max(rawX, st.plminX), st.plmaxX);
+      const py = Math.min(Math.max(rawY, st.plminY), st.plmaxY);
       zoomRef.current = { s: z.s, x: px, y: py };
       applyZoom();
+      // Chỉ phần kéo VƯỢT BIÊN tăng thêm mới tính vào nợ (chênh lệch so với
+      // nấc trước) — đừng lấy hiệu TUYỆT ĐỐI rawX−px: khi khung đã kẹp cứng,
+      // hiệu đó bằng cả quãng đường tích luỹ, mỗi nấc kéo lại dồn toàn bộ vào
+      // → wheel bùng nổ theo cấp số cộng (lỗi phát hiện khi test 15/09).
+      const bx = rawX - px, by = rawY - py;
+      st.edgeX += bx - st.lastBlockedX;
+      st.edgeY += by - st.lastBlockedY;
+      st.lastBlockedX = bx;
+      st.lastBlockedY = by;
+      const n = normXY(mx, my);
+      while (Math.abs(st.edgeX) >= WHEEL_STEP) {
+        sendInput({ type: "wheel", dx: st.edgeX > 0 ? 2 : -2, ...(n || {}) });
+        st.edgeX -= st.edgeX > 0 ? WHEEL_STEP : -WHEEL_STEP;
+      }
+      while (Math.abs(st.edgeY) >= WHEEL_STEP) {
+        sendInput({ type: "wheel", dy: st.edgeY > 0 ? 2 : -2, ...(n || {}) });
+        st.edgeY -= st.edgeY > 0 ? WHEEL_STEP : -WHEEL_STEP;
+      }
       // rect chạy theo pan như 9remote set-focus — gửi theo nhịp, không spam
       if (!panFocusTimer.current) {
         panFocusTimer.current = setTimeout(() => {
@@ -1149,8 +1177,8 @@ export function ScreenPage() {
       return;
     }
     // idle: đi quá ngưỡng — đã "giữ" thì kéo tiếp = kéo chuột PC (down tại điểm
-    // giữ); 1 ngón vuốt = cuộn PC (lướt Zalo / web mượt mà); dời khung nhìn
-    // khi zoom dùng 2 NGÓN KÉO (chuẩn 9Remote).
+    // giữ); ĐANG ZOOM: 1 ngón kéo = dời khung nhìn, chạm biên thì edge-scroll;
+    // CHƯA ZOOM: 1 ngón vuốt = cuộn PC (lướt Zalo / web mượt mà).
     const dist = Math.hypot(e.clientX - st.scx, e.clientY - st.scy);
     if (dist > SLOP) {
       clearTimeout(st.lpTimer);
@@ -1163,9 +1191,13 @@ export function ScreenPage() {
         posEcho(e.clientX, e.clientY);
         return;
       }
-      st.mode = "scroll";
-      st.lastMidY = e.clientY;
-      st.accY = e.clientY - st.scy; // tính cả đoạn vừa vuốt, khỏi bỏ sót nấc đầu
+      if (zoomRef.current.s > 1.02) {
+        startPan(e.clientX, e.clientY); // 1 ngón dời khung khi đã zoom
+      } else {
+        st.mode = "scroll";
+        st.lastMidY = e.clientY;
+        st.accY = e.clientY - st.scy; // tính cả đoạn vừa vuốt, khỏi bỏ sót nấc đầu
+      }
     }
   };
 
@@ -1183,18 +1215,14 @@ export function ScreenPage() {
       return;
     }
     if (st.mode === "pan") {
+      // 1 ngón pan: nhấc hết tay là xong — báo vùng nhìn + cân lại độ nét
+      // stream theo zoom (giống khi nhả véo).
       if (pointers.current.size === 0) {
         st.mode = "idle";
         sendFocus(computeFocus());
         syncCapture();
-      } else if (pointers.current.size === 1) {
-        // 2 ngón còn 1: điểm giữa biến mất nên delta tính từ gốc cũ sẽ GIẬT —
-        // đổi gốc pan sang ngón còn lại (vị trí khung giữ nguyên).
-        const [p] = [...pointers.current.values()];
-        st.panSX = p.x; st.panSY = p.y;
-        st.plx0 = zoomRef.current.x; st.ply0 = zoomRef.current.y;
       }
-      return; // dời khung nhìn không đụng tới máy PC
+      return; // dời khung nhìn / edge-scroll không đụng máy PC ngoài wheel trên
     }
     if (st.mode === "scroll") {
       if (pointers.current.size === 0) st.mode = "idle";
