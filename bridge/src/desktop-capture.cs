@@ -14,10 +14,12 @@
 //
 // stdin (dòng lệnh): PING | START|<width>|<quality> | STOP | KEY |
 //   FOCUS|<x>|<y>|<w>|<h> | FOCUSOFF | QUIT
-// Focus-rect zoom (học 9remote set-focus): khi phone đang PHÓNG, chỉ mã hóa +
-// gửi vùng đang nhìn (crop = focus ∩ vùng đổi) — băng thông = đúng vùng nhìn
-// dù master to = native (1920) để vùng đó nét thật; keyframe 2s trong focus
-// cũng chỉ tươi cả vùng nhìn, không phải cả màn native. FOCUSOFF trả về crop
+// Vùng-đổi theo LƯỚI TILE (học 9remote): màn chia 4×3 tile, mỗi tile diff độc
+// lập → chỉ mã hóa tile nào vừa ĐỔI vừa TRONG vùng nhìn; thay đổi nhỏ rải rác
+// (cursor + notification 2 góc) không còn union thành bbox to. Focus-rect zoom:
+// khi phone đang PHÓNG, vùng nhìn = tile ∩ focus — băng thông = đúng vùng nhìn
+// dù master to = native (1920) để vùng đó nét thật; keyframe 6s trong focus
+// cũng chỉ tươi cả vùng nhìn, không phải cả màn native. FOCUSOFF trả về tile
 // vùng-đổi như cũ. Tọa độ theo khung chụp HIỆN HÀNH (targetW×targetH) — bridge
 // quy đổi từ chuẩn hóa 0..1 rồi gửi lại mỗi khi meta đổi cỡ.
 // stdout: nhị phân khung [4B BE len][1B type][payload]
@@ -253,16 +255,19 @@ class DesktopCapture
     static int screenW, screenH;
     static int targetW = 880, targetH = 551, quality = 55;
     static IntPtr smallRT, smallRTV, staging;
+    // Tile grid: chia màn thành lưới để independent diff — chỉ encode tile vùng
+    // đổi ∩ vùng nhìn, thay đổi nhỏ rải rác không union thành bbox to (học 9remote).
+    const int TILE_COLS = 4, TILE_ROWS = 3; // 12 tiles @ 880×551 → ~220×184
     // Hàng đợi pixel giữa capture-thread và encode-thread (pipeline song song:
     // acquire+GPU+map ~10ms || encode JPEG ~15ms — từng nối chuỗi giữ fps ở 21).
-    class EncodeJob { public byte[] Pixels; public RECT? Crop; } // Crop=null → full frame
+    class EncodeJob { public byte[] Pixels; public RECT[] Crops; } // null = full frame, [N] = tile hoặc crop đơn
     static System.Collections.Concurrent.ConcurrentQueue<EncodeJob> encodeQueue = new System.Collections.Concurrent.ConcurrentQueue<EncodeJob>();
     static volatile bool encodeAlive = false;
     static byte[] lastPixels;   // bản cache (row-pitch layout) để vẽ con trỏ khi màn đứng yên
     static int lastPitch;
     static long lastCursorX = long.MinValue, lastCursorY = long.MinValue;
     static long prevCursorX = long.MinValue, prevCursorY = long.MinValue; // v4.1.6: vị trí frame trước — DiffBbox union cả 2 kẻo ghost
-    static long lastKeyframeMs; // đầy 2s là ép nén nguyên khung (người vào trễ tự lành)
+    static long lastKeyframeMs; // đầy KEYFRAME_EVERY_MS là ép nén nguyên khung (người vào trễ tự lành)
     static volatile bool nextFull = true; // khung đầu + lệnh KEY (viewer mới) = full
     static volatile bool keyWanted = false; // KEY tới lúc màn đang im → đánh thức duplication
     static volatile bool forceNextCapture = false; // one-shot: chụp khung kế bất kể màn có đổi (sau START / sau re-dup)
@@ -280,6 +285,10 @@ class DesktopCapture
     const int FRAME_JPEG = 1, FRAME_META = 2, FRAME_ERROR = 3, FRAME_UNCHANGED = 0;
     const int MIN_SEND_INTERVAL_MS = 25;   // trần 40 hình/s
     const int ACQUIRE_TIMEOUT_MS = 50;
+    // Keyframe định kỳ chỉ cần đủ cho HTTP fallback tự lành (SCTP/WebRTC là
+    // ordered-reliable — không mất mảnh, viewer mới vào vẫn nhận ngay replay +
+    // lệnh KEY event-driven). 2s cũ ~20-30KB/s phí; 6s cắt ~2/3 phần đó.
+    const long KEYFRAME_EVERY_MS = 6000;
 
     const string HLSL_VS = @"
 struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD; };
@@ -669,62 +678,78 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
         return new RECT { L = l, T = t, R = r, B = btm };
     }
 
-    /**
-     * Vùng ĐỔI giữa 2 frame nhỏ (driver này KHÔNG trả metadata dirty rects —
-     * AMD trả TotalMetadataBufferSize=0, dính thật 13/09 — nên tự so như 9remote,
-     * nhưng trên frame đã thu nhỏ 1.9MB nên rẻ hơn nhiều lần). Trả null = giống hệt.
-     * Con trỏ cũ/mới cộng vào bbox vì cursor vẽ ở encode thread (CPU).
-     */
-    static unsafe RECT DiffBbox(byte[] prev, byte[] cur, int pitch, int w, int h)
+    /** Vị trí pixel của 1 tile trong khung chụp (tile cuối hàng/cột bù phần dư). */
+    static RECT TileRect(int idx, int w, int h)
     {
-        RECT box = new RECT();
+        int tc = idx % TILE_COLS, tr = idx / TILE_COLS;
+        int tileW = w / TILE_COLS, tileH = h / TILE_ROWS;
+        return new RECT
+        {
+            L = tc * tileW,
+            T = tr * tileH,
+            R = (tc == TILE_COLS - 1) ? w : (tc + 1) * tileW,
+            B = (tr == TILE_ROWS - 1) ? h : (tr + 1) * tileH,
+        };
+    }
+
+    /**
+     * Diff theo LƯỚI TILE thay vì bbox union: mỗi tile so pixel với frame trước,
+     * trả mảng đánh dấu tile ĐỔI. Thay đổi nhỏ rải rác (cursor + notification 2
+     * góc) không còn kéo bbox bao trọn → chỉ encode tile thật sự thay đổi.
+     */
+    static unsafe bool[] DiffTiles(byte[] prev, byte[] cur, int pitch, int w, int h)
+    {
+        int total = TILE_COLS * TILE_ROWS;
+        bool[] changed = new bool[total];
+        if (prev == null || prev.Length != cur.Length)
+        {
+            // Frame đầu / reconfigure đổi cỡ: không có mốc so → tất cả "đổi"
+            // (thực tế rơi vào nhánh keyframe full, không nén từng tile).
+            for (int i = 0; i < total; i++) changed[i] = true;
+            return changed;
+        }
+        int tileW = w / TILE_COLS, tileH = h / TILE_ROWS;
         fixed (byte* a = prev, b = cur)
         {
-            int firstRow = -1, lastRow = -1;
-            int words = (w * 4) / 8;
-            for (int y = 0; y < h; y++)
+            for (int tr = 0; tr < TILE_ROWS; tr++)
             {
-                byte* ra = a + (long)y * pitch, rb = b + (long)y * pitch;
-                bool diff = false;
-                for (int i = 0; i < words; i++) if (((long*)ra)[i] != ((long*)rb)[i]) { diff = true; break; }
-                if (diff) { if (firstRow < 0) firstRow = y; lastRow = y; }
-            }
-            if (firstRow < 0) return new RECT { L = 0, T = 0, R = 0, B = 0 }; // giống hệt
-            int L = w, R = 0;
-            for (int x = 0; x < w; x += 4)
-            {
-                bool diff = false;
-                for (int y = firstRow; y <= lastRow; y++)
+                int y0 = tr * tileH, y1 = (tr == TILE_ROWS - 1) ? h : y0 + tileH;
+                for (int tc = 0; tc < TILE_COLS; tc++)
                 {
-                    byte* ra = a + (long)y * pitch + x * 4, rb = b + (long)y * pitch + x * 4;
-                    if (ra[0] != rb[0] || ra[1] != rb[1] || ra[2] != rb[2]) { diff = true; break; }
+                    int x0 = tc * tileW, x1 = (tc == TILE_COLS - 1) ? w : x0 + tileW;
+                    bool diff = false;
+                    int rowBytes = (x1 - x0) * 4;
+                    for (int y = y0; y < y1 && !diff; y++)
+                    {
+                        byte* ra = a + (long)y * pitch + x0 * 4;
+                        byte* rb = b + (long)y * pitch + x0 * 4;
+                        for (int i = 0; i < rowBytes; i++)
+                            if (ra[i] != rb[i]) { diff = true; break; }
+                    }
+                    changed[tr * TILE_COLS + tc] = diff;
                 }
-                if (diff) { if (x < L) L = x; R = x + 4; }
             }
-            if (R <= L) { L = 0; R = w; }
-            box = new RECT { L = L, T = firstRow, R = R, B = lastRow + 1 };
         }
-        // cursor cũ + mới (tọa độ frame nhỏ): cursor vẽ ở encode thread nên pixel
-        // chụp không chứa cursor — bbox phải union CẢ vị trí cũ (đã vẽ lên khung
-        // trước) lẫn mới, thiếu vị trí cũ là ghost treo tới keyframe (14/09)
-        double sx = (double)w / screenW, sy = (double)h / screenH;
-        int cw = Math.Max(20, (int)(GetSystemMetrics(SM_CXCURSOR) * sx)) + 6;
-        int ch = Math.Max(20, (int)(GetSystemMetrics(SM_CYCURSOR) * sy)) + 6;
-        long[] cxs = { prevCursorX, lastCursorX }, cys = { prevCursorY, lastCursorY };
-        for (int i = 0; i < 2; i++)
+        return changed;
+    }
+
+    /** Tile nào giao với vùng nhìn (focusRect)? null = tắt focus → cả lưới. */
+    static bool[] ComputeInView(RECT? focus, int w, int h)
+    {
+        int total = TILE_COLS * TILE_ROWS;
+        bool[] inView = new bool[total];
+        if (focus == null)
         {
-            long cx = cxs[i];
-            if (cx <= long.MinValue) continue;
-            long cy = cys[i];
-            box.L = Math.Max(0, Math.Min(box.L, (int)(cx * sx) - cw));
-            box.T = Math.Max(0, Math.Min(box.T, (int)(cy * sy) - ch));
-            box.R = Math.Min(w, Math.Max(box.R, (int)(cx * sx) + cw));
-            box.B = Math.Min(h, Math.Max(box.B, (int)(cy * sy) + ch));
+            for (int i = 0; i < total; i++) inView[i] = true;
+            return inView;
         }
-        // đệm 10px mỗi chiều cho ấm áp JPEG block
-        box.L = Math.Max(0, box.L - 10); box.T = Math.Max(0, box.T - 10);
-        box.R = Math.Min(w, box.R + 10); box.B = Math.Min(h, box.B + 10);
-        return box;
+        for (int i = 0; i < total; i++)
+        {
+            RECT t = TileRect(i, w, h);
+            inView[i] = focus.Value.L < t.R && focus.Value.R > t.L
+                     && focus.Value.T < t.B && focus.Value.B > t.T;
+        }
+        return inView;
     }
 
     /** Capture thread: chụp + render + map, đẩy pixel (hoặc null=cursor-only) vào queue. */
@@ -761,7 +786,6 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
             }
             finally { ctx.Unmap(staging, 0); }
             while (encodeQueue.Count >= 3) { EncodeJob drop; encodeQueue.TryDequeue(out drop); }
-            RECT? crop = null;
             bool skip = false; // biến đổi nhưng NGOÀI vùng nhìn — không cần nén/gửi gì
             long nowMs = Environment.TickCount;
             // Focus-rect: vùng nhìn giới hạn trong khung thật (bridge có thể gửi
@@ -773,65 +797,67 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                 if (f.R > f.L && f.B > f.T) fv = f;
             }
             bool focusMode = fv != null;
-            if (nextFull || nowMs - lastKeyframeMs >= 2000)
+            bool full = nextFull || nowMs - lastKeyframeMs >= KEYFRAME_EVERY_MS;
+            bool[] changed = null;
+            if (full)
             {
                 nextFull = false;
                 lastKeyframeMs = nowMs;
-                if (focusMode) crop = fv; // keyframe trong focus = tươi cả vùng nhìn, không phải cả màn native
+                // Keyframe: tươi CẢ khung; focus = cả vùng nhìn (không diff, không tile).
             }
             else if (prevPixels != null && prevPixels.Length == pixels.Length)
             {
-                RECT c = DiffBbox(prevPixels, pixels, lastPitch, targetW, targetH);
-                if (c.R > c.L && c.B > c.T)
-                {
-                    if (focusMode)
-                    {
-                        RECT f = Intersect(fv.Value, c);
-                        if (f.R > f.L && f.B > f.T) crop = f;
-                        else skip = true; // mọi thay đổi đều ngoài vùng đang nhìn (video ở màn bên)
-                    }
-                    else if ((long)(c.R - c.L) * (c.B - c.T) * 10 < 6L * targetW * targetH) crop = c;
-                }
-                // R==L == 0: hai frame giống hệt (chỉ cursor vẽ CPU) — coi như crop cursor
-                else if (lastCursorX > long.MinValue)
+                changed = DiffTiles(prevPixels, pixels, lastPitch, targetW, targetH);
+                // Cursor vẽ ở encode-thread nên không nằm trong pixel: ép tile dưới
+                // con trỏ (vị trí cũ + mới) thành "đổi" để cursor không ghost tới
+                // keyframe — giữ hành vi union cursor của DiffBbox cũ ở mức tile.
+                if (lastCursorX > long.MinValue)
                 {
                     double sx = (double)targetW / screenW, sy = (double)targetH / screenH;
-                    int cw = Math.Max(20, (int)(GetSystemMetrics(SM_CXCURSOR) * sx)) + 6;
-                    int ch = Math.Max(20, (int)(GetSystemMetrics(SM_CYCURSOR) * sy)) + 6;
-                    // v4.1.6 (14/09): cursor chạy nhưng pixel giống hệt → union CẢ vị
-                    // trí cũ lẫn mới; chỉ crop vị trí mới là vùng cursor cũ treo trên
-                    // canvas phone tới keyframe.
-                    RECT cur = new RECT { L = targetW, T = targetH, R = 0, B = 0 };
+                    int tileW = targetW / TILE_COLS, tileH = targetH / TILE_ROWS;
                     long[] cxs = { prevCursorX, lastCursorX }, cys = { prevCursorY, lastCursorY };
                     for (int i = 0; i < 2; i++)
                     {
                         if (cxs[i] <= long.MinValue) continue;
-                        cur.L = Math.Max(0, Math.Min(cur.L, (int)(cxs[i] * sx) - cw));
-                        cur.T = Math.Max(0, Math.Min(cur.T, (int)(cys[i] * sy) - ch));
-                        cur.R = Math.Min(targetW, Math.Max(cur.R, (int)(cxs[i] * sx) + cw));
-                        cur.B = Math.Min(targetH, Math.Max(cur.B, (int)(cys[i] * sy) + ch));
+                        int tc = Math.Min(TILE_COLS - 1, Math.Max(0, (int)(cxs[i] * sx / tileW)));
+                        int tr = Math.Min(TILE_ROWS - 1, Math.Max(0, (int)(cys[i] * sy / tileH)));
+                        changed[tr * TILE_COLS + tc] = true;
                     }
-                    if (cur.R > cur.L && cur.B > cur.T)
-                    {
-                        if (focusMode)
-                        {
-                            RECT f = Intersect(fv.Value, cur);
-                            if (f.R > f.L && f.B > f.T) crop = f;
-                            else skip = true; // con trỏ nằm ngoài vùng nhìn — không gửi (đỡ băng thông)
-                        }
-                        else crop = cur;
-                    }
-                    else skip = true;
                 }
             }
             prevPixels = pixels;
-            if (!skip) encodeQueue.Enqueue(new EncodeJob { Pixels = pixels, Crop = crop });
+
+            RECT[] crops = null;
+            if (full)
+            {
+                // Keyframe: cả khung (crops=null); đang focus = chỉ vùng nhìn —
+                // tươi nhanh mà không tốn cả màn native (giữ hành vi v4.x).
+                crops = focusMode ? new RECT[] { fv.Value } : null;
+            }
+            else if (changed != null)
+            {
+                bool[] inView = ComputeInView(fv, targetW, targetH);
+                int total = TILE_COLS * TILE_ROWS;
+                System.Collections.Generic.List<RECT> list = new System.Collections.Generic.List<RECT>(8);
+                for (int i = 0; i < total; i++)
+                    if (changed[i] && inView[i]) list.Add(TileRect(i, targetW, targetH));
+                if (list.Count == 0)
+                {
+                    skip = true; // mọi thay đổi đều ngoài vùng đang nhìn (video ở màn bên)
+                }
+                else if (list.Count > total * 0.6)
+                {
+                    crops = null; // quá nửa lưới đổi (cuộn/video phủ rộng) — nén full rẻ hơn N tile nhỏ
+                }
+                else crops = list.ToArray();
+            }
+            if (!skip) encodeQueue.Enqueue(new EncodeJob { Pixels = pixels, Crops = crops });
             return true;
         }
         finally { Marshal.Release(tex); }
     }
 
-    /** Encode thread: pixel -> vẽ con trỏ -> JPEG -> stdout (song song với capture kế). */
+    /** Encode thread: pixel -> vẽ con trỏ -> JPEG (1 full hoặc N tile) -> stdout. */
     static void EncodeLoop()
     {
         encodeAlive = true;
@@ -855,43 +881,32 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
                 {
                     using (Bitmap full = new Bitmap(targetW, targetH, lastPitch, PixelFormat.Format32bppArgb, pin.AddrOfPinnedObject()))
                     {
-                        int cx0 = 0, cy0 = 0, cw = targetW, ch = targetH;
-                        RECT? crop = job.Crop;
-                        Bitmap outBmp;
-                        if (crop != null)
+                        // Cursor vẽ MỘT lần ở tọa độ tuyệt đối trên khung đầy — mọi
+                        // tile/crop cắt ra sau đó tự nhiên kế thừa phần cursor overlap.
+                        DrawCursorOffset(full, 0, 0);
+                        RECT[] crops = job.Crops;
+                        if (crops == null || crops.Length == 0)
                         {
-                            RECT c = crop.Value;
-                            cx0 = c.L; cy0 = c.T; cw = c.R - c.L; ch = c.B - c.T;
-                            Bitmap small = new Bitmap(cw, ch);
-                            using (Graphics g = Graphics.FromImage(small))
-                            {
-                                // DrawPixelOffset nửa pixel cho nét khi copy nguyên-size
-                                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
-                                g.DrawImage(full, new Rectangle(0, 0, cw, ch), new Rectangle(cx0, cy0, cw, ch), GraphicsUnit.Pixel);
-                            }
-                            outBmp = small;
+                            // Full frame (keyframe / >60% lưới đổi) — header 0,0,W,H.
+                            SendJpeg(full, 0, 0, targetW, targetH);
                         }
-                        else outBmp = full;
-                        try
+                        else
                         {
-                            DrawCursorOffset(outBmp, cx0, cy0);
-                            using (MemoryStream ms = new MemoryStream(1 << 16))
+                            foreach (RECT c in crops)
                             {
-                                EncoderParameters ep = new EncoderParameters(1);
-                                ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)quality);
-                                outBmp.Save(ms, JpegCodec(), ep);
-                                byte[] head = new byte[8];
-                                head[0] = (byte)cx0; head[1] = (byte)(cx0 >> 8);
-                                head[2] = (byte)cy0; head[3] = (byte)(cy0 >> 8);
-                                head[4] = (byte)cw; head[5] = (byte)(cw >> 8);
-                                head[6] = (byte)ch; head[7] = (byte)(ch >> 8);
-                                byte[] payload = new byte[8 + (int)ms.Length];
-                                System.Buffer.BlockCopy(head, 0, payload, 0, 8);
-                                System.Buffer.BlockCopy(ms.GetBuffer(), 0, payload, 8, (int)ms.Length);
-                                Send(FRAME_JPEG, payload);
+                                int cw = c.R - c.L, ch = c.B - c.T;
+                                using (Bitmap tile = new Bitmap(cw, ch))
+                                {
+                                    using (Graphics g = Graphics.FromImage(tile))
+                                    {
+                                        // PixelOffsetMode nửa pixel cho nét khi copy nguyên-size
+                                        g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+                                        g.DrawImage(full, new Rectangle(0, 0, cw, ch), new Rectangle(c.L, c.T, cw, ch), GraphicsUnit.Pixel);
+                                    }
+                                    SendJpeg(tile, c.L, c.T, cw, ch);
+                                }
                             }
                         }
-                        finally { if (outBmp != full) outBmp.Dispose(); }
                     }
                 }
                 finally { pin.Free(); }
@@ -903,6 +918,26 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
             }
         }
         encodeAlive = false;
+    }
+
+    /** Nén + gửi 1 vùng JPEG kèm header [x,y,w,h] LE (viewer vẽ đúng offset). */
+    static void SendJpeg(Bitmap bmp, int x, int y, int w, int h)
+    {
+        using (MemoryStream ms = new MemoryStream(1 << 16))
+        {
+            EncoderParameters ep = new EncoderParameters(1);
+            ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)quality);
+            bmp.Save(ms, JpegCodec(), ep);
+            byte[] head = new byte[8];
+            head[0] = (byte)x; head[1] = (byte)(x >> 8);
+            head[2] = (byte)y; head[3] = (byte)(y >> 8);
+            head[4] = (byte)w; head[5] = (byte)(w >> 8);
+            head[6] = (byte)h; head[7] = (byte)(h >> 8);
+            byte[] payload = new byte[8 + (int)ms.Length];
+            System.Buffer.BlockCopy(head, 0, payload, 0, 8);
+            System.Buffer.BlockCopy(ms.GetBuffer(), 0, payload, 8, (int)ms.Length);
+            Send(FRAME_JPEG, payload);
+        }
     }
 
     static long statAcquireMs, statCaptureMs, statFrames;
