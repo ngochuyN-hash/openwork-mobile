@@ -62,6 +62,8 @@
 // dời khung nhìn, chạm BIÊN (hết chỗ trượt) mà kéo tiếp = CUỘN PC CẢ 4 HƯỚNG
 // (WHEEL dx lẫn dy, ngón đi hướng nào cuộn hướng đó, nội dung bám theo ngón);
 // CHƯA ZOOM: 1 ngón vuốt = cuộn PC như v5.5; 2 ngón chỉ còn véo (zoom) + cuộn.
+// defaultView: stage RỘNG hơn ảnh (desktop/landscape) dùng cover-filled-width
+// thay vì contain — không còn khoảng trống hai bên trên desktop.
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { apiScreenInfo, owScreenInput, owScreenStream, owWebrtcIce, owWebrtcSignal } from "../api.js";
@@ -215,6 +217,11 @@ export function ScreenPage() {
   // render), còn render do stream cũng tự viết đúng chuỗi này vì đọc cùng
   // zoomRef — hai đường không giẫm chân nhau.
   const zoomRef = useRef({ s: 1, x: 0, y: 0 });
+  // Lần fit mặc định GẦN NHẤT (defaultView/resetZoom ghi) — canvas đổi cỡ giữa
+  // phiên (bridge nới capW) mà user còn đứng yên ở đúng fit này thì refit lại:
+  // cover tính trên cỡ cũ của canvas là double-crop. User tự zoom/pan là lệch
+  // khỏi fit → không đụng.
+  const lastFitRef = useRef(null);
   const chipRef = useRef(null); // chip "1.5×" — cập nhật bằng tay, khỏi re-render
   // Thứ tự CSS transform áp dụng TỪ PHẢI SANG TRÁI: scale → (rotate) → translate
   // ngoài cùng. Translate x/y là theo MÀN HÌNH (stage) sau khi đã xoay/phóng —
@@ -333,6 +340,7 @@ export function ScreenPage() {
   }, [sendFocus, computeFocus]);
   const resetZoom = useCallback(() => {
     zoomRef.current = { s: 1, x: 0, y: 0 };
+    lastFitRef.current = { s: 1, x: 0, y: 0 };
     applyZoom();
     sendFocus(null); // hết phóng — daemon về crop vùng-đổi như cũ
     syncCapture();
@@ -358,14 +366,25 @@ export function ScreenPage() {
       if (cover <= 1.02) { resetZoom(); return; } // đã kín — giữ 1x (resetZoom đồng bộ focus/cap)
       zoomRef.current = { s: Math.min(ZOOM_MAX, cover), x: 0, y: 0 };
     } else {
-      // Bố cục khung: contain — scale tối đa cho desktop TRỌN trong khung (không
-      // gọt 2 bên). Khung đủ rộng (image CSS width:100%) thì giữ 1x, khung hẹp
-      // hơn ảnh theo chiều cao thì thu nhỏ đúng tỉ lệ.
-      const contain = Math.min(S.width / R.width, S.height / R.height);
-      if (contain >= 0.98) { resetZoom(); return; }
-      zoomRef.current = { s: Math.max(ZOOM_MIN, contain), x: 0, y: 0 };
+      // Bố cục khung: Stage RỘNG hơn ảnh (desktop/landscape) → cover lấp kín
+      // chiều ngang, chiều cao dư thì cắt — user thấy đầy đủ desktop, không viền.
+      // Stage HẸP hơn ảnh (phone portrait) → contain giữ toàn bộ desktop, không gọt.
+      const stageRatio = S.width / S.height;
+      const imgRatio = R.width / R.height;
+      if (stageRatio >= imgRatio) {
+        // Stage rộng hơn ảnh — cover filled-width: desktop không có khoảng trống hai bên
+        const cover = Math.max(S.width / R.width, S.height / R.height);
+        if (cover <= 1.02) { resetZoom(); return; }
+        zoomRef.current = { s: Math.min(ZOOM_MAX, cover), x: 0, y: 0 };
+      } else {
+        // Stage hẹp hơn ảnh — contain: giữ toàn bộ desktop, không cắt
+        const contain = Math.min(S.width / R.width, S.height / R.height);
+        if (contain >= 0.98) { resetZoom(); return; }
+        zoomRef.current = { s: Math.max(ZOOM_MIN, contain), x: 0, y: 0 };
+      }
     }
     applyZoom();
+    lastFitRef.current = { s: zoomRef.current.s, x: zoomRef.current.x, y: zoomRef.current.y };
     sendFocus(computeFocus());
     syncCapture();
   }, [resetZoom, sendFocus, computeFocus, syncCapture]);
@@ -498,6 +517,15 @@ export function ScreenPage() {
         if (full && (c.width !== fw || c.height !== fh)) {
           c.width = fw; // resize tự xóa canvas — chỉ khung full từ gốc
           c.height = fh;
+          // Canvas đổi cỡ giữa chừng (bridge nới capW về native): nếu user còn
+          // đứng yên ĐÚNG bố cục mặc định thì refit lại — cover cũ tính trên cỡ
+          // canvas tạm sẽ thành double-crop trên cỡ mới (15/09). User tự zoom/pan
+          // (zoomRef lệch khỏi lần fit) thì không đụng.
+          const f = lastFitRef.current;
+          const z = zoomRef.current;
+          if (f && Math.abs(z.s - f.s) < 0.03 && Math.abs(z.x - f.x) < 2 && Math.abs(z.y - f.y) < 2) {
+            defaultView();
+          }
         }
         c.getContext("2d").drawImage(bmp, x, y, fw, fh);
         paintedRef.current = true;
