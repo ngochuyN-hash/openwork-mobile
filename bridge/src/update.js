@@ -192,15 +192,16 @@ function respawnAndExit(log) {
 }
 
 /**
- * Khởi động bộ OTA. Máy dev (có .git) mặc định tắt trừ khi config.ota === true;
- * máy bạn bè mặc định bật, tắt bằng config.ota === false hoặc env
- * OPENWORK_BRIDGE_OTA=0.
+ * Khởi động bộ OTA. MẶC ĐỊNH BẬT trên mọi máy (16/09 tối, owner: "không muốn
+ * lệ thuộc máy, dù gì cũng chỉ dùng setup" — máy nào cũng chỉ là người dùng);
+ * tắt bằng config.ota === false hoặc env OPENWORK_BRIDGE_OTA=0. WIP chưa commit
+ * trên máy repo không mất: bản cũ (kèm WIP) nằm nguyên trong .ota-backup/
+ * cho tới lần swap kế — hồi lại bằng tay nếu cần.
  */
 export function startUpdater({ config, getTunnelState, getViewerCount, log = console.log }) {
-  const isDevRepo = existsSync(join(bridgeRoot, ".git"));
-  const enabled = process.env.OPENWORK_BRIDGE_OTA !== "0" && (config.ota === true || (config.ota !== false && !isDevRepo));
+  const enabled = process.env.OPENWORK_BRIDGE_OTA !== "0" && config.ota !== false;
   if (!enabled) {
-    log(`[ota] tắt (${isDevRepo ? "máy dev có .git" : "config.ota=false"}). Mở bằng config.ota=true.`);
+    log("[ota] tắt (config.ota=false hoặc OPENWORK_BRIDGE_OTA=0).");
     return;
   }
   if (!config.lookupUrl) {
