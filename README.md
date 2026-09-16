@@ -193,6 +193,14 @@ Build: `desktop\build.bat` → `desktop\bin\OpenPocket.exe` (`desktop/bin/` is g
 
 **Handing the whole thing to a friend:** the installer is **`OpenPocket-Setup.exe`** — ONE file (~220KB), built by `node desktop/build-setup.js`, gitignored like all binaries. It is a small C# WinForms app (compiled with the same built-in csc) with the whole package zip EMBEDDED as a resource. The friend double-clicks it: it checks Node.js (opens the nodejs.org page by itself if missing), shows a progress window, extracts into `%LOCALAPPDATA%\OpenPocket` (reinstall = in-place upgrade — the `%APPDATA%` config and identity survive), drops Start-Menu + Desktop shortcuts, and opens the app (UAC: Yes once — asked by the app itself; the setup runs non-elevated). The app does the rest (bridge `npm install`, identity provisioning, the QR). `OPENPOCKET_TEST_DIR` env redirects the install for unattended testing. The installer is the ONLY artifact — there is no separate zip copy; rebuild the exe after every change.
 
+## Bridge self-update over-the-air (2026-09-16)
+
+Once a friend's machine is on a bridge version that has the updater, it **pulls new bridge versions by itself** — no hands on that machine, update it from here after pushing a fix:
+
+- **Publish**: on THIS machine, `node bridge/scripts/publish-release.mjs` (pass a version like `2026.09.16.1` or let it auto-bump). It packages `bridge/src/` + `package.json` + `VERSION` into a base64 payload, signs it with a sha256, and pushes two KV keys: `bridge-release:latest` (the cheap manifest every bridge checks) and `bridge-release:files` (the payload, fetched only when a newer version exists). Requires a logged-in `wrangler`; on a push failure the payload stays in `worker/ota-publish/` for manual `wrangler kv key put`.
+- **How it updates**: each bridge checks the manifest after boot (30s) and every 6 hours; it only installs when the tunnel is up (`phase: "up"` — a Cloudflare 429 backoff defers, by design, because each bridge restart re-enters that rate-limit door), **nobody is watching the screen**, the bridge has been up ≥ 5 minutes, and the payload's sha256 matches. It then swaps `src/` → `.ota-backup/` atomically, arms a watchdog process, and respawns itself. If the new version fails to boot (a crash, a bad import), the watchdog rolls `.ota-backup/` back within 90 seconds — **a bad update can never leave a friend's machine dead**.
+- **Opt out**: `"ota": false` in `%APPDATA%\openwork-bridge\config.json` (or `OPENWORK_BRIDGE_OTA=0`). Dev repos (with `.git`) are **off by default** so a publish on this machine never overwrites the working tree; flip `config.ota = true` to test the loop.
+
 ## Project layout
 
 ```

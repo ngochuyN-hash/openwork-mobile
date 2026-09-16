@@ -308,6 +308,22 @@ export default {
       return relay(env, tenant ? `machine:${tenant}` : MAIN_KEY, request, url);
     }
 
+    // 2.5. OTA bridge update: manifest rẻ (bridge check thường xuyên) + payload
+    // nặng (chỉ tải khi có bản mới đáng cài). Payload = JSON base64 phẳng, không
+    // cần worker giải mã gì — bridge tự băm sha256 đối chiếu manifest rồi mới
+    // đụng tới code. KHÔNG chứa secret (config.json ngoài repo, không vào gói).
+    if (url.pathname === "/bridge-release" && request.method === "GET") {
+      const meta = await env.OWM_STATE.get("bridge-release:latest", "json").catch(() => null);
+      return meta ? json(meta) : json({ version: "", sha256: "" });
+    }
+    if (url.pathname === "/bridge-release/files" && request.method === "GET") {
+      const files = await env.OWM_STATE.get("bridge-release:files").catch(() => null);
+      if (!files) return json({ error: "no_release" }, 404);
+      return new Response(files, {
+        headers: { "content-type": "application/json", "cache-control": "no-store" },
+      });
+    }
+
     // 3. Còn lại: static web app (web/dist) qua assets binding
     return withSecurityHeaders(await env.ASSETS.fetch(request));
   },

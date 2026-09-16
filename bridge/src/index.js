@@ -15,10 +15,11 @@ import { findOpenWorkExe, launchOpenWork } from "./openwork-launch.js";
 import { listDirs, listRoots, makeDir } from "./fslist.js";
 import { ScreenService, createRateLimiter } from "./screen.js";
 import { rotateStaleLogs, scheduleDailyWipe, wipeLogs } from "./logwipe.js";
+import { startUpdater, markBootOk, currentVersion } from "./update.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const BRIDGE_VERSION = "0.1.0";
+const BRIDGE_VERSION = currentVersion();
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const config = loadConfig();
@@ -639,6 +640,10 @@ function printPairing(base, note, { withMaster = false } = {}) {
 
 server.listen(config.port, "127.0.0.1", () => {
   const local = `http://127.0.0.1:${config.port}`;
+  // Nếu lần boot này là do OTA swap bản mới, xác nhận với watchdog là đã sống
+  // (phase applying → done) — nói nó thoát; quá hạn mà chưa tới đây là
+  // watchdog tự rollback về bản cũ.
+  markBootOk();
   // Ghi pid NGAY TRONG bridge: mọi đường khởi động (task admin, openpocket
   // start, tay) đều hiện diện với `openpocket status/stop/ensure`. Trước đây
   // chỉ `openpocket start` ghi, instance từ task VBS là vô hình với CLI — hai
@@ -692,6 +697,16 @@ server.listen(config.port, "127.0.0.1", () => {
 
   console.log(`Pairing token dự phòng (chỉ dùng tại máy, không đưa cho ai): ${config.mobileToken}`);
   console.log(`Bridge data dir: ${bridgeDataDir()}`);
+
+  // OTA: máy bạn bè tự nhận bản bridge mới (16/09/2026). Check sau 30s (tunnel
+  // kịp "up") rồi mỗi 6h. Gate an toàn bên trong update.js: tunnel ổn, không
+  // ai đang xem, cài qua stage + watchdog rollback — một bản vỡ không bao giờ
+  // làm chết máy. Máy dev (có .git) mặc định tắt.
+  startUpdater({
+    config,
+    getTunnelState: () => tunnelGetState(),
+    getViewerCount: () => screen.viewers.size,
+  });
 });
 
 process.on("SIGINT", () => {
