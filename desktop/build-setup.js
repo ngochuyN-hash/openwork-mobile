@@ -2,8 +2,7 @@
 //
 // Chuỗi: stage (bridge + web/dist + OpenPocket.exe + HUONG-DAN) → zip →
 // NHÚNG zip vào exe trình cài (desktop/src/OpenPocketSetup.cs, csc /res:) →
-// OpenPocket-Setup.exe ở gốc dự án. Zip cũng được copy ra gốc làm
-// openwork-bridge-friend.zip (phương án dự phòng thủ công).
+// OpenPocket-Setup.exe ở gốc dự án.
 //
 // Chạy: node desktop/build-setup.js
 // Yêu cầu: đã build desktop/bin/OpenPocket.exe trước (desktop\build.bat).
@@ -16,7 +15,6 @@ const ROOT = path.join(__dirname, "..");
 const STAGE = path.join(process.env.TEMP, "openpocket-sfx-stage");
 const ZIP = path.join(process.env.TEMP, "openpocket-package.zip");
 const OUT_EXE = path.join(ROOT, "OpenPocket-Setup.exe");
-const OUT_ZIP = path.join(ROOT, "openwork-bridge-friend.zip");
 
 // 1. Stage — bố cục đúng như app đòi (OpenPocket.exe nằm cạnh bridge\, web\)
 fs.rmSync(STAGE, { recursive: true, force: true });
@@ -35,7 +33,6 @@ execSync(
   `powershell -NoProfile -Command "Compress-Archive -Path '${STAGE}\\*' -DestinationPath '${ZIP}' -Force"`,
   { stdio: "inherit" }
 );
-fs.copyFileSync(ZIP, OUT_ZIP);
 
 // 3. Nhúng zip vào exe trình cài bằng csc có sẵn trong Windows
 const csc64 = "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe";
@@ -65,4 +62,3 @@ if (build.status !== 0) {
 }
 
 console.log("OpenPocket-Setup.exe:", (fs.statSync(OUT_EXE).size / 1024).toFixed(0) + " KB");
-console.log("openwork-bridge-friend.zip:", (fs.statSync(OUT_ZIP).size / 1024).toFixed(0) + " KB");
