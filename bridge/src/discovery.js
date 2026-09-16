@@ -46,7 +46,7 @@ export function parseListeningPorts(netstatOutput, pid) {
 }
 
 export function listeningPortsForPid(pid) {
-  const result = spawnSync("netstat", ["-ano"], { encoding: "utf8", timeout: 10_000 });
+  const result = spawnSync("netstat", ["-ano"], { encoding: "utf8", timeout: 10_000, windowsHide: true });
   if (result.status !== 0 || !result.stdout) return [];
   return parseListeningPorts(result.stdout, pid);
 }

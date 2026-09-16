@@ -188,6 +188,7 @@ function respawnAndExit(log) {
     const child = spawn(process.execPath, [script], {
       detached: true,
       stdio: ["ignore", fd, fd],
+      windowsHide: true, // không mở cửa sổ console trên desktop người dùng
     });
     child.unref();
   } catch (e) {
@@ -278,7 +279,7 @@ export function startUpdater({ config, getTunnelState, getViewerCount, log = con
         STATE_FILE,
         bridgeRoot,
         join(bridgeRoot, "src", "index.js"),
-      ], { detached: true, stdio: "ignore" });
+      ], { detached: true, stdio: "ignore", windowsHide: true });
       watch.unref();
       respawnAndExit(log);
     } catch (e) {

@@ -47,7 +47,7 @@ function respawnBridge() {
     // Detached + stdio ra file riêng — không nối vào console đã chết.
     const out = join(stateFile, "..", "ota.log");
     const fd = openSync(out, "a");
-    const child = spawn(process.execPath, [entryScript], { detached: true, stdio: ["ignore", fd, fd] });
+    const child = spawn(process.execPath, [entryScript], { detached: true, stdio: ["ignore", fd, fd], windowsHide: true });
     child.unref();
   } catch (e) {
     log(`respawn lỗi: ${e.message}`);

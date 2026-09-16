@@ -63,7 +63,7 @@ async function ensureCloudflared(log) {
   if (existsSync(target)) return target;
   // Có sẵn trên PATH thì dùng luôn
   const fromPath = await new Promise((resolve) => {
-    const probe = spawn(process.platform === "win32" ? "where" : "which", ["cloudflared"]);
+    const probe = spawn(process.platform === "win32" ? "where" : "which", ["cloudflared"], { windowsHide: true });
     let out = "";
     probe.stdout.on("data", (d) => (out += d));
     probe.on("close", (code) => resolve(code === 0 ? out.split(/\r?\n/)[0].trim() : ""));
@@ -131,6 +131,7 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
 
     const child = spawn(bin, ["tunnel", "--url", `http://127.0.0.1:${targetPort}`, ...SPAWN_FLAGS, "--no-autoupdate"], {
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true, // cloudflared chạy lại mỗi lần tunnel đổi — không được ló cửa sổ
     });
     currentChild = child;
     suppressExit = false;

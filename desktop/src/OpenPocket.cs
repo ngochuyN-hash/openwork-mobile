@@ -1099,7 +1099,14 @@ namespace OpenPocket.Desktop
                         {
                             EnsureAutostartTaskEnabled();
                         }
-                        Process.Start("schtasks.exe", "/run /tn OpenPocketBridge");
+                        ProcessStartInfo psiRun = new ProcessStartInfo
+                        {
+                            FileName = "schtasks.exe",
+                            Arguments = "/run /tn OpenPocketBridge",
+                            CreateNoWindow = true,
+                            UseShellExecute = false,
+                        };
+                        Process.Start(psiRun);
                         Thread.Sleep(800);
                         CheckStatus();
                     }
