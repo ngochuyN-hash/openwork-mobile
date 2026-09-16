@@ -71,20 +71,36 @@ writeFileSync(join(PUBLISH_DIR, "manifest.json"), JSON.stringify(manifest, null,
 writeFileSync(join(PUBLISH_DIR, "files.json"), payloadText);
 
 // Push 2 key KV qua wrangler CLI của dự án (chạy trong worker/ để trỏ đúng
-// wrangler.jsonc + binding OWM_STATE). Nếu lệnh lỗi, payload vẫn nằm ở
-// worker/ota-publish/ để user tự xem.
+// wrangler.jsonc + binding OWM_STATE). Gọi wrangler TRỰC TIẾP qua node
+// (web/node_modules/wrangler/bin/wrangler.js) — lỗi kinh điển 13/09: spawn
+// qua `npx`/shell cho Windows cmd nuốt JSON quotes, và `npx.cmd` từ Git Bash
+// còn dính EINVAL. Nếu lệnh lỗi, payload vẫn nằm ở worker/ota-publish/ để
+// user tự chạy tay.
+function findWrangler() {
+  const candidates = [
+    join(workerRoot, "..", "web", "node_modules", "wrangler", "bin", "wrangler.js"),
+    join(workerRoot, "node_modules", "wrangler", "bin", "wrangler.js"),
+  ];
+  for (const p of candidates) if (existsSync(p)) return p;
+  return null;
+}
+
 function runWrangler(args) {
-  const npx = process.platform === "win32" ? "npx.cmd" : "npx";
-  return execFileSync(npx, args, { cwd: workerRoot, stdio: "inherit" });
+  const wrangler = findWrangler();
+  if (!wrangler) throw new Error("không tìm thấy wrangler.js trong web/node_modules — chạy npm install ở web/");
+  return execFileSync(process.execPath, [wrangler, ...args], { cwd: workerRoot, stdio: "inherit" });
 }
 
 try {
+  // BẮT BUỘC --remote: wrangler kv key put không flag mặc định ghi vào LOCAL
+  // simulation (lỗi 16/09: push "thành công" nhưng live route trả rỗng vì KV
+  // production không có gì). --remote là API thật.
   runWrangler([
-    "wrangler", "kv", "key", "put", "--binding=OWM_STATE",
+    "kv", "key", "put", "--binding=OWM_STATE", "--remote",
     "bridge-release:latest", "--path", join(PUBLISH_DIR, "manifest.json"),
   ]);
   runWrangler([
-    "wrangler", "kv", "key", "put", "--binding=OWM_STATE",
+    "kv", "key", "put", "--binding=OWM_STATE", "--remote",
     "bridge-release:files", "--path", join(PUBLISH_DIR, "files.json"),
   ]);
   rmSync(PUBLISH_DIR, { recursive: true, force: true });
@@ -92,7 +108,7 @@ try {
   console.log("[ota] Bản máy bạn bè sẽ tự nhận trong lần check kế (≤6h) — hoặc restart bridge để nó check ngay.");
 } catch (e) {
   console.error(`\n[ota] PUSH KV LỖI: ${e.message}`);
-  console.error(`[ota] Payload để sẵn tại ${PUBLISH_DIR}/ — tự chạy wrangler kv key put --binding=OWM_STATE "bridge-release:<latest|files>" --path <file> trong worker/.`);
+  console.error(`[ota] Payload để sẵn tại ${PUBLISH_DIR}/ — tự chạy: node web/node_modules/wrangler/bin/wrangler.js kv key put --binding=OWM_STATE "bridge-release:<latest|files>" --path <file> (trong worker/).`);
   process.exitCode = 1;
 }
 
