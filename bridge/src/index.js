@@ -638,7 +638,7 @@ function printPairing(base, note, { withMaster = false } = {}) {
   console.log("");
 }
 
-server.listen(config.port, "127.0.0.1", () => {
+const onListening = () => {
   const local = `http://127.0.0.1:${config.port}`;
   // Nếu lần boot này là do OTA swap bản mới, xác nhận với watchdog là đã sống
   // (phase applying → done) — nói nó thoát; quá hạn mà chưa tới đây là
@@ -707,7 +707,26 @@ server.listen(config.port, "127.0.0.1", () => {
     getTunnelState: () => tunnelGetState(),
     getViewerCount: () => screen.viewers.size,
   });
+};
+
+// OTA respawn: bridge cũ nhường cổng chậm hơn node mới boot (timer 500ms vs ~400ms)
+// → EADDRINUSE làm bridge mới chết → watchdog tưởng "bản vỡ" rollback oan. 8788 chỉ
+// dành riêng bridge, nhả trong <1s nên retry là đủ, không cần chết.
+server.on("error", (err) => {
+  if (err.code !== "EADDRINUSE") throw err;
+  let attempt = 0;
+  const retry = () => {
+    attempt += 1;
+    if (attempt > 10) {
+      console.error(`[listener] không lấy được cổng ${config.port} sau 10 lần — thoát.`);
+      process.exit(1);
+    }
+    console.warn(`[listener] cổng ${config.port} chưa nhả (bridge cũ tắt chậm) — thử lại lần ${attempt}/10...`);
+    setTimeout(() => server.listen(config.port, "127.0.0.1", onListening), 400);
+  };
+  retry();
 });
+server.listen(config.port, "127.0.0.1", onListening);
 
 process.on("SIGINT", () => {
   console.log("\n[bridge] bye");
