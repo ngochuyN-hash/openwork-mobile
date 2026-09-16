@@ -10,7 +10,7 @@
 // làm chết máy vĩnh viễn.
 //
 // ARGV: <pidCu> <stateFile> <bridgeRoot> <entryScript>
-import { existsSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 
@@ -89,19 +89,46 @@ function respawnBridge() {
   // Quá deadline mà vẫn "applying": bản mới không boot được → rollback.
   log("DEADLINE — bản mới không xác nhận, rollback về backup.");
   const srcDir = join(bridgeRoot, "src");
+  const scriptsDir = join(bridgeRoot, "scripts");
   const backupDir = join(bridgeRoot, ".ota-backup");
+  const backupSrc = join(backupDir, "src");
   const state = readState() ?? {};
   try {
-    if (existsSync(srcDir)) rmSync(srcDir, { recursive: true, force: true });
-    if (existsSync(backupDir)) {
+    if (existsSync(backupSrc)) {
+      if (existsSync(srcDir)) rmSync(srcDir, { recursive: true, force: true });
+      renameSync(backupSrc, srcDir);
+      log("backup src đã trả về.");
+
+      const backupScripts = join(backupDir, "scripts");
+      if (existsSync(backupScripts)) {
+        if (existsSync(scriptsDir)) rmSync(scriptsDir, { recursive: true, force: true });
+        renameSync(backupScripts, scriptsDir);
+        log("backup scripts đã trả về.");
+      }
+
+      const backupVersion = join(backupDir, "VERSION");
+      if (existsSync(backupVersion)) {
+        copyFileSync(backupVersion, join(bridgeRoot, "VERSION"));
+        log("backup VERSION đã trả về.");
+      }
+
+      rmSync(backupDir, { recursive: true, force: true });
+    } else if (existsSync(backupDir)) {
+      // Tương thích ngược nếu .ota-backup là thư mục src cũ
+      if (existsSync(srcDir)) rmSync(srcDir, { recursive: true, force: true });
       renameSync(backupDir, srcDir);
-      log("backup đã trả về src.");
+      log("backup cũ (flat) đã trả về src.");
     } else {
       log("KHÔNG có backup — chỉ xóa src mới hỏng, bridge hết đường tự dậy.");
     }
     writeFileSync(
       stateFile,
-      JSON.stringify({ ...state, phase: "rollback", rolledBackAt: Date.now() }) + "\n",
+      JSON.stringify({
+        ...state,
+        phase: "rollback",
+        failedVersion: state.to ?? null,
+        rolledBackAt: Date.now(),
+      }) + "\n",
       "utf8"
     );
     respawnBridge();

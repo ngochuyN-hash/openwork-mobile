@@ -62,7 +62,8 @@ export async function launchOpenWork({ configOpenworkExe = "", log = console.log
     error.candidates = candidateExePaths(configOpenworkExe);
     throw error;
   }
-  const child = spawn(exe, [], { detached: true, stdio: "ignore", windowsHide: true });
+  // OpenWork.exe là ứng dụng GUI người dùng — KHÔNG dùng windowsHide kẻo app bị ẩn
+  const child = spawn(exe, [], { detached: true, stdio: "ignore" });
   child.unref();
   log(`[openwork] đã mở OpenWork (${exe}, pid ${child.pid}) — đợi server lên...`);
   return { launched: true, exe };

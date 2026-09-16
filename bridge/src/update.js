@@ -11,7 +11,7 @@
 // làm chết máy. Không thêm dependency nào (payload là base64 plain).
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bridgeDataDir } from "./config.js";
@@ -53,9 +53,12 @@ export function sha256Hex(buf) {
   return createHash("sha256").update(buf).digest("hex");
 }
 
-export function shouldUpdateNow({ remote, current, tunnel, viewerCount, uptimeMs }) {
+export function shouldUpdateNow({ remote, current, tunnel, viewerCount, uptimeMs, failedVersion = null }) {
   if (!remote?.version || compareVersions(remote.version, current) <= 0) {
     return { ok: false, reason: "no_newer_version" };
+  }
+  if (failedVersion && remote.version === failedVersion) {
+    return { ok: false, reason: "version_failed_previously" };
   }
   if (!tunnel || tunnel.phase !== "up" || !tunnel.url) {
     return { ok: false, reason: "tunnel_not_ready" };
@@ -129,10 +132,12 @@ function writeState(s, root = bridgeRoot) {
 export function installRelease(payload, opts = {}) {
   const root = resolve(opts.bridgeRoot ?? bridgeRoot);
   const srcDir = join(root, "src");
+  const scriptsDir = join(root, "scripts");
   const stageDir = stageDirFor(root);
   const backupDir = backupDirFor(root);
   const stageSrc = join(stageDir, "src");
-  const from = opts.from ?? currentVersion();
+  const stageScripts = join(stageDir, "scripts");
+  const from = opts.from ?? currentVersion(root);
   const to = String(payload.version ?? from);
 
   if (readState(root)?.phase === "applying") {
@@ -141,25 +146,37 @@ export function installRelease(payload, opts = {}) {
   }
 
   extractPayload(payload, stageDir);
-  // Cùng volume → rename atomic, không có trạng thái "cài dở giữa chừng".
+
+  // Chuẩn bị backup trọn gói (src, scripts, VERSION)
   rmSync(backupDir, { recursive: true, force: true });
-  renameSync(srcDir, backupDir);
+  mkdirSync(backupDir, { recursive: true });
+
+  if (existsSync(srcDir)) {
+    renameSync(srcDir, join(backupDir, "src"));
+  }
+  if (existsSync(scriptsDir)) {
+    renameSync(scriptsDir, join(backupDir, "scripts"));
+  }
+  const vFile = versionFileFor(root);
+  if (existsSync(vFile)) {
+    copyFileSync(vFile, join(backupDir, "VERSION"));
+  }
+
   try {
     renameSync(stageSrc, srcDir);
+    if (existsSync(stageScripts)) {
+      renameSync(stageScripts, scriptsDir);
+    } else if (existsSync(join(backupDir, "scripts"))) {
+      // Giữ scripts cũ nếu payload không có scripts
+      renameSync(join(backupDir, "scripts"), scriptsDir);
+    }
     const vInStage = join(stageDir, "VERSION");
     if (existsSync(vInStage)) {
       writeFileSync(versionFileFor(root), readFileSync(vInStage));
     }
-    // Watchdog nằm ngoài src/ (bridgeRoot/scripts) — payload có kèm thì thăng cấp luôn.
-    const scriptsInStage = join(stageDir, "scripts");
-    if (existsSync(scriptsInStage)) {
-      rmSync(join(root, "scripts"), { recursive: true, force: true });
-      renameSync(scriptsInStage, join(root, "scripts"));
-    }
   } catch (e) {
     // Swap lỗi giữa chừng: trả nguyên bản cũ rồi ném.
-    rmSync(srcDir, { recursive: true, force: true });
-    renameSync(backupDir, srcDir);
+    restoreBackup(root);
     throw e;
   }
   writeState({ phase: "applying", from, to, pid: process.pid, at: Date.now() }, root);
@@ -170,7 +187,8 @@ export function installRelease(payload, opts = {}) {
 export function markBootOk(root = bridgeRoot) {
   const s = readState(root);
   if (s?.phase === "applying") {
-    writeState({ ...s, phase: "done", readyAt: Date.now() }, root);
+    const { failedVersion, ...rest } = s;
+    writeState({ ...rest, phase: "done", readyAt: Date.now() }, root);
   }
 }
 
@@ -233,16 +251,22 @@ export function startUpdater({ config, getTunnelState, getViewerCount, log = con
     if (!remote?.version) return schedule(CHECK_INTERVAL_MS);
     if (compareVersions(remote.version, current) <= 0) return schedule(CHECK_INTERVAL_MS);
 
+    const state = readState(bridgeRoot);
     const gate = shouldUpdateNow({
       remote,
       current,
       tunnel: getTunnelState(),
       viewerCount: getViewerCount(),
       uptimeMs: process.uptime() * 1000,
+      failedVersion: state?.failedVersion ?? null,
     });
     if (!gate.ok) {
       log(`[ota] bản mới ${remote.version} nhưng ${gate.reason} — thử lại sau.`);
-      return schedule(gate.reason === "no_newer_version" ? CHECK_INTERVAL_MS : RETRY_SOON_MS);
+      return schedule(
+        gate.reason === "no_newer_version" || gate.reason === "version_failed_previously"
+          ? CHECK_INTERVAL_MS
+          : RETRY_SOON_MS
+      );
     }
 
     let payloadText = null;
@@ -297,10 +321,39 @@ export function startUpdater({ config, getTunnelState, getViewerCount, log = con
 /** Phục hồi backup (dùng cho test / lệnh tay khi watchdog chết). */
 export function restoreBackup(root = bridgeRoot) {
   const srcDir = join(root, "src");
+  const scriptsDir = join(root, "scripts");
   const backupDir = backupDirFor(root);
-  if (!existsSync(backupDir)) return false;
-  rmSync(srcDir, { recursive: true, force: true });
-  renameSync(backupDir, srcDir);
-  writeState({ ...readState(root), phase: "rollback", at: Date.now() }, root);
+  const backupSrc = join(backupDir, "src");
+  const backupScripts = join(backupDir, "scripts");
+  const backupVersion = join(backupDir, "VERSION");
+
+  if (!existsSync(backupSrc) && !existsSync(backupDir)) return false;
+
+  if (existsSync(backupSrc)) {
+    rmSync(srcDir, { recursive: true, force: true });
+    renameSync(backupSrc, srcDir);
+
+    if (existsSync(backupScripts)) {
+      rmSync(scriptsDir, { recursive: true, force: true });
+      renameSync(backupScripts, scriptsDir);
+    }
+
+    if (existsSync(backupVersion)) {
+      copyFileSync(backupVersion, versionFileFor(root));
+    }
+  } else if (existsSync(backupDir)) {
+    // Tương thích ngược nếu .ota-backup là thư mục src cũ
+    rmSync(srcDir, { recursive: true, force: true });
+    renameSync(backupDir, srcDir);
+  }
+
+  const oldState = readState(root) ?? {};
+  writeState({
+    ...oldState,
+    phase: "rollback",
+    failedVersion: oldState.to ?? null,
+    rolledBackAt: Date.now(),
+  }, root);
+  rmSync(backupDir, { recursive: true, force: true });
   return true;
 }

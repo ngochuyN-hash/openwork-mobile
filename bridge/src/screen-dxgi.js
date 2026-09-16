@@ -51,7 +51,7 @@ export class DxgiCaptureService {
     const exe = join(dir, "desktop-capture.exe");
     const verFile = join(dir, "desktop-capture.ver");
     const source = await readFile(join(__dirname, "desktop-capture.cs"), "utf8");
-    const digest = contentHash(source);
+    const digest = contentHash("winexe:" + source);
     const [exeOk, ver] = await Promise.all([
       access(exe).then(() => true, () => false),
       readFile(verFile, "utf8").catch(() => ""),
@@ -59,13 +59,21 @@ export class DxgiCaptureService {
     if (exeOk && ver.trim() === digest) return exe;
 
     const windir = process.env.WINDIR ?? "C:\\Windows";
-    const csc = join(windir, "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe");
-    if (!await access(csc).then(() => true, () => false)) {
+    const candidates = [
+      join(windir, "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe"),
+      join(windir, "Microsoft.NET", "Framework", "v4.0.30319", "csc.exe"),
+    ];
+    let csc = null;
+    for (const c of candidates) {
+      if (await access(c).then(() => true, () => false)) { csc = c; break; }
+    }
+    if (!csc) {
       throw new Error("Không tìm thấy csc.exe — không compile được daemon chụp");
     }
     await writeFile(join(dir, "desktop-capture.cs"), source, "utf8");
+    // /target:winexe (GUI subsystem) để daemon không bao giờ ló cửa sổ console conhost
     await execFileP(csc, [
-      "/nologo", "/unsafe", "/target:exe", "/platform:anycpu",
+      "/nologo", "/unsafe", "/target:winexe", "/platform:anycpu",
       "/r:System.Drawing.dll",
       `/out:${exe}`, join(dir, "desktop-capture.cs"),
     ]);

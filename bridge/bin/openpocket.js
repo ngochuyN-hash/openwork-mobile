@@ -43,6 +43,7 @@ function readPid() {
           const probe = spawnSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], {
             encoding: "utf8",
             timeout: 5000,
+            windowsHide: true,
           });
           if (new RegExp(`"node(\\.exe)?","${pid}"`).test(probe.stdout || "")) return pid;
         } catch {}

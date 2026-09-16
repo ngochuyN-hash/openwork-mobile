@@ -791,7 +791,7 @@ export class ScreenService {
     const exe = join(dir, "desktop-input.exe");
     const verFile = join(dir, "desktop-input.ver");
     const source = await readFile(join(__dirname, "desktop-input.cs"), "utf8");
-    const digest = contentHash(source);
+    const digest = contentHash("winexe:" + source);
 
     try {
       const [exeOk, ver] = await Promise.all([access(exe).then(() => true, () => false), readFile(verFile, "utf8").catch(() => "")]);
@@ -816,9 +816,10 @@ export class ScreenService {
     const srcCopy = join(dir, "desktop-input.cs");
     await writeFile(srcCopy, source, "utf8");
     try {
-      // System.Windows.Forms chỉ dùng cho Clipboard.SetText (TEXT đi đường clipboard)
+      // /target:winexe (GUI subsystem) để Windows không bao giờ cấp conhost window,
+      // stdin/stdout pipes vẫn hoạt động 100% trong .NET.
       await execFileP(csc, [
-        "/nologo", "/target:exe", "/platform:anycpu",
+        "/nologo", "/target:winexe", "/platform:anycpu",
         "/r:System.Windows.Forms.dll",
         `/out:${exe}`, srcCopy,
       ]);

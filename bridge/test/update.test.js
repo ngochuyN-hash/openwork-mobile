@@ -36,6 +36,14 @@ test("shouldUpdateNow: đủ mọi cửa an toàn mới cho cập nhật", () =>
   assert.equal(shouldUpdateNow({ ...base, remote: { version: "0.1.0" } }).ok, false);
   assert.equal(shouldUpdateNow({ ...base, current: "2026.09.16.0" }).ok, false);
 
+  // Bản này từng thất bại / rollback trước đó — chặn vòng lặp vô hạn
+  assert.deepEqual(shouldUpdateNow({ ...base, failedVersion: "2026.09.16.0" }), {
+    ok: false,
+    reason: "version_failed_previously",
+  });
+  // Bản mới hơn bản đã hỏng thì vẫn cho phép cập nhật
+  assert.equal(shouldUpdateNow({ ...base, failedVersion: "2026.09.15.9" }).ok, true);
+
   // Tunnel chưa lên / đang backoff
   assert.equal(shouldUpdateNow({ ...base, tunnel: { phase: "starting", url: "" } }).ok, false);
   assert.equal(shouldUpdateNow({ ...base, tunnel: { phase: "backoff", url: "" } }).ok, false);
@@ -100,9 +108,11 @@ test("installRelease: swap atomic src→backup, cài bản mới, arm state", ()
     };
     const to = installRelease(payload, { bridgeRoot: root, from: "2026.09.15.1" });
     assert.equal(to, "2026.09.16.0");
-    // src giờ là bản mới, backup giữ bản cũ (rename cả thư mục src → .ota-backup)
+    // src giờ là bản mới, backup giữ trọn gói src, scripts, VERSION
     assert.equal(readFileSync(join(root, "src", "index.js"), "utf8"), 'console.log("new")');
-    assert.equal(readFileSync(join(root, ".ota-backup", "index.js"), "utf8"), 'console.log("old")');
+    assert.equal(readFileSync(join(root, ".ota-backup", "src", "index.js"), "utf8"), 'console.log("old")');
+    assert.equal(readFileSync(join(root, ".ota-backup", "scripts", "ota-watchdog.mjs"), "utf8"), 'console.log("wd-old")');
+    assert.equal(readFileSync(join(root, ".ota-backup", "VERSION"), "utf8"), "2026.09.15.1");
     // watchdog ngoài src/ cũng được thăng cấp — cài mới / OTA thiếu nó là mất rollback
     assert.equal(readFileSync(join(root, "scripts", "ota-watchdog.mjs"), "utf8"), 'console.log("wd")');
     assert.equal(readFileSync(join(root, "VERSION"), "utf8"), "2026.09.16.0");
@@ -127,16 +137,31 @@ test("installRelease: từ chối khi đang có update chưa xác nhận", () =>
   }
 });
 
-test("restoreBackup: bản mới vỡ → trả về bản cũ", () => {
+test("restoreBackup: bản mới vỡ → trả về đầy đủ bản cũ (src, scripts, VERSION) + blacklist", () => {
   const root = fakeBridgeRoot();
   try {
     installRelease(
-      { version: "2026.09.16.0", files: { "src/index.js": Buffer.from('console.log("new")').toString("base64") } },
+      {
+        version: "2026.09.16.0",
+        files: {
+          "src/index.js": Buffer.from('console.log("new")').toString("base64"),
+          "scripts/ota-watchdog.mjs": Buffer.from('console.log("wd-new")').toString("base64"),
+          "VERSION": Buffer.from("2026.09.16.0").toString("base64"),
+        },
+      },
       { bridgeRoot: root }
     );
     assert.equal(restoreBackup(root), true);
+    // src, scripts, VERSION đều phải phục hồi về bản cũ
     assert.equal(readFileSync(join(root, "src", "index.js"), "utf8"), 'console.log("old")');
+    assert.equal(readFileSync(join(root, "scripts", "ota-watchdog.mjs"), "utf8"), 'console.log("wd-old")');
+    assert.equal(readFileSync(join(root, "VERSION"), "utf8"), "2026.09.15.1");
     assert.equal(existsSync(join(root, ".ota-backup")), false);
+
+    // State phải ghi nhận failedVersion để không lặp lại
+    const state = JSON.parse(readFileSync(join(root, ".ota", "state.json"), "utf8"));
+    assert.equal(state.phase, "rollback");
+    assert.equal(state.failedVersion, "2026.09.16.0");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
