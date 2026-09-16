@@ -3,8 +3,8 @@
 //   node bridge/scripts/publish-release.mjs                 # tự bump version
 //   node bridge/scripts/publish-release.mjs 2026.09.16.1    # version cụ thể
 //
-// Làm gì: đọc toàn bộ bridge/src + package.json + VERSION, băm base64 vào một
-// payload JSON, tính sha256 của payload đó, ghi 2 key KV:
+// Làm gì: đọc toàn bộ bridge/src + bridge/scripts + package.json + VERSION,
+// băm base64 vào một payload JSON, tính sha256 của payload đó, ghi 2 key KV:
 //   bridge-release:latest = {version, sha256}  (manifest rẻ cho bridge check)
 //   bridge-release:files  = {version, files:{...}}  (payload nặng, chỉ tải khi cần)
 //
@@ -19,7 +19,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 const bridgeRoot = resolve(here, "..");
 const workerRoot = resolve(bridgeRoot, "..", "worker");
 const SRC = join(bridgeRoot, "src");
-const VERSION_FILE = join(bridgeRoot, "VERSION");
 const PUBLISH_DIR = join(workerRoot, "ota-publish"); // dọn sau khi push
 
 function currentVersion() {
@@ -55,10 +54,13 @@ function collectDir(dir, prefix, out) {
 const version = nextVersion(process.argv[2]);
 const files = {};
 collectDir(SRC, "src", files);
-// Không đóng gói file độc quyền theo máy — chỉ cần index.js + toàn bộ src.
+// ota-watchdog.mjs nằm ngoài src/ (bridgeRoot/scripts) nhưng là lớp rollback bắt buộc —
+// thiếu là mất an toàn cập nhật. package.json/VERSION kèm để máy cài biết bản mình đang chạy.
+collectDir(join(bridgeRoot, "scripts"), "scripts", files);
 files["package.json"] = readFileSync(join(bridgeRoot, "package.json"));
-if (existsSync(VERSION_FILE)) files["VERSION"] = readFileSync(VERSION_FILE);
-else files["VERSION"] = Buffer.from(version);
+// Con dấu = SỐ BẢN PHÁT HÀNH, không lấy nội dung file gốc — nếu không máy sau OTA
+// vẫn báo bản cũ → 6h lại tưởng có bản mới → tự cài lại vô hạn mỗi chu kỳ.
+files["VERSION"] = Buffer.from(version);
 
 const payload = { version, files: {} };
 for (const [rel, buf] of Object.entries(files)) payload.files[rel] = buf.toString("base64");

@@ -150,6 +150,12 @@ export function installRelease(payload, opts = {}) {
     if (existsSync(vInStage)) {
       writeFileSync(versionFileFor(root), readFileSync(vInStage));
     }
+    // Watchdog nằm ngoài src/ (bridgeRoot/scripts) — payload có kèm thì thăng cấp luôn.
+    const scriptsInStage = join(stageDir, "scripts");
+    if (existsSync(scriptsInStage)) {
+      rmSync(join(root, "scripts"), { recursive: true, force: true });
+      renameSync(scriptsInStage, join(root, "scripts"));
+    }
   } catch (e) {
     // Swap lỗi giữa chừng: trả nguyên bản cũ rồi ném.
     rmSync(srcDir, { recursive: true, force: true });

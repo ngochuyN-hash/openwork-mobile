@@ -76,11 +76,13 @@ test("extractPayload: giải nén đúng cấu trúc + chặn path traversal", (
   }
 });
 
-/** Dựng cây giả lập repo bridge trong temp: src/index.js + VERSION. */
+/** Dựng cây giả lập repo bridge trong temp: src/index.js + scripts/ + VERSION. */
 function fakeBridgeRoot() {
   const root = mkdtempSync(join(tmpdir(), "ota-root-"));
   mkdirSync(join(root, "src"), { recursive: true });
   writeFileSync(join(root, "src", "index.js"), 'console.log("old")');
+  mkdirSync(join(root, "scripts"), { recursive: true });
+  writeFileSync(join(root, "scripts", "ota-watchdog.mjs"), 'console.log("wd-old")');
   writeFileSync(join(root, "VERSION"), "2026.09.15.1");
   return root;
 }
@@ -92,6 +94,7 @@ test("installRelease: swap atomic src→backup, cài bản mới, arm state", ()
       version: "2026.09.16.0",
       files: {
         "src/index.js": Buffer.from('console.log("new")').toString("base64"),
+        "scripts/ota-watchdog.mjs": Buffer.from('console.log("wd")').toString("base64"),
         "VERSION": Buffer.from("2026.09.16.0").toString("base64"),
       },
     };
@@ -100,6 +103,8 @@ test("installRelease: swap atomic src→backup, cài bản mới, arm state", ()
     // src giờ là bản mới, backup giữ bản cũ (rename cả thư mục src → .ota-backup)
     assert.equal(readFileSync(join(root, "src", "index.js"), "utf8"), 'console.log("new")');
     assert.equal(readFileSync(join(root, ".ota-backup", "index.js"), "utf8"), 'console.log("old")');
+    // watchdog ngoài src/ cũng được thăng cấp — cài mới / OTA thiếu nó là mất rollback
+    assert.equal(readFileSync(join(root, "scripts", "ota-watchdog.mjs"), "utf8"), 'console.log("wd")');
     assert.equal(readFileSync(join(root, "VERSION"), "utf8"), "2026.09.16.0");
     assert.equal(JSON.parse(readFileSync(join(root, ".ota", "state.json"), "utf8")).phase, "applying");
   } finally {
