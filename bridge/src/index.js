@@ -1,9 +1,9 @@
 import http from "node:http";
-import { readFileSync, watch, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, statSync, watch, writeFileSync, unlinkSync } from "node:fs";
 import qrcode from "qrcode-terminal";
 import { loadConfig, saveConfig, bridgeDataDir, pairingBaseUrl } from "./config.js";
 import { ensureOwnerToken } from "./bootstrap.js";
-import { discoverServer, checkTokenActive, readEngineRegistry, probeServerUrl } from "./discovery.js";
+import { discoverServer, checkTokenActive, readEngineRegistry, probeServerUrl, isProcessAlive } from "./discovery.js";
 import { isTokenAuthorized, requestToken, deny } from "./auth.js";
 import { proxyToOpenWork } from "./proxy.js";
 import { createStaticHandler } from "./static.js";
@@ -11,7 +11,8 @@ import { openworkFilePath } from "./paths.js";
 import { startQuickTunnel } from "./tunnel.js";
 import { startLookup } from "./lookup.js";
 import { PairingService, CODE_TTL_MINUTES } from "./pairing.js";
-import { findOpenWorkExe, launchOpenWork } from "./openwork-launch.js";
+import { candidateExePaths, isOpenWorkExeName, normalizeExePathInput, launchOpenWork } from "./openwork-launch.js";
+import { describeOpenWorkInstall } from "./openwork-version.js";
 import { listDirs, listRoots, makeDir } from "./fslist.js";
 import { rotateStaleLogs, scheduleDailyWipe, wipeLogs } from "./logwipe.js";
 import { fileURLToPath } from "node:url";
@@ -211,6 +212,28 @@ if (state.restartRequired && !state.tokenActive) {
 // ---------------------------------------------------------------------------
 const handleStatic = createStaticHandler(join(__dirname, "..", "..", "web", "dist"));
 
+/**
+ * Ảnh chụp "OpenWork desktop trên máy tính" mà web vẽ: exe ở đâu, phiên bản
+ * bao nhiêu, app có đang mở không, và các đường dẫn ứng viên để đổi.
+ * Dùng chung cho /api/state và câu trả lời của POST /api/openwork/path, để hai
+ * nơi không lệch nhau (web vẽ thẳng từ câu trả lời của route path).
+ */
+function openworkStateInfo() {
+  const info = describeOpenWorkInstall({ configOpenworkExe: config.openworkExe });
+  const owner = readEngineRegistry()?.ownerPid;
+  return {
+    found: info.found,
+    exe: info.exe,
+    version: info.version,
+    source: info.source,
+    // registry nằm lại trên đĩa sau khi app đóng → phải hỏi tiến trình thật.
+    running: isProcessAlive(owner),
+    // Luôn kèm, kể cả khi đã tìm thấy: người dùng cần ĐỔI đường dẫn khi cài
+    // lại OpenWork ở chỗ khác, không chỉ lúc "chưa thấy".
+    candidates: candidateExePaths(config.openworkExe),
+  };
+}
+
 const server = http.createServer((req, res) => {
   handleRequest(req, res).catch((error) => {
     console.error("[bridge] request error:", error);
@@ -356,6 +379,7 @@ async function handleRequest(req, res) {
 
     if (req.method === "GET" && pathname === "/api/state") {
       const engine = readEngineRegistry();
+      const openworkInfo = openworkStateInfo();
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
         JSON.stringify({
@@ -373,7 +397,8 @@ async function handleRequest(req, res) {
           edge: { tenant: config.lookupTenant || null, machineName: config.machineName || null },
           devices: pairing.list().length,
           pairingCodeSecondsLeft: pairing.codeSecondsLeft(),
-          openworkExeFound: Boolean(findOpenWorkExe(config.openworkExe)),
+          openworkExeFound: openworkInfo.found, // boolean cũ: web + code khác vẫn đọc
+          openwork: openworkInfo,
           autoLaunchOpenWork: config.autoLaunchOpenWork === true,
           thisDevice: device ? { id: device.id, label: device.label } : { id: "master", label: "Master token (owm_)" },
         })
@@ -454,6 +479,73 @@ async function handleRequest(req, res) {
         const code = error?.code === "openwork_exe_not_found" ? "openwork_exe_not_found" : "wake_failed";
         res.writeHead(code === "wake_failed" ? 500 : 404, { "content-type": "application/json" });
         res.end(JSON.stringify({ code, message: String(error?.message ?? error), candidates: error?.candidates ?? undefined }));
+      }
+      return;
+    }
+
+    // User chỉ tay file OpenWork.exe (điện thoại gõ hoặc bấm 1 trong danh
+    // sách ứng viên) → lưu vào config để "bật từ xa" không chết.
+    // TUYỆT ĐỐI KHÔNG spawn/thực thi path này: đường dẫn do điện thoại gõ tới,
+    // coi nó là lệnh chạy là lỗ hổng RCE. Kiểm tra gồm exists + isFile + tên
+    // file phải đúng là OpenWork.exe — vì path lưu vào config.openworkExe sẽ bị
+    // /api/openwork/wake và auto-launch lúc boot spawn() thật. exists+isFile
+    // một mình là không đủ: nó vẫn lọt qua mọi file thực thi trên máy.
+    // Cùng rate limit 5 lần/phút/IP với /api/openwork/wake.
+    if (req.method === "POST" && pathname === "/api/openwork/path") {
+      const ip = req.socket.remoteAddress ?? "?";
+      if (wakeRateLimited(ip)) return deny(res);
+      const bad = (code, message) => {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code, message }));
+      };
+      try {
+        const body = await readJsonBody(req);
+        const raw = body?.path;
+        if (typeof raw !== "string" || !raw.trim()) {
+          bad("invalid_path", "Chưa nhận đường dẫn file OpenWork.exe.");
+          return;
+        }
+        // Bóc dấu nháy trước khi đo độ dài: "Copy as path" trong PowerShell cho ra
+        // "C:\...\OpenWork.exe" CÓ dấu nháy kép, dán nguyên xi thì không bao giờ
+        // khớp file thật.
+        const path = normalizeExePathInput(raw);
+        if (!path) {
+          bad("invalid_path", "Chưa nhận đường dẫn file OpenWork.exe.");
+          return;
+        }
+        if (path.length > 400) {
+          bad("invalid_path", "Đường dẫn quá dài (tối đa 400 ký tự).");
+          return;
+        }
+        if (!existsSync(path)) {
+          bad("not_found", "Không có file nào ở đường dẫn này — kiểm tra lại hoặc copy đường dẫn từ File Explorer.");
+          return;
+        }
+        if (!statSync(path).isFile()) {
+          bad("not_a_file", "Đường dẫn này là thư mục — cần trỏ tới file OpenWork.exe.");
+          return;
+        }
+        if (!isOpenWorkExeName(path)) {
+          bad("not_openwork_exe", "Chỉ nhận đúng file OpenWork.exe — file này tên khác, không phải OpenWork.");
+          return;
+        }
+        config.openworkExe = path;
+        saveConfig(config);
+        console.log(`[openwork] user chỉ đường dẫn OpenWork.exe: ${path}`);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, openwork: openworkStateInfo() }));
+      } catch (error) {
+        // Body JSON hỏng (SyntaxError / "body too large" từ readJsonBody) khác
+        // hẳn với path không đọc được (existsSync/statSync ném lỗi fs).
+        const bodyBroken = error instanceof SyntaxError || error?.message === "body too large";
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify(
+            bodyBroken
+              ? { code: "invalid_body", message: "Body JSON không hợp lệ" }
+              : { code: "fs_error", message: "Không đọc được đường dẫn này — kiểm tra lại, hoặc thử copy từ ổ đĩa local." }
+          )
+        );
       }
       return;
     }

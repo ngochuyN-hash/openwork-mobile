@@ -30,6 +30,24 @@ export function ownerPid() {
   return Number.isInteger(entry?.ownerPid) && entry.ownerPid > 0 ? entry.ownerPid : 0;
 }
 
+/**
+ * Tiến trình có còn sống không. `kill(pid, 0)` là lời gọi kiểm tra của hệ điều
+ * hành: không giết ai, không mở tiến trình con, không tốn như `tasklist` spawn.
+ * EPERM = tiến trình CÓ đó, chỉ là bridge không đủ quyền hỏi — vẫn coi là sống.
+ * File engine-instances.json nằm lại trên đĩa sau khi app đóng, nên "có entry
+ * trong registry" KHÔNG đồng nghĩa "OpenWork đang mở" — cần hàm này mới biết.
+ */
+export function isProcessAlive(pid) {
+  const p = Number(pid);
+  if (!Number.isInteger(p) || p <= 0) return false;
+  try {
+    process.kill(p, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
 // "  TCP    127.0.0.1:62222    0.0.0.0:0    LISTENING    14316" -> [62222, ...]
 export function parseListeningPorts(netstatOutput, pid) {
   const ports = new Set();

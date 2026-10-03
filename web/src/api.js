@@ -222,8 +222,32 @@ export async function apiWakeOpenWork() {
   const res = await fetch("/api/openwork/wake", { method: "POST", headers: authHeaders() });
   if (res.status === 401) throw new Error("UNPAIRED");
   const payload = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(payload?.message ?? `wake ${res.status}`);
+  if (!res.ok) {
+    const error = new Error(payload?.message ?? `wake ${res.status}`);
+    error.status = res.status;
+    // Bridge trả kèm `candidates` khi không tìm thấy exe (openwork_exe_not_found) —
+    // giữ lại để màn Cài đặt đưa vào chung bộ chọn đường dẫn, đừng vứt đi.
+    error.candidates = Array.isArray(payload?.candidates) ? payload.candidates : [];
+    throw error;
+  }
   return payload;
+}
+
+/** Chỉ đường dẫn OpenWork.exe khi bridge chưa tìm thấy (POST /api/openwork/path).
+ * Đây là API của bridge (không đi qua proxy /api/ow) nên gọi fetch thẳng, y hệt
+ * apiWakeOpenWork. Bridge tự kiểm tra file rồi lưu config — web không spawn, không
+ * kiểm tra gì cả. Lỗi ném ra mang đúng `message` tiếng Việt của bridge để UI hiện
+ * nguyên văn cho người dùng. */
+export async function apiOpenWorkPath(path) {
+  const res = await fetch("/api/openwork/path", {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ path: String(path ?? "").trim() }),
+  });
+  if (res.status === 401) throw new Error("UNPAIRED");
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(payload?.message ?? `path ${res.status}`);
+  return payload; // { ok: true, openwork: { found, exe, version, source, candidates } }
 }
 
 /** Duyệt thư mục máy tính để chọn path khi tạo workspace.

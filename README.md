@@ -38,6 +38,7 @@ opencode engine  →  sessions · models · files
 - 🔐 **Permissions**: approve Allow/Deny right on the phone when the agent asks
 - 🗂 **Files**: browse the folder tree, view/edit + save text files, view images **and PDFs**, upload from the phone, download files (progress %, Cancel, and a Share button for iOS "Save to Files")
 - 📎 **Files in chat (both ways)**: files the agent mentions show up as **Open/Download cards + "View in Files"** right inside the message; a **paperclip** button in the composer sends files/images from the phone for the agent to read
+- 🖥️ **"Which OpenWork is on the computer?"** — Settings → **OpenWork trên máy tính** shows whether the app is **running right now** or merely installed, the resolved `OpenWork.exe` path, **where the bridge found it** (env / config / well-known folder) and the **installed version**, read from the app's own `resources/app.asar` (pure Node, no PowerShell spawn, cached per asar mtime so the 15s status poll doesn't re-read + re-parse the ~3.5 MB header). When nothing is found it offers **the fix, not just the verdict**: the well-known candidate paths as one-tap buttons + a field to type any other path (Enter submits, quotes from a "Copy as path" are stripped for you) → saved by `POST /api/openwork/path`, which only stores the path (it never executes it) and accepts a file named exactly `OpenWork.exe`, because that stored value is what remote-wake later launches. The same chooser stays reachable afterwards via **"Đổi đường dẫn"** — reinstalling OpenWork is an ordinary event, not a dead end
 - 📴 **Offline queue** + auto-reconnect; installable PWA on iOS/Android home screens (192/512 + maskable icons for Android installs, apple-touch-icon for iOS)
 
 ## UI ("desktop-first")
@@ -134,6 +135,8 @@ openpocket watchdog --uninstall   # disable
 
 **Launch OpenWork from the phone:** computer on + bridge running but the OpenWork app closed → the phone app shows a **"Launch OpenWork on the computer"** button (on the red banner + in Settings → Bridge status). Tap → wait ~20s → tap Re-check. Note: a fully shut down or deep-sleeping computer can't be woken — turn it on first.
 
+**Which OpenWork is on the computer (2026-10-03):** Settings → **OpenWork trên máy tính** shows whether the app is **running** or only installed, the resolved `OpenWork.exe` path, where the bridge found it (env / config / well-known folder) and its **version**, read from the installed app's own `resources/app.asar` → `package.json` (`bridge/src/openwork-version.js` — pure Node, no PowerShell spawn, version cached per asar mtime so a 15s status poll doesn't re-read + re-parse the ~3.5 MB header each time). "Running" is a real process check (`kill(pid, 0)`), not just the presence of the registry entry, which survives the app closing. When nothing is found, the same card offers the well-known candidate paths as one-tap suggestions plus a field to type any other path (Enter submits; a path copied from PowerShell arrives wrapped in quotes, and those are stripped for you) → **`POST /api/openwork/path`** saves it. The route only stores, it never executes: validated as non-empty, quotes stripped, ≤400 chars, existing, a file, and named exactly `OpenWork.exe` — because the saved value is precisely what `/api/openwork/wake` and the boot auto-launch later `spawn()`. Rejections come back with a Vietnamese `message` the app shows verbatim. The card is a two-way door, not a verdict: **"Đổi đường dẫn"** re-opens the same chooser after a reinstall, **"Quét lại máy tính"** forces an immediate re-check instead of waiting out the poll, and a success message points at the next step instead of just saying "done".
+
 ## Many computers, one web app (multi-tenant) — DORMANT since the one-PC simplification
 
 > **Simplification (13/09, owner call — "chỉ cần quản lý 1 PC"):** the product is now ONE machine per person. The web has **no account login anymore** — the entry is a single **8-char pairing code / QR** straight from the desktop app (9remote-style) or the **pasted permanent master key** (second row — master link `#t=…&m=…` logs straight in, a bare `owm_/owd_` key carries no room and the worker REFUSES roomless entries (400 `tenant_required`) — the pairing row's **Phòng box** takes the room name instead); the desktop exe **provisions its machine identity silently** on first run (random `pc-xxxxxxxx` room + 48-hex secret via `POST /api/tenant/create` — the user never sees a form) and ships with the bridge's `node_modules` **inside the Setup installer** (no npm install on the friend machine). Everything below still works at the API level but **no UI points at it**: no sign-in form, no invite links in the UI, no room manager. Kept dormant because it costs nothing and the routes are already built and tested.
@@ -172,8 +175,8 @@ The OTA self-update system was removed: the updater module, the rollback watchdo
 
 ```
 bridge/          # Node.js — discovery, token bootstrap, proxy, static, QR
-  src/           # index.js (entry) · proxy.js · discovery.js · bootstrap.js · auth.js · pairing.js · fslist.js · tunnel.js · lookup.js · logwipe.js …
-  test/          # unit tests — 9 files, 36 tests (npm test)
+  src/           # index.js (entry) · proxy.js · discovery.js · bootstrap.js · auth.js · pairing.js · fslist.js · tunnel.js · lookup.js · openwork-version.js · logwipe.js …
+  test/          # unit tests — 11 files, 47 tests (npm test)
   scripts/       # e2e-live.mjs, dbg-prompt.mjs (live tests against a real OpenWork)
 worker/          # Cloudflare Worker "openpocket" — fixed URL + multi-tenant
   src/index.js   # /__register (room check-in) · /api/* (per-room relay) · serves the web app
@@ -181,7 +184,7 @@ worker/          # Cloudflare Worker "openpocket" — fixed URL + multi-tenant
 web/             # PWA Preact + Vite → builds to web/dist served by the bridge
   src/pages/     # pairing (two ways in: 8-char code / permanent key + room box) · workspaces · sessions · chat · files · settings (bridge status + paired devices)
   src/components/# ui.jsx (Loading/Skeleton/Empty/Banner/Confirm/SwipeRow) · icons.jsx (SVG set) · model-picker.jsx
-  test/          # real unit suites for api.js (keyring + error contract) — 25 tests
+  test/          # real unit suites — 4 files, 44 tests (api keyring + error contract · openwork path API · chat stream reducer)
   .zcode/skills/ # pwa-workspace-ui: internal design skill (tokens · ui-rules · pwa-checklist)
 desktop/         # OpenPocket.exe — native WinForms GUI (built by csc.exe, zero deps): ONE page — status · bridge start/stop/autostart · self-provisioned identity · QR pairing (node_modules ships inside the Setup installer — no npm install at first run). No login/rooms (removed 13/09)
 README.md        # this file
@@ -207,7 +210,7 @@ CODE_SUMMARY.md  # code map + the "symptom → where to fix" table
 - Background stdout no longer prints pairing codes, QR payloads or the master key. Interactive terminals and the authenticated pairing-code API still support pairing.
 - Roomless pairing is refused at the worker: 400 `tenant_required` for a tenantless `POST /api/pair` / `GET /api/state` (invalid JSON included) instead of relaying a stranger's code/key to any machine.
 - `web/public/_headers` supplies the same CSP to Cloudflare's asset-first path without routing every static request through the Worker. Build output includes this file; production headers require deployment verification.
-- Local verification commands: `npm --prefix bridge test` (36 tests), `node --test worker/test/*.test.mjs` (11 tests), `npm --prefix web test` (25 tests), and `npm --prefix web run build`. These do not publish a release or restart the installed bridge.
+- Local verification commands: `npm --prefix bridge test` (50 tests), `node --test worker/test/*.test.mjs` (11 tests), `npm --prefix web test` (44 tests), and `npm --prefix web run build`. These do not publish a release or restart the installed bridge.
 
 ## Quick troubleshooting
 
@@ -216,6 +219,7 @@ CODE_SUMMARY.md  # code map + the "symptom → where to fix" table
 | Writes fail with `"Sign in to verify policy"` | Open OpenWork desktop and sign in/verify again (cloud session expired) |
 | Prompt sent but no reply comes back | No model picked in chat — a model is mandatory |
 | openwork-server not found | Is OpenWork desktop actually running? |
+| Phone says OpenWork not found, or "mở từ xa" always fails | Settings → **OpenWork trên máy tính**: tap one of the suggested paths (or type your own) → **Chỉ đường dẫn**. It accepts only a file literally named `OpenWork.exe`. No OpenWork on the machine at all? Copy the folder elsewhere or install it — the bridge can only launch a real install |
 | Phone says "tunnel_down — đang chờ Cloudflare mở lại" | The Quick Tunnel is rate-limited (429). Wait out the countdown shown in `openpocket status` / the OpenPocket GUI — **do NOT restart the bridge**, each restart extends the ban. It lifts by itself and the phone reconnects alone. Impatient / countdown stale (IP changed)? The GUI **Restart tunnel** icon tries a fresh tunnel right now — the bridge stays up, and a still-active ban just 429s back into its own backoff |
 | Other | Open [CODE_SUMMARY.md](./CODE_SUMMARY.md) — the full lookup table |
 
