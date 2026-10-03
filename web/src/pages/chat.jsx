@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { ow, unwrap, sseUrl, owUploadFile, formatBytes } from "../api.js";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
-import { ClipIcon, FileIcon, StopIcon } from "../components/icons.jsx";
+import { ClipIcon, ExpandIcon, FileIcon, StopIcon } from "../components/icons.jsx";
 
 const SSE_EVENTS = [
   "session.updated",
@@ -717,14 +717,16 @@ function FileRefCard({ refPath, name, wsId }) {
       <span class="file-ref-ico" aria-hidden="true"><FileIcon size={16} /></span>
       <span class="file-ref-name">{name}</span>
       <button class="btn small ghost" disabled={checking} onClick={open}>
-        {checking ? "Đang mở…" : "Mở / Tải về"}
+        {checking ? "Đang mở…" : "Mở"}
       </button>
       <a
-        class="btn small ghost"
+        class="btn small ghost file-ref-dir"
         style="text-decoration:none"
+        aria-label="Xem trong Files"
+        title="Xem trong Files"
         href={`#/ws/${encodeURIComponent(wsId)}/files?path=${encodeURIComponent(dirOf(refPath))}`}
       >
-        Xem trong Files
+        <ExpandIcon size={15} />
       </a>
       {missing && <span class="file-ref-miss">Không thấy file này trong workspace (có thể agent ghi chỗ khác).</span>}
     </div>
