@@ -608,12 +608,12 @@ function ToolRow({ part }) {
   return (
     <details class="fold-row tool-row">
       <summary>
-        <ToolIcon size={15} />
+        <ToolIcon size={14} />
         <span class="fold-title">{title}</span>
         <span class={`fold-status${status === "error" ? " err" : ""}${status === "running" ? " run" : ""}`}>
           {TOOL_STATUS_VI[status] ?? status}
         </span>
-        <ChevronDownIcon size={13} />
+        <ChevronDownIcon size={12} />
       </summary>
       <div class="fold-body">
         {input && Object.keys(input).length > 0 && <pre>{safeJson(input).slice(0, MAX)}</pre>}
@@ -628,10 +628,10 @@ function ThoughtRow({ part }) {
   return (
     <details class="fold-row reasoning">
       <summary>
-        <ThoughtIcon size={15} />
+        <ThoughtIcon size={14} />
         <span class="fold-title">Suy luận</span>
         <span class={`fold-status${streaming ? " run" : ""}`}>{streaming ? "đang suy nghĩ…" : ""}</span>
-        <ChevronDownIcon size={13} />
+        <ChevronDownIcon size={12} />
       </summary>
       <div class="fold-body reasoning-body">{part.text}</div>
     </details>

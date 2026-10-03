@@ -8,8 +8,9 @@
 > flushed per animation frame, longer-of-two wins so bytes are never doubled). Chat's `<select>`
 > model picker became a searchable bottom sheet grouped by provider with a Recents list
 > (`web/src/components/model-picker.jsx`), and tool calls + reasoning render as ZCode-style
-> collapsed one-line rows (`fold-row`: icon, title, status, chevron — tap to expand input/output,
-> 20k-char display cap). The current product is the core loop only: the bridge (tunnel + lookup
+> collapsed one-line rows (`fold-row`: icon, title, status, chevron — slim chrome-less lines inside
+> the bubble (no card/border); the body opens indented behind a thin left rule; tap to expand
+> input/output, 20k-char display cap). The current product is the core loop only: the bridge (tunnel + lookup
 > + pairing + proxy + file services + log wipe), the fixed-address multi-room worker, the phone PWA
 > (**Sessions · Workspace · Chat · Files · Settings**), and the OpenPocket desktop GUI + one-file
 > installer. The remote-viewing feature set and the bridge OTA self-update are REMOVED (git
