@@ -3,12 +3,19 @@ import { setToken, setTenant, apiPair, pairingCodeFromHash } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 import { OpenWorkMark } from "../components/logo.jsx";
 
+// Roomless key/QR: the worker refuses every roomless web entry with
+// 400 tenant_required — the message must only name paths that still exist
+// (a full link with &m=, or the room box below).
+const TENANT_HINT =
+  "Khóa/QR không kèm phòng — dùng lại link ghép/master đầy đủ có &m= từ máy tính, hoặc gõ tên phòng vào ô Phòng rồi thử lại.";
+
 // Màn vào app kiểu 9remote với 2 đường, mỗi hàng đúng một nhãn ngắn (owner
 // call: bỏ hết chỉ dẫn dài — hàng nào mã tạm thời, hàng nào mã vĩnh viễn là
 // đủ). Link QR #p= (và master #t=) tự vào trước khi tới màn này.
 export function PairingScreen({ onPaired }) {
   const [code, setCode] = useState("");
   const [key, setKey] = useState("");
+  const [room, setRoom] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
@@ -23,7 +30,7 @@ export function PairingScreen({ onPaired }) {
       onPaired();
     } catch (e) {
       setStatus("");
-      setError(String(e.message || e));
+      setError(e.code === "tenant_required" ? TENANT_HINT : String(e.message || e));
     } finally {
       setBusy(false);
     }
@@ -56,15 +63,23 @@ export function PairingScreen({ onPaired }) {
       setError("Khóa không đúng — copy link master hoặc khóa trong OpenPocket.");
       return;
     }
+    // The room box only backfills a BARE key (no &m=): a full master link
+    // already carries its room and wins over what is typed here.
+    const typedRoom = room
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "");
+    if (!parsed.tenant && typedRoom) parsed.tenant = typedRoom;
     setBusy(true);
     setError("");
     setStatus("Đang mở khóa…");
     try {
       if (!parsed.tenant) {
-        // Khóa trần không biết phòng: /api/state không mã phòng sẽ được worker
-        // dò qua các máy còn sống; máy nhận khóa trả edge.tenant của chính nó.
+        // Still roomless: the worker answers 400 tenant_required (it never
+        // fans a roomless key out to machines) — surface that hint verbatim.
         const res = await fetch("/api/state", { headers: { authorization: `Bearer ${parsed.token}` } });
         const payload = await res.json().catch(() => null);
+        if (payload?.code === "tenant_required") throw new Error(TENANT_HINT);
         if (!res.ok) throw new Error(payload?.message ?? `HTTP ${res.status}`);
         parsed.tenant = String(payload?.edge?.tenant ?? "").trim().toLowerCase();
         if (!parsed.tenant) throw new Error("Máy này chưa có phòng — dùng mã ghép 8 ký tự.");
@@ -124,6 +139,18 @@ export function PairingScreen({ onPaired }) {
           spellcheck={false}
           value={key}
           onInput={(e) => setKey(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && loginWithKey()}
+        />
+        <label class="field" for="pair-room" style="margin-top:10px">Phòng (nếu khóa không kèm)</label>
+        <input
+          id="pair-room"
+          class="pair-key-input"
+          type="text"
+          autocomplete="off"
+          autocapitalize="none"
+          spellcheck={false}
+          value={room}
+          onInput={(e) => setRoom(e.currentTarget.value)}
           onKeyDown={(e) => e.key === "Enter" && loginWithKey()}
         />
         <div class="sheet-actions">

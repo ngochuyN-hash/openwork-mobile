@@ -133,7 +133,8 @@ fs.cpSync(path.join(ROOT, "bridge", "scripts"), path.join(STAGE, "bridge", "scri
 fs.cpSync(path.join(ROOT, "bridge", "bin"), path.join(STAGE, "bridge", "bin"), { recursive: true });
 fs.copyFileSync(path.join(ROOT, "bridge", "package.json"), path.join(STAGE, "bridge", "package.json"));
 fs.copyFileSync(path.join(ROOT, "bridge", "package-lock.json"), path.join(STAGE, "bridge", "package-lock.json"));
-fs.copyFileSync(path.join(ROOT, "bridge", "VERSION"), path.join(STAGE, "bridge", "VERSION"));
+// No bridge/VERSION here: the OTA VERSION file is gone — package.json is the
+// single version source (bridge/src/index.js reads it).
 fs.cpSync(path.join(ROOT, "web", "dist"), path.join(STAGE, "web", "dist"), { recursive: true });
 const vendored = stageNodeModules();
 const exePath = path.join(ROOT, "desktop", "bin", "OpenPocket.exe");

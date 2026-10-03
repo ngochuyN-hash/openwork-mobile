@@ -48,9 +48,13 @@ export function loadConfig() {
     // địa chỉ tunnel hiện tại lên đó để điện thoại luôn tìm được máy.
     lookupUrl: typeof parsed.lookupUrl === "string" ? parsed.lookupUrl : "",
     lookupSecret: typeof parsed.lookupSecret === "string" ? parsed.lookupSecret : "",
-    // "Phòng" trên worker chung (multi-tenant): cặp lookupTenant/lookupSecret do
-    // chủ worker cấp, nhập 1 lần bằng `openpocket edge join`. Rỗng = luồng cũ
-    // (máy chủ worker: secret môi trường -> machine:main).
+    // "Room" on the shared worker (multi-tenant): the lookupTenant/lookupSecret
+    // pair is written by the desktop GUI's silent provisioning (POST
+    // /api/tenant/create) — there is no manual join command anymore. EMPTY =
+    // the machine is not on the shared worker as a room: the worker refuses
+    // every roomless web entry (400 tenant_required), so pairing QRs must
+    // point straight at the tunnel/public URL instead. (The heartbeat still
+    // registers the tunnel under the owner's legacy machine:main slot.)
     lookupTenant: typeof parsed.lookupTenant === "string" ? parsed.lookupTenant : "",
     // Tên máy hiển thị trên web khi đăng nhập phòng (tùy chọn).
     machineName: typeof parsed.machineName === "string" ? parsed.machineName : "",
@@ -70,4 +74,16 @@ export function saveConfig(config) {
   const file = join(dir, CONFIG_FILE);
   writeFileSync(file, JSON.stringify(config, null, 2) + "\n", "utf8");
   return file;
+}
+
+/** Base URL printed into pairing QRs (pure, unit-tested): prefer the fixed
+ * worker address — but ONLY when the machine actually has a room. A roomless
+ * link via the worker is refused at the door (400 tenant_required), so a
+ * lookupUrl without lookupTenant must NOT win; fall back to the current
+ * tunnel URL, then the manually configured public URL, then localhost. */
+export function pairingBaseUrl({ lookupUrl = "", lookupTenant = "" } = {}, tunnelUrl = "", publicUrl = "", port = 8788) {
+  const room = String(lookupTenant).trim();
+  const url = String(lookupUrl).trim();
+  const worker = room && url ? url.replace(/\/+$/, "") : "";
+  return worker || tunnelUrl || publicUrl || `http://127.0.0.1:${port}`;
 }

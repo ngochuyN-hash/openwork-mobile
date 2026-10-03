@@ -1,7 +1,7 @@
 import http from "node:http";
 import { readFileSync, watch, writeFileSync, unlinkSync } from "node:fs";
 import qrcode from "qrcode-terminal";
-import { loadConfig, saveConfig, bridgeDataDir } from "./config.js";
+import { loadConfig, saveConfig, bridgeDataDir, pairingBaseUrl } from "./config.js";
 import { ensureOwnerToken } from "./bootstrap.js";
 import { discoverServer, checkTokenActive, readEngineRegistry, probeServerUrl } from "./discovery.js";
 import { isTokenAuthorized, requestToken, deny } from "./auth.js";
@@ -60,13 +60,13 @@ let tunnelController = null;
 // ---------------------------------------------------------------------------
 const pairing = new PairingService();
 
-// Địa chỉ in vào QR pair: ƯU TIÊN worker (địa chỉ CỐ ĐỊNH) nếu đã cấu hình —
-// URL tunnel đổi mỗi lần cloudflared chạy lại, điện thoại giữ QR cũ sẽ hụt.
-const currentBase = () =>
-  (config.lookupUrl ? config.lookupUrl.replace(/\/+$/, "") : "") ||
-  state.tunnelUrl ||
-  config.publicUrl ||
-  `http://127.0.0.1:${config.port}`;
+// Base URL printed into pairing QRs: PREFER the worker (the fixed address) —
+// the tunnel URL changes on every cloudflared restart, so a phone holding an
+// old QR would miss. ONLY when the machine actually has a room, though: a
+// roomless link via the worker is refused at the door (400 tenant_required),
+// so a machine without a room must point its QR straight at the
+// tunnel/public URL instead (pairingBaseUrl, unit-tested).
+const currentBase = () => pairingBaseUrl(config, state.tunnelUrl, config.publicUrl, config.port);
 // Gắn phòng vào link (#p=...&m=phòng / #t=...&m=phòng) để web tự điền.
 const tenantHashSuffix = () => (config.lookupTenant ? `&m=${encodeURIComponent(config.lookupTenant)}` : "");
 let printingPairing = false;

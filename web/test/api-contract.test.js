@@ -114,6 +114,40 @@ test("ow() sends the Bearer token, tenant header and JSON body", async () => {
   assert.deepEqual(JSON.parse(seen.options.body), { path: "a.txt", dataBase64: "aGk=" });
 });
 
+// ---- apiPair() error contract ----
+
+test("apiPair keeps the machine-readable code (tenant_required) on the thrown error", async () => {
+  globalThis.fetch = async () => respond(400, { code: "tenant_required", message: "Thiếu phòng (tenant)" });
+  await assert.rejects(
+    () => api.apiPair("ABCD1234", ""),
+    (err) => {
+      assert.equal(err.message, "Thiếu phòng (tenant)");
+      assert.equal(err.status, 400);
+      assert.equal(err.code, "tenant_required");
+      return true;
+    }
+  );
+});
+
+test("apiPair falls back to 'HTTP <status>' + empty code when the body is not JSON", async () => {
+  globalThis.fetch = async () => respond(502, "bad gateway");
+  await assert.rejects(
+    () => api.apiPair("ABCD1234", ""),
+    (err) => {
+      assert.equal(err.message, "HTTP 502");
+      assert.equal(err.code, "");
+      return true;
+    }
+  );
+});
+
+test("apiPair success returns the payload and writes the keyring entry", async () => {
+  globalThis.fetch = async () => respond(200, { token: "owd_tok", device: { id: "d1" } });
+  const payload = await api.apiPair("ABCD1234", "");
+  assert.deepEqual(payload, { token: "owd_tok", device: { id: "d1" } });
+  assert.equal(JSON.parse(localStorage.getItem("owm_keys"))[0].token, "owd_tok");
+});
+
 // ---- sseUrl() ----
 
 test("sseUrl appends _t and _m, joining with & when the path already has a query", () => {

@@ -304,11 +304,14 @@ async function handle(request, env) {
       ((url.pathname === "/api/pair" && request.method === "POST") ||
         (url.pathname === "/api/state" && request.method === "GET"))
     ) {
+      // Only instructions that still exist: the desktop app's QR dialog and
+      // the bridge banner both print links that carry &m=<room>. The web
+      // sign-in tab is gone, so do not send anyone looking for it.
       return json(
         {
           code: "tenant_required",
           message:
-            "Thiếu phòng (tenant) — mở lại link ghép mã đầy đủ từ máy tính (QR luôn kèm phòng) hoặc đăng nhập phòng trong tab Đăng nhập.",
+            "Thiếu phòng (tenant) — quét lại QR hoặc mở lại link ghép/master ĐẦY ĐỦ từ máy tính (link luôn kèm &m=<phòng>). Link hay khóa bị mất phòng không vào được qua worker.",
         },
         400
       );

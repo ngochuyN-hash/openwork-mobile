@@ -156,7 +156,14 @@ export async function apiPair(code, label) {
     body: JSON.stringify({ code: code.trim(), label: label?.trim() || undefined }),
   });
   const payload = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(payload?.message ?? `HTTP ${res.status}`);
+  if (!res.ok) {
+    // Keep the machine-readable code (e.g. tenant_required) on the error so
+    // the pairing screen can show the matching guidance, not just the text.
+    const error = new Error(payload?.message ?? `HTTP ${res.status}`);
+    error.status = res.status;
+    error.code = typeof payload?.code === "string" ? payload.code : "";
+    throw error;
+  }
   // Luôn ghi vào chùm — cả máy không phòng (tenant rỗng = máy chính) để tab
   // PCs không báo thiếu máy trong khi app đang nối.
   addKey({ tenant: getTenant(), token: payload.token, name: getTenantName() });
