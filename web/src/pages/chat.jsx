@@ -4,7 +4,7 @@ import { connectEvents } from "../lib/sse.js";
 import { createChatStream } from "../lib/chat-stream.js";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
 import { ModelPicker, pushRecentModel } from "../components/model-picker.jsx";
-import { ClipIcon, ExpandIcon, FileIcon, StopIcon } from "../components/icons.jsx";
+import { ClipIcon, ExpandIcon, FileIcon, StopIcon, ToolIcon, ThoughtIcon, ChevronDownIcon } from "../components/icons.jsx";
 
 // Protocol event học từ desktop (apps/app session-sync.ts):
 //  - message.part.updated: snapshot cộng dồn của MỘT part (chìa part.id)
@@ -574,20 +574,10 @@ function MessageBubble({ message, wsId }) {
           return <MarkdownText key={i} text={part.text} plain={role === "user"} wsId={wsId} />;
         }
         if (part.type === "tool") {
-          const status = part.state?.status ?? "";
-          return (
-            <span class="tool-chip" key={i}>
-              {part.tool ?? "tool"}{status ? ` · ${status}` : ""}
-            </span>
-          );
+          return <ToolRow key={i} part={part} />;
         }
         if (part.type === "reasoning" && part.text) {
-          return (
-            <details class="reasoning" key={i}>
-              <summary>Suy luận</summary>
-              <div class="reasoning-body">{part.text}</div>
-            </details>
-          );
+          return <ThoughtRow key={i} part={part} />;
         }
         return null;
       })}
@@ -596,6 +586,64 @@ function MessageBubble({ message, wsId }) {
       ))}
     </div>
   );
+}
+
+// ---- Hàng thu gọn kiểu ZCode: tool + suy luận mặc định ĐÓNG, đúng một ----
+// dòng (icon + tên + trạng thái + mũi tên), bấm mới xổ nội dung ra xem.
+
+const TOOL_STATUS_VI = {
+  pending: "đang chờ",
+  running: "đang chạy",
+  completed: "xong",
+  error: "lỗi",
+};
+
+function ToolRow({ part }) {
+  const status = part.state?.status ?? "";
+  const title = part.state?.title ?? part.tool ?? "tool";
+  const input = part.state?.input;
+  const output = typeof part.state?.output === "string" ? part.state.output : "";
+  // Trần hiển thị: transcript tool có khi cả trăm KB — cắt bớt cho điện thoại.
+  const MAX = 20_000;
+  return (
+    <details class="fold-row tool-row">
+      <summary>
+        <ToolIcon size={15} />
+        <span class="fold-title">{title}</span>
+        <span class={`fold-status${status === "error" ? " err" : ""}${status === "running" ? " run" : ""}`}>
+          {TOOL_STATUS_VI[status] ?? status}
+        </span>
+        <ChevronDownIcon size={13} />
+      </summary>
+      <div class="fold-body">
+        {input && Object.keys(input).length > 0 && <pre>{safeJson(input).slice(0, MAX)}</pre>}
+        {output && <pre>{output.slice(0, MAX)}{output.length > MAX ? "\n… (cắt bớt)" : ""}</pre>}
+      </div>
+    </details>
+  );
+}
+
+function ThoughtRow({ part }) {
+  const streaming = part.state?.status === "streaming";
+  return (
+    <details class="fold-row reasoning">
+      <summary>
+        <ThoughtIcon size={15} />
+        <span class="fold-title">Suy luận</span>
+        <span class={`fold-status${streaming ? " run" : ""}`}>{streaming ? "đang suy nghĩ…" : ""}</span>
+        <ChevronDownIcon size={13} />
+      </summary>
+      <div class="fold-body reasoning-body">{part.text}</div>
+    </details>
+  );
+}
+
+function safeJson(value) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 // ---- File agent nhắc tới trong text (engine không có part file riêng) ----

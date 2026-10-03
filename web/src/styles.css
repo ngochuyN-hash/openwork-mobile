@@ -806,15 +806,6 @@ label.field {
   margin: 0 0 var(--sp-2);
   padding-left: 18px;
 }
-.msg .tool-chip {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 6px;
-  font-size: 11.5px;
-  color: var(--text-faint);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
 /* Thẻ file agent nhắc tới trong chat: tên + nút Mở/Tải về + Xem trong Files. */
 .file-ref {
   display: flex;
@@ -1072,25 +1063,79 @@ label.field {
   color: var(--text-dim);
   font-size: 13.5px;
 }
-/* Reasoning: gập/mở như desktop, không chiếm chỗ khi im. */
-.reasoning {
-  margin: 4px 0;
-  border-left: 2px solid var(--border-strong);
-  padding-left: 10px;
+/* Hàng thu gọn kiểu ZCode: tool + suy luận mặc định ĐÓNG, một dòng
+   (icon + tên + trạng thái + mũi tên), bấm mới xổ nội dung ra xem. */
+.fold-row {
+  margin: 6px 0 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
   font-size: 13px;
-  color: var(--text-dim);
+  overflow: hidden;
 }
-.reasoning summary {
-  cursor: pointer;
-  min-height: 24px;
+.fold-row summary {
   display: flex;
   align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 6px 10px;
+  cursor: pointer;
   user-select: none;
+  color: var(--text-dim);
+  list-style: none;
 }
-.reasoning-body {
+.fold-row summary::-webkit-details-marker {
+  display: none;
+}
+.fold-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text);
+  font-weight: 500;
+}
+.fold-status {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.fold-status.run {
+  color: var(--warn);
+}
+.fold-status.err {
+  color: var(--danger);
+}
+.fold-row summary svg:last-child {
+  flex: none;
+  transition: transform var(--dur-tap) var(--ease);
+}
+.fold-row[open] summary svg:last-child {
+  transform: rotate(180deg);
+}
+.fold-body {
+  border-top: 1px solid var(--border);
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.fold-body pre {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: pre-wrap;
   word-break: break-word;
-  padding: 4px 0 6px;
+  color: var(--text-dim);
+}
+.reasoning .fold-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.55;
 }
 /* Nút gửi morph thành nút dừng khi agent đang chạy (như ChatGPT/Gemini). */
 .composer .btn-send.stop {
