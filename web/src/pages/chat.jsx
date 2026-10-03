@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { ow, unwrap, sseUrl, owUploadFile, formatBytes } from "../api.js";
+import { connectEvents } from "../lib/sse.js";
+import { createChatStream } from "../lib/chat-stream.js";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
 import { ModelPicker, pushRecentModel } from "../components/model-picker.jsx";
 import { ClipIcon, ExpandIcon, FileIcon, StopIcon } from "../components/icons.jsx";
@@ -10,19 +12,7 @@ import { ClipIcon, ExpandIcon, FileIcon, StopIcon } from "../components/icons.js
 //  - message.updated:      snapshot cả message (info + parts)
 //  - message.removed:      message bị xoá/revert — gọt khỏi transcript
 //  - session.idle/errored: chốt run status ngay, khỏi đợi poll
-const SSE_EVENTS = [
-  "session.updated",
-  "session.deleted",
-  "session.errored",
-  "session.idle",
-  "session.status",
-  "message.updated",
-  "message.part.updated",
-  "message.part.delta",
-  "message.removed",
-  "permission.updated",
-  "connection.updated",
-];
+// Engine opencode phát event KHÔNG TÊN trên SSE — type nằm trong JSON.
 
 // SSE engine các bản trả tên trường khác nhau — nhận hết để khỏi bỏ sót tin.
 function eventSessionId(data) {
@@ -46,24 +36,6 @@ function sameSession(eventSid, currentSid) {
   if (eventSid === currentSid) return true;
   const strip = (s) => String(s ?? "").replace(/^ses_/, "");
   return strip(eventSid) === strip(currentSid);
-}
-
-function eventMessageId(data) {
-  if (!data || typeof data !== "object") return "";
-  return (
-    data.messageID ??
-    data.messageId ??
-    data.message_id ??
-    data.info?.id ??
-    data.message?.id ??
-    data.message?.info?.id ??
-    data.part?.messageID ??
-    data.part?.messageId ??
-    data.properties?.messageID ??
-    data.properties?.messageId ??
-    data.properties?.part?.messageID ??
-    ""
-  );
 }
 
 /** properties của event: SSE phát {type, properties:{...}} nhưng một số bản
@@ -108,9 +80,10 @@ export function ChatPage({ route }) {
     messagesRef.current = next;
     setMessages(next);
   }, []);
-  // Delta buffer theo partId (học desktop pendingDeltas + deltaFlushBuffer):
-  // gom chữ rồi flush theo frame, không re-render từng miếng.
-  const pendingDelta = useRef(new Map());
+  // Reducer stream (lib/chat-stream.js — thuần, có test) + lịch flush theo
+  // frame: gom delta rồi đổ một lần, không re-render từng ký tự.
+  const streamRef = useRef(null);
+  if (!streamRef.current) streamRef.current = createChatStream();
   const flushRef = useRef(null);
 
   const base = `/workspace/${encodeURIComponent(wsId)}/opencode`;
@@ -208,152 +181,21 @@ export function ChatPage({ route }) {
       .catch(() => {})
       .finally(() => setModelsLoading(false));
 
-    // ---- Streaming patch theo PART (học desktop session-sync.ts) ----
-    // Không còn "đoán snapshot hay delta" trên một chuỗi text chung:
-    // chìa là part.id. Snapshot (part.updated) = upsert thay thế; delta =
-    // nối vào buffer, flush theo frame. Không có id (engine cũ) thì lùi về
-    // heuristic nối chữ cũ cho an toàn.
-
-    /** Nhét part (snapshot cộng dồn) vào message theo partId. */
-    const applyPartSnapshot = (messageId, part) => {
-      if (!messageId || !part?.id) return false;
-      const prev = messagesRef.current ?? [];
-      const list = [...prev];
-      let idx = list.findIndex((m) => (m.info?.id ?? m.id) === messageId);
-      if (idx < 0) {
-        // Part mới của message mới — stub assistant, role thật sẽ đến theo
-        // message.updated (desktop: inferStubRole).
-        list.push({ info: { id: messageId, role: "assistant", time: { created: Date.now() } }, parts: [] });
-        idx = list.length - 1;
-      }
-      const msg = list[idx];
-      const parts = [...(msg.parts ?? [])];
-      const pi = parts.findIndex((p) => p?.id === part.id);
-      // Buffer delta và snapshot là hai góc nhìn cộng dồn của cùng một
-      // stream — lấy cái DÀI HƠN, không nối (nối là nhân đôi bytes).
-      const buffered = pendingDelta.current.get(part.id) ?? "";
-      const base = typeof part.text === "string" ? part.text : "";
-      const text = base.length >= buffered.length ? base : buffered;
-      pendingDelta.current.delete(part.id);
-      const merged = { ...(pi >= 0 ? parts[pi] : {}), ...part, text };
-      if (pi >= 0) parts[pi] = merged;
-      else parts.push(merged);
-      list[idx] = { ...msg, parts };
-      commitMessages(list);
-      return true;
-    };
-
-    /** Heuristic cũ — fallback khi part không có id (engine cũ/bản lạ). */
-    const applyTextPatch = (messageId, chunk) => {
-      if (!chunk) return;
-      const prev = messagesRef.current ?? [];
-      const list = [...prev];
-      let idx = -1;
-      if (messageId) idx = list.findIndex((m) => (m.info?.id ?? m.id) === messageId);
-      if (idx < 0) {
-        for (let i = list.length - 1; i >= 0; i--) {
-          if ((list[i].info?.role ?? list[i].role) === "assistant") {
-            idx = i;
-            break;
-          }
-        }
-      }
-      if (idx < 0) {
-        list.push({
-          info: { id: messageId || `stream-${Date.now()}`, role: "assistant", time: { created: Date.now() } },
-          parts: [{ type: "text", text: chunk }],
-        });
-        commitMessages(list);
-        return;
-      }
-      const msg = { ...list[idx], parts: [...(list[idx].parts ?? [])] };
-      let pIdx = -1;
-      for (let i = msg.parts.length - 1; i >= 0; i--) {
-        if (msg.parts[i]?.type === "text") {
-          pIdx = i;
-          break;
-        }
-      }
-      if (pIdx < 0) {
-        msg.parts = [...msg.parts, { type: "text", text: chunk }];
-      } else {
-        const cur = msg.parts[pIdx]?.text ?? "";
-        let next;
-        if (!cur) next = chunk;
-        else if (chunk.startsWith(cur)) next = chunk; // snapshot full
-        else if (cur.endsWith(chunk)) next = cur; // event phát lại đuôi cũ
-        else next = cur + chunk; // delta
-        msg.parts[pIdx] = { ...msg.parts[pIdx], text: next };
-      }
-      list[idx] = msg;
-      commitMessages(list);
-    };
-
-    /** Upsert nguyên message từ message.updated (snapshot info + parts). */
-    const applyMessageSnapshot = (messageId, info, parts) => {
-      if (!messageId) return;
-      const prev = messagesRef.current ?? [];
-      const list = [...prev];
-      const idx = list.findIndex((m) => (m.info?.id ?? m.id) === messageId);
-      const clean = Array.isArray(parts) ? parts.filter(Boolean) : [];
-      if (idx < 0) {
-        list.push({ info: info ?? { id: messageId, role: "assistant" }, parts: clean });
-        commitMessages(list);
-        return;
-      }
-      // Parts rỗng không đè phần đang stream — info thì cứ cập nhật.
-      list[idx] = {
-        ...list[idx],
-        info: info ?? list[idx].info,
-        parts: clean.length ? clean : list[idx].parts,
-      };
-      commitMessages(list);
-    };
-
-    const removeMessage = (messageId) => {
-      if (!messageId) return;
-      const prev = messagesRef.current ?? [];
-      commitMessages(prev.filter((m) => (m.info?.id ?? m.id) !== messageId));
-    };
-
-    /** Gom delta theo partId; part chưa khai báo thì giữ chờ seed từ
-     * message.part.updated (đúng desktop pendingDeltas). */
-    const queueDelta = (partId, delta) => {
-      pendingDelta.current.set(partId, (pendingDelta.current.get(partId) ?? "") + delta);
+    // ---- Streaming theo PART: reducer thuần ở lib/chat-stream.js ----
+    // Không còn "đoán snapshot hay delta" trên một chuỗi text chung — chìa là
+    // part.id; delta gom vào buffer rồi flush theo frame.
+    const scheduleFlush = () => {
       if (flushRef.current != null) return;
-      // Foreground flush theo frame như desktop; không rAF thì 50ms.
       const run = () => {
         flushRef.current = null;
-        flushDeltas();
+        const prev = messagesRef.current;
+        if (prev) commitMessages(streamRef.current.flush(prev));
       };
+      // Foreground flush theo frame như desktop; không rAF thì 50ms.
       flushRef.current =
         typeof requestAnimationFrame === "function"
           ? requestAnimationFrame(run)
           : setTimeout(run, 50);
-    };
-
-    const flushDeltas = () => {
-      if (!pendingDelta.current.size) return;
-      const prev = messagesRef.current;
-      if (!prev) return; // chưa có snapshot — đợi part.updated seed
-      const list = prev.map((msg) => {
-        let parts = null;
-        (msg.parts ?? []).forEach((p, i) => {
-          if (!p?.id) return;
-          const add = pendingDelta.current.get(p.id);
-          if (!add) return;
-          if (!parts) parts = [...msg.parts];
-          parts[i] = { ...p, text: (p.text ?? "") + add };
-        });
-        return parts ? { ...msg, parts } : msg;
-      });
-      // Xoá delta của part đã khai báo; part chưa khai báo giữ lại đợi seed.
-      const declared = new Set();
-      for (const msg of prev) for (const p of msg.parts ?? []) if (p?.id) declared.add(p.id);
-      for (const [partId] of [...pendingDelta.current]) {
-        if (declared.has(partId)) pendingDelta.current.delete(partId);
-      }
-      commitMessages(list);
     };
 
     // Nhịp hỏi lại: event part đã là dữ liệu thật nên KHÔNG refetch full
@@ -374,94 +216,53 @@ export function ChatPage({ route }) {
       }, 500);
     };
 
-    const es = new EventSource(sseUrl(`${base}/event`));
-    // Hạt nhân dispatch: engine v1 phát event KHÔNG TÊN trên SSE (data:
-    // {"type":"message.part.delta",...}) — type nằm trong JSON. Named events
-    // chỉ là đường phụ của một số bản engine, nên cả hai đều về handleEvent.
+    // Hạt nhân dispatch — type lấy từ JSON trong dòng `data:` (lib/sse.js bóc
+    // sẵn). Engine phát event không tên nên đây là đường chính.
     const handleEvent = (name, data) => {
       lastEventAt.current = Date.now();
+      if (name === "server.connected" || name === "server.heartbeat") return;
       if (!data || typeof data !== "object") return;
       if (!sameSession(eventSessionId(data), sessionId)) return;
-      const props = eventProps(data);
-      if (name === "message.part.updated") {
-        const part = props.part && typeof props.part === "object" ? props.part : props;
-        const ok = applyPartSnapshot(eventMessageId(data), part);
-        if (!ok) {
-          // Part không có id — heuristic nối chữ (engine cũ).
-          const chunk =
-            (typeof part?.text === "string" && part.text) ||
-            (typeof props?.delta === "string" && props.delta) ||
-            "";
-          applyTextPatch(eventMessageId(data), chunk);
-        }
-        setRunning(true); // vào guồng stream ngay, poll dự phòng bám theo
-        scheduleStatus();
-        return;
-      }
-      if (name === "message.part.delta") {
-        const partId = props.partID ?? props.partId ?? props.id;
-        const delta = typeof props.delta === "string" ? props.delta : "";
-        if (partId && delta) {
-          queueDelta(partId, delta);
-          setRunning(true);
-        }
-        scheduleStatus();
-        return;
-      }
-      if (name === "message.updated") {
-        const message = data.message ?? data.properties?.message ?? null;
-        if (message) {
-          applyMessageSnapshot(message.id ?? eventMessageId(data), message.info, message.parts);
-          if (message.info?.role === "assistant" && message.parts?.some((p) => p?.type === "text")) {
-            setRunning(true);
-          }
-        }
-        scheduleStatus();
-        return;
-      }
-      if (name === "message.removed") {
-        removeMessage(props.messageID ?? props.messageId ?? props.id);
-        return;
-      }
       if (name === "session.idle" || name === "session.errored" || name === "session.status") {
         // Run kết thúc thật (idle/errored) hoặc status report — chốt ngay,
         // không chờ poll 2.5s. status mang map {ses: {type}} thì tự suy.
+        const props = eventProps(data);
         const type = name === "session.status" ? props?.[sessionId]?.type ?? props?.[`ses_${sessionId}`]?.type : null;
-        if (name === "session.idle") setRunning(false);
-        else if (name === "session.errored") setRunning(false);
+        if (name !== "session.status") setRunning(false);
         else if (type) setRunning(type === "busy" || type === "retry");
         scheduleStatus();
         return;
       }
-      if (name === "permission.updated") loadPermissions();
-      scheduleOther();
+      if (name === "permission.updated") {
+        loadPermissions();
+        scheduleOther();
+        return;
+      }
+      const prev = messagesRef.current;
+      const next = streamRef.current.apply(prev ?? [], data);
+      if (next !== prev) commitMessages(next);
+      if (name === "message.part.updated" || name === "message.part.delta" || name === "message.updated") {
+        setRunning(true); // vào guồng stream ngay, poll dự phòng bám theo
+        scheduleStatus();
+        if (streamRef.current.hasPending()) scheduleFlush();
+      } else {
+        scheduleOther();
+      }
     };
-    const parseAndHandle = (name, event) => {
-      let data = null;
-      try {
-        data = JSON.parse(event.data);
-      } catch {}
-      handleEvent(name, data);
-    };
-    for (const name of SSE_EVENTS) es.addEventListener(name, (e) => parseAndHandle(name, e));
-    es.onmessage = (e) => {
-      // Dòng unnamed — bóc type từ JSON rồi dispatch đúng nhánh.
-      let data = null;
-      try {
-        data = JSON.parse(e.data);
-      } catch {}
-      handleEvent(typeof data?.type === "string" && data.type !== "server.connected" && data.type !== "server.heartbeat" ? data.type : "message", data);
-    };
-    es.onopen = () => {
-      lastEventAt.current = Date.now();
-      flushQueue();
-    };
-    // SSE chết ngầm (tunnel đổi, mobile ngủ, server restart) thì trình duyệt
-    // tự nối lại — hỏi lại ngay để khỏi đứng hình chờ event tiếp theo.
-    es.onerror = () => {
-      loadMessages();
-      loadStatus();
-    };
+    // Stream qua fetch (lib/sse.js): token đi bằng header Authorization thay
+    // vì ?_t= trên URL như EventSource cũ, đứt là tự nối lại với backoff.
+    const stopEvents = connectEvents(`/api/ow${base}/event`, handleEvent, {
+      onOpen: () => {
+        lastEventAt.current = Date.now();
+        flushQueue();
+      },
+      onLost: () => {
+        // Stream đứt (tunnel đổi, mobile ngủ, server restart) — refetch full
+        // ngay để không đứng hình chờ event kế tiếp.
+        loadMessages();
+        loadStatus();
+      },
+    });
     const refetchVisible = () => {
       if (document.visibilityState === "visible") {
         lastEventAt.current = Date.now();
@@ -484,8 +285,8 @@ export function ChatPage({ route }) {
         (typeof cancelAnimationFrame === "function" ? cancelAnimationFrame : clearTimeout)(flushRef.current);
         flushRef.current = null;
       }
-      pendingDelta.current.clear();
-      es.close();
+      streamRef.current.reset();
+      stopEvents();
       document.removeEventListener("visibilitychange", refetchVisible);
       window.removeEventListener("focus", refetchVisible);
       window.removeEventListener("online", onOnline);

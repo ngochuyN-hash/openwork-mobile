@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "preact/hooks";
-import { ow, owDeleteSession, unwrap, timeAgo, sseUrl } from "../api.js";
+import { useEffect, useState } from "preact/hooks";
+import { ow, owDeleteSession, unwrap, timeAgo } from "../api.js";
+import { connectEvents } from "../lib/sse.js";
 import { navigate } from "../app.jsx";
 import { Banner, Empty, SkeletonList, SwipeRow } from "../components/ui.jsx";
 import { PlusIcon } from "../components/icons.jsx";
@@ -10,7 +11,6 @@ export function SessionsPage({ route }) {
   const [statuses, setStatuses] = useState({});
   const [error, setError] = useState("");
   const [openId, setOpenId] = useState(null);
-  const esRef = useRef(null);
 
   async function load() {
     try {
@@ -36,7 +36,8 @@ export function SessionsPage({ route }) {
   useEffect(() => {
     load();
     loadStatuses();
-    // SSE từ engine: session.updated/message.updated -> refresh (debounce)
+    // Stream event engine (lib/sse.js — fetch, token bằng header): session
+    // hoặc message đổi là refresh gộp sau 700ms, khỏi poll định kỳ.
     let timer = null;
     const schedule = () => {
       clearTimeout(timer);
@@ -45,16 +46,13 @@ export function SessionsPage({ route }) {
         loadStatuses();
       }, 700);
     };
-    const es = new EventSource(sseUrl(`/workspace/${encodeURIComponent(wsId)}/opencode/event`));
-    const onEvent = () => schedule();
-    for (const name of ["session.updated", "session.deleted", "message.updated", "message.part.updated"]) {
-      es.addEventListener(name, onEvent);
-    }
-    es.onmessage = onEvent;
-    esRef.current = es;
+    const stopEvents = connectEvents(
+      `/api/ow/workspace/${encodeURIComponent(wsId)}/opencode/event`,
+      () => schedule(),
+    );
     return () => {
       clearTimeout(timer);
-      es.close();
+      stopEvents();
     };
   }, [wsId]);
 
