@@ -67,6 +67,19 @@ Verified on 2026-10-03 with `OPENWORK_BRIDGE_DIR`/`OPENWORK_DIR` pointed at temp
 **11 pass / 0 fail**; `npm --prefix web run build` → OK (last build: JS 78,846 B → 26,633 B gzipped,
 CSS 19,901 B → 4,620 B gzipped).
 
+## Chat scroll-jump fix — 2026-10-03 (web only)
+
+Symptom: while the agent was running, scrolling down (or reading anywhere near the bottom) got
+yanked back up. Cause: any full-transcript refetch DURING a run — SSE reconnect (`onOpen` →
+`flushQueue`), `onLost`, tab-visible/focus refetch, the 30 s watchdog — replaced the message list
+with the API transcript, and that API only flushes a message when the run finishes, so the
+in-flight assistant message vanished; the document collapsed by thousands of pixels and the
+browser clamped `scrollY` upward (the auto-scroll then pinned the rebuilt message again — a
+violent bounce). Fix: `mergeRefetchKeepInflight(fetched, prev)` in `web/src/lib/chat-stream.js`
+(used by `loadMessages` only while `running`) re-appends local messages the fetched transcript
+lacks; refetches after the run ends replace cleanly as before. 3 new tests
+(`web/test/chat-stream.test.js` → 10 pass); `web test` suite and `vite build` verified 2026-10-03.
+
 ## Web API cleanup + first real unit tests — 2026-10-03
 
 `web/src/api.js` dropped the exports orphaned by the feature removals (grep-verified zero
@@ -239,6 +252,7 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | Web API call 403 "Path not allowed" | `bridge/src/proxy.js` — the `ALLOWED` array (add the new openwork-server path prefix) |
 | POST with a body hangs through the bridge | `bridge/src/proxy.js` (the body must be buffered, not streamed; abort only when `res` closes + `!writableEnded` — `req` 'close' also fires for normally finished requests) |
 | SSE doesn't stream / keeps dropping | `bridge/src/proxy.js` (isSSE + keepalive) + `index.js` (`server.requestTimeout = 0`) |
+| Chat view jumps back up while scrolling during a run | `web/src/pages/chat.jsx` (`loadMessages`) + `web/src/lib/chat-stream.js` (`mergeRefetchKeepInflight`) — the transcript API only flushes FINISHED messages, so a mid-run full refetch (SSE reconnect, tab return, 30 s watchdog) used to drop the still-streaming message: the page shrank and the browser clamped the scroll position (felt like being thrown back up, then the text grew back). Mid-run refetches now merge, keeping local messages the machine hasn't persisted yet. Regression: `mergeRefetchKeepInflight` tests in `web/test/chat-stream.test.js` |
 | Phone can't pair | `bridge/src/auth.js` + the token in `%APPDATA%\openwork-bridge\config.json`; the QR prints at bridge startup |
 | Wrong workspace list | openwork-server's side; check `%APPDATA%\openwork\server.json` |
 | Creating a workspace requires typing a path / want to tweak the folder browser | `bridge/src/fslist.js` (listing + mkdir) + `bridge/src/index.js` (routes `/api/fs/ls`, `/api/fs/mkdir`) + `web/src/pages/workspaces.jsx` (`FolderPickerSheet`) |

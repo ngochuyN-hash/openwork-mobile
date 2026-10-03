@@ -185,3 +185,15 @@ export function createChatStream() {
     reset: () => pendingDelta.clear(),
   };
 }
+
+/** Refetch full transcript giữa chừng run: API chỉ ghi nhận message ĐÃ xong
+ * nên `fetched` thiếu message đang stream — thay nguyên list là trang co cụm,
+ * scroll bị trình duyệt kẹp ngược lên (bug "cuộn xuống tự cuộn lên"). Giữ lại
+ * message cục bộ mà fetched chưa có, đè lên vị trí cuối (message mới nhất). */
+export function mergeRefetchKeepInflight(fetched, prev) {
+  const list = Array.isArray(fetched) ? fetched : [];
+  if (!Array.isArray(prev) || !prev.length) return list;
+  const ids = new Set(list.map((m) => m.info?.id ?? m.id));
+  const inflight = prev.filter((m) => !ids.has(m.info?.id ?? m.id));
+  return inflight.length ? [...list, ...inflight] : list;
+}

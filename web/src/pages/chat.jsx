@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { ow, unwrap, sseUrl, owUploadFile, formatBytes } from "../api.js";
 import { connectEvents } from "../lib/sse.js";
-import { createChatStream } from "../lib/chat-stream.js";
+import { createChatStream, mergeRefetchKeepInflight } from "../lib/chat-stream.js";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
 import { ModelPicker, pushRecentModel } from "../components/model-picker.jsx";
 import { ClipIcon, ExpandIcon, FileIcon, StopIcon, ToolIcon, ThoughtIcon, ChevronDownIcon } from "../components/icons.jsx";
@@ -101,7 +101,13 @@ export function ChatPage({ route }) {
   const loadMessages = useCallback(async () => {
     try {
       const payload = await ow(`${base}/session/${encodeURIComponent(sessionId)}/message`);
-      commitMessages(unwrap(payload) ?? []);
+      const fetched = unwrap(payload) ?? [];
+      // Transcript API chỉ flush khi run XONG — giữa chừng fetched thiếu message
+      // đang stream; thay nguyên list là trang co cụm, scroll bị hất ngược lên
+      // (bug "cuộn xuống tự cuộn lên"). Đang chạy thì giữ message chưa ghi xong.
+      commitMessages(
+        runningRef.current ? mergeRefetchKeepInflight(fetched, messagesRef.current) : fetched
+      );
       setError("");
     } catch (e) {
       setError(String(e.message || e));

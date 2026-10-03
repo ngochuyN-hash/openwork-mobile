@@ -2,7 +2,7 @@
 // từ engine (18/10: delta 1 ký tự, field "text", chìa partID).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createChatStream } from "../src/lib/chat-stream.js";
+import { createChatStream, mergeRefetchKeepInflight } from "../src/lib/chat-stream.js";
 
 const partUpdated = (messageId, part) => ({
   type: "message.part.updated",
@@ -98,4 +98,36 @@ test("event lạ/sai shape — trả nguyên prev, không văng", () => {
   assert.equal(next.length, prev.length + 1);
   assert.equal(next[1].info.role, "assistant");
   assert.equal(next[1].parts[0].text, "x");
+});
+
+// ---- mergeRefetchKeepInflight: refetch full giữa chừng run không được làm
+// mất message đang stream (transcript API chỉ flush khi xong) — mất nó là
+// trang co cụm, scroll bị hất ngược lên.
+
+test("refetch thiếu message đang stream — giữ lại message cục bộ ở cuối", () => {
+  const done = { info: { id: "m1", role: "user" }, parts: [{ type: "text", text: "hỏi" }] };
+  const streaming = { info: { id: "m2", role: "assistant" }, parts: [{ id: "p1", type: "text", text: "chảy…" }] };
+  const fetched = [done]; // máy chưa ghi xong m2
+  const merged = mergeRefetchKeepInflight(fetched, [done, streaming]);
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0], done);
+  assert.equal(merged[1], streaming); // đè nguyên phần đang chạy, không cộp
+});
+
+test("refetch đủ — trả nguyên fetched, không ghép gì", () => {
+  const fetched = [
+    { info: { id: "m1", role: "user" }, parts: [] },
+    { info: { id: "m2", role: "assistant" }, parts: [] },
+  ];
+  assert.equal(mergeRefetchKeepInflight(fetched, fetched), fetched);
+});
+
+test("refetch lần đầu (chưa có gì cục bộ) — fetched không đổi", () => {
+  const fetched = [{ id: "m1", role: "user", parts: [] }];
+  assert.equal(mergeRefetchKeepInflight(fetched, null), fetched);
+  assert.equal(mergeRefetchKeepInflight(fetched, []), fetched);
+  // fetched rỗng bất thường mà còn message cục bộ thì giữ — không trắng trang
+  const kept = mergeRefetchKeepInflight(undefined, fetched);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].id, "m1");
 });
