@@ -22,10 +22,13 @@ openwork-bridge-friend.zip
 .env*
 !.env.example
 
-# OTA bridge update — stage giải nén + backup bản cũ + state (16/09)
-.ota-stage/
-.ota-backup/
-.ota/
+# OTA publish staging (kênh OTA đã gỡ — giữ ignore phòng khi thư mục tái xuất hiện)
+worker/ota-publish/
+
+# agent/session working dirs (machine-local, not part of the repo)
+.agents/
+.cluster/
+.openclaw/
 
 # publishing washer hook is machine-local (never published to the remote)
 .githooks/
