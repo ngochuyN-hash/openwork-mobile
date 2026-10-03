@@ -13,6 +13,13 @@ import {
 } from "../api.js";
 import { useConfirm, Banner } from "../components/ui.jsx";
 import { PcsIcon } from "../components/icons.jsx";
+import { OpenWorkFix } from "../components/openwork-fix.jsx";
+import {
+  mergeCandidates,
+  openworkFoundOf,
+  openworkRunningOf,
+  openworkStatusLabel,
+} from "../lib/openwork-fix.js";
 import { navigate } from "../app.jsx";
 
 export function SettingsPage({ state, onRecheck, onUnpaired }) {
@@ -28,7 +35,6 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
   // "Chỉ đường dẫn" thành công thì bridge trả về openwork mới — giữ ở state để
   // vẽ ngay, khỏi đợi vòng poll sau.
   const [openworkOverride, setOpenworkOverride] = useState(null);
-  const [manualPath, setManualPath] = useState("");
   const [savingPath, setSavingPath] = useState(false);
   const [pathMsg, setPathMsg] = useState("");
   const [pathErr, setPathErr] = useState("");
@@ -99,38 +105,69 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       setWakeMsg(String(e.message || e));
       // Không tìm thấy exe: bridge kèm sẵn danh sách đường dẫn nghi vấn — đừng bỏ
       // qua, đưa vào đúng bộ chọn bên dưới để người dùng chỉ được luôn.
-      if (e?.candidates?.length) setWakeCandidates(e.candidates);
+      // CỘNG DỒN, không thay thế: bấm "Bật OpenWork" lần thứ hai trả về một danh
+      // sách khác, `setWakeCandidates(e.candidates)` sẽ XOÁ mất ứng viên bridge
+      // gửi ở lần trước. `mergeCandidates(prev, ...)` giữ cả hai và bỏ trùng —
+      // cùng cách banner ở app.jsx làm.
+      if (e?.candidates?.length) {
+        setWakeCandidates((prev) => mergeCandidates(prev, e.candidates));
+      }
     } finally {
       setWaking(false);
     }
   }
 
   /** Gửi 1 đường dẫn exe lên bridge. Thành công thì vẽ lại từ `openwork` bridge
-   * trả về; thất bại thì hiện nguyên văn message tiếng Việt của bridge. */
+   * trả về; thất bại thì hiện nguyên văn message tiếng Việt của bridge.
+   *
+   * PHẢI reject khi lưu thất bại (contract của <OpenWorkFix>): component giữ
+   * nguyên đường dẫn trong ô gõ ở nhánh reject. Nuốt lỗi rồi resolve sẽ xoá
+   * sạch ô gõ dù bridge đã từ chối — người dùng phải gõ lại từ đầu.
+   *
+   * "Thất bại" gồm HAI trường hợp, không chỉ lỗi HTTP:
+   *   1. `apiOpenWorkPath` ném (bridge từ chối / mạng hỏng);
+   *   2. HTTP 200 nhưng `openwork.found` false — bridge đã lưu đường dẫn nhưng
+   *      vẫn không thấy file. Trường hợp này CÓ THẬT: route trả 200 kèm
+   *      `openworkStateInfo()` mà `describeOpenWorkInstall` nuốt lỗi khi đọc
+   *      version ném (bridge/src/openwork-version.js) → `{found:false}` dù file
+   *      có thật. Cùng cách `chooseExePath` ở app.jsx xử lý. */
   async function choosePath(path) {
     const target = String(path ?? "").trim();
     if (!target) return;
     setSavingPath(true);
     setPathMsg("");
     setPathErr("");
+    let payload;
     try {
-      const payload = await apiOpenWorkPath(target);
-      const nowFound = Boolean(payload?.openwork?.found);
-      setOpenworkOverride(payload?.openwork ?? null);
-      setManualPath("");
-      setWakeCandidates([]);
-      if (nowFound) setEditing(false); // xong thì đóng khối chọn, không chiếm màn hình
-      setPathMsg(
-        nowFound
-          ? `Đã chỉ xong. Giờ bấm “Bật OpenWork trên máy tính” ở mục Trạng thái bridge để mở app.`
-          : `Đã lưu nhưng bridge vẫn không thấy file này — kiểm tra lại đường dẫn.`
-      );
-      onRecheck(); // bảng trạng thái bridge cũng phải thấy giá trị mới
+      payload = await apiOpenWorkPath(target);
     } catch (e) {
       setPathErr(String(e?.message || e));
+      throw e; // xem JSDoc — không nuốt, component cần rejection để giữ ô gõ
     } finally {
       setSavingPath(false);
     }
+    // Cố ý viết NGOÀI try: nhánh `throw` bên dưới không được `catch` ở trên
+    // nuốt mất và thay bằng `String(e.message)` — lỗi "bridge không thấy file"
+    // phải hiện nguyên văn tiếng Việt của ta, không phải "openwork_not_found".
+    setOpenworkOverride(payload?.openwork ?? null);
+    setWakeCandidates([]);
+    onRecheck(); // config đã đổi — bảng trạng thái cũng phải thấy giá trị mới
+    if (!openworkFoundOf(payload?.openwork)) {
+      // Lỗi này đi qua `pathErr` (Banner đỏ), KHÔNG phải `pathMsg` (Banner
+      // xanh): băng xanh nói "Đã lưu nhưng bridge vẫn không thấy file" đọc như
+      // thành công có ngoặt.
+      setPathErr("Đã lưu nhưng bridge vẫn không thấy file này — kiểm tra lại đường dẫn.");
+      // Throw để `submit` GIỮ NGUYÊN ô gõ: đường dẫn này người dùng vừa gõ tay
+      // hoặc vừa bấm "Dùng", xoá đi thì phải làm lại từ đầu đúng lúc app chưa
+      // thấy exe. Giữ cả danh sách ứng viên vì còn giá trị để bấm tiếp.
+      throw new Error("openwork_not_found");
+    }
+    // Xong thì đóng khối chọn, không chiếm màn hình.
+    setEditing(false);
+    // Không lặp lại "bấm Mở OpenWork…" ở đây: điều kiện hiện nút đó đã tự
+    // dựng từ `openworkRunning` ngay phía trên, và chỉ hiện đúng lúc app chưa
+    // mở. Nhánh app đang mở không cần hướng dẫn mở app.
+    setPathMsg("Đã chỉ xong.");
   }
 
   /** Chép đường dẫn để dán chỗ khác. Clipboard API cần ngữ cảnh an toàn (https);
@@ -176,158 +213,125 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     ["Bridge", `v${state?.bridgeVersion ?? "?"} · ${state?.dataDir ?? ""}`],
   ];
 
-  // `openwork` mới hơn boolean cũ `openworkExeFound`; thiếu object (bridge cũ) thì
-  // lùi về boolean để không mất thông tin cũ.
+// `openwork` mới hơn boolean cũ `openworkExeFound`; thiếu object (bridge cũ) thì
+  // lùi về boolean để không mất thông tin cũ. Cả hai cờ dùng helper của lib —
+  // quy tắc "chỉ tin boolean thật, còn lại lùi về tín hiệu cũ" nằm ở MỘT chỗ
+  // (`openworkFoundOf` / `openworkRunningOf`), trước đây viết tay ở bốn nơi.
   const openworkInfo = openworkOverride ?? state?.openwork ?? null;
-  const openworkFound = openworkInfo ? Boolean(openworkInfo.found) : Boolean(state?.openworkExeFound);
+  const openworkFound = openworkFoundOf(openworkInfo, state?.openworkExeFound);
   // Bridge cũ không gửi `running`; lúc đó đoán qua openwork-server — server sống
-// nghĩa là app đang mở, thay vì báo chết oan.
-const openworkRunning =
-    typeof openworkInfo?.running === "boolean" ? openworkInfo.running : Boolean(state?.server);
-  const candidates = [...new Set([...(openworkInfo?.candidates ?? []), ...wakeCandidates])].filter(Boolean);
+  // nghĩa là app đang mở, thay vì báo chết oan.
+  const openworkRunning = openworkRunningOf(openworkInfo, state?.server);
+  // Gộp HAI nguồn candidates (bridge đoán sẵn lúc /api/state + `wakeCandidates`
+  // tích luỹ từ lỗi khi bấm "Bật OpenWork") rồi làm sạch bằng mergeCandidates.
+  // Bản cũ ở đây là `new Set(...).filter(Boolean)` — chỉ lọc falsy, nên chuỗi
+  // toàn khoảng trắng hay object truthy lọt vào và vẽ thành hàng CÓ NÚT "Dùng".
+  const candidates = mergeCandidates(openworkInfo?.candidates, wakeCandidates);
   // Khối chọn đường dẫn: luôn mở khi chưa tìm thấy (đó là lúc cần nó), ngược lại
   // chỉ mở khi người dùng bấm "Đổi đường dẫn".
   const showChooser = !openworkFound || editing;
+  // Nhãn trạng thái lấy từ lib/openwork-fix.js (một chỗ duy nhất) thay vì rải
+  // điều kiện trong JSX. Hàm trả CHUỖI RỖNG khi chưa chắc đã cài — vậy hiện
+  // nhãn "chưa thấy exe" của riêng chỗ này.
+  const statusText =
+    openworkStatusLabel(openworkInfo, {
+      foundFallback: openworkFound,
+      runningFallback: openworkRunning,
+    }) || "chưa tìm thấy exe";
 
   return (
     <>
       {confirmDialog}
       <div class="card">
-        <h3>Trạng thái bridge</h3>
-        <table style="width:100%;font-size:13.5px;border-collapse:collapse">
-          <tbody>
-            {rows.map(([k, v]) => (
-              <tr key={k}>
-                <td style="color:var(--text-dim);padding:6px 8px 6px 0;white-space:nowrap;vertical-align:top">{k}</td>
-                <td style="padding:6px 0;min-width:0;word-break:break-word" class="mono">{v}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div class="page-actions" style="margin-top:12px">
+        <h3>Máy của tôi</h3>
+
+        <div class="row-between" style="margin-bottom:var(--sp-3)">
+          <b style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            {getTenantName() || "máy chính"}
+          </b>
+          {/* Trạng thái là câu, không phải bảng: đây là thứ người dùng thật sự
+              cần biết. Bảng kỹ thuật nằm gập trong <details> bên dưới. */}
+          <span class={`badge ${openworkRunning ? "ok" : "busy"}`}>{statusText}</span>
+        </div>
+
+        {/* Một hàng nút, một nút chính. "Kiểm tra lại" và "Quét lại máy tính"
+            trước đây là HAI tên cho cùng một lệnh apiRecheck — gộp lại một. */}
+        <div class="page-actions">
           <button class="btn small" disabled={busy} onClick={recheck}>
             {busy ? "Đang kiểm tra…" : "Kiểm tra lại"}
           </button>
-          <button class="btn small" disabled={waking} onClick={wake}>
-            {waking ? "Đang bật…" : "Bật OpenWork trên máy tính"}
-          </button>
+          {!openworkRunning && (
+            <button class="btn small" disabled={waking} onClick={wake}>
+              {waking ? "Đang bật…" : "Mở OpenWork"}
+            </button>
+          )}
+        </div>
+        {checkMsg && <p class="field-error" style="margin-top:10px" role="alert">{checkMsg}</p>}
+        {wakeMsg && <p class="sheet-body" style="margin:10px 0 0">{wakeMsg}</p>}
+        {pathErr && <Banner kind="err">{pathErr}</Banner>}
+        {pathMsg && <Banner kind="ok">{pathMsg}</Banner>}
+
+        {/* Phần cần thiết để sửa khi bridge không thấy exe. Chỉ mở lúc đó —
+            không mở sẵn vì người dùng bình thường không cần gõ đường dẫn. */}
+        {showChooser && (
+          <div style="margin-top:var(--sp-4)">
+            <OpenWorkFix candidates={candidates} onChoose={choosePath} saving={savingPath} />
+          </div>
+        )}
+
+        {openworkFound && (
+          <div class="page-actions" style="margin-top:12px">
+            <button class="btn small" onClick={() => setEditing(!editing)}>
+              {editing ? "Đóng" : "Đổi đường dẫn"}
+            </button>
+            {openworkInfo?.exe && (
+              <button class="btn small ghost" onClick={() => copyExePath(openworkInfo.exe)}>
+                Chép đường dẫn
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Bảng kỹ thuật gập mặc định. 8 dòng này (pid, port, dataDir, URL từ xa)
+            không phải thứ người dùng cần hằng ngày — mở sẵn nó chỉ làm màn
+            Settings nặng nề và khiến những dòng quan trọng bị chôn. */}
+        <details class="tech-details">
+          <summary>Chi tiết kỹ thuật</summary>
+          <table class="kv-table">
+            <tbody>
+              {rows.map(([k, v]) => (
+                <tr key={k}>
+                  <th scope="row">{k}</th>
+                  <td class="mono">{v}</td>
+                </tr>
+              ))}
+              {/* Phiên bản OpenWork đứng riêng một dòng: ghép chung với đường dẫn
+                  dài sẽ vỡ xuống dòng khoảng 4 dòng, đọc rối hơn là tách ra. */}
+              {openworkFound && (
+                <tr>
+                  <th scope="row">OpenWork</th>
+                  <td class="mono">
+                    {openworkInfo?.version ? `v${openworkInfo.version}` : "không đọc được phiên bản"}
+                  </td>
+                </tr>
+              )}
+              {openworkInfo?.exe && (
+                <tr>
+                  <th scope="row">OpenWork</th>
+                  <td class="mono">{openworkInfo.exe}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </details>
+
+        {/* Nút phá hủy tách riêng khỏi cụm nút thường, không đứng cạnh nút chính
+            (skill ux-layout-rules: nút phá hủy phải ra khỏi cụm). */}
+        <div class="page-actions" style="margin-top:var(--sp-4);padding-top:var(--sp-3);border-top:1px solid var(--border)">
           <button class="btn small danger" onClick={unpair}>
             Gỡ pairing
           </button>
         </div>
-        {checkMsg && <p class="sheet-body" style="margin:8px 0 0;color:var(--danger)" role="alert">{checkMsg}</p>}
-        {wakeMsg && <p class="sheet-body" style="margin:8px 0 0">{wakeMsg}</p>}
-      </div>
-
-      <div class="card">
-        <h3>OpenWork trên máy tính</h3>
-        {!openworkFound && (
-          <p class="sheet-body">
-            Chưa tìm thấy <span class="mono">OpenWork.exe</span> — bật OpenWork từ xa có thể lỗi. Chỉ cho bridge biết file nằm ở đâu:
-          </p>
-        )}
-        {openworkFound && (
-          <table style="width:100%;font-size:13.5px;border-collapse:collapse">
-            <tbody>
-              {[
-                ["Tình trạng", openworkRunning ? "đang chạy" : "đã cài, chưa mở"],
-                ["Phiên bản", openworkInfo?.version ? `v${openworkInfo.version}` : "không đọc được"],
-                ["Đường dẫn", openworkInfo?.exe || "—"],
-                ["Tìm ở đâu", openworkSourceLabel(openworkInfo?.source)],
-              ].map(([k, v]) => (
-                <tr key={k}>
-                  <td style="color:var(--text-dim);padding:6px 8px 6px 0;white-space:nowrap;vertical-align:top">{k}</td>
-                  <td style="padding:6px 0;min-width:0;word-break:break-word" class="mono">{v}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        {/* Cài xong app mà bridge chưa quét lại thì vẫn hiện "chưa tìm thấy" —
-            một nút quét lại rẻ hơn việc bắt người dùng tự hiểu phải chờ 15s. */}
-        {openworkFound && !openworkInfo?.version && (
-          <p class="sheet-body" style="margin:8px 0 0">
-            Bản cài này không có <span class="mono">resources/app.asar</span> (hay gặp ở bản portable) nên không đọc được
-            phiên bản — việc bật từ xa vẫn chạy bình thường.
-          </p>
-        )}
-        {openworkFound && !openworkRunning && (
-          <p class="sheet-body" style="margin:8px 0 0">
-            Muốn mở app? Bấm “Bật OpenWork trên máy tính” ở mục Trạng thái bridge phía trên.
-          </p>
-        )}
-        {showChooser && (
-          <>
-            {candidates.length > 0 && (
-              <div>
-                {candidates.map((p) => (
-                  <div class="file-row" key={p} style="cursor:default">
-                    <span class="name mono">{p}</span>
-                    <button class="btn small" disabled={savingPath} onClick={() => choosePath(p)}>
-                      Dùng
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <label class="field" for="ow-exe-path">
-              {candidates.length > 0 ? "Hoặc gõ đường dẫn OpenWork.exe trên máy tính" : "Gõ đường dẫn OpenWork.exe trên máy tính"}
-            </label>
-            <div style="display:flex;gap:8px">
-              <input
-                id="ow-exe-path"
-                type="text"
-                style="flex:1;min-width:0"
-                value={manualPath}
-                autocomplete="off"
-                spellcheck={false}
-                onInput={(e) => setManualPath(e.currentTarget.value)}
-                onKeyDown={(e) => {
-                  // Enter = gửi, không bắt thêm một cú bấm nữa.
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    choosePath(manualPath);
-                  }
-                }}
-                placeholder="C:\Users\...\OpenWork.exe"
-              />
-              <button
-                class="btn"
-                style="flex:none"
-                disabled={savingPath || !manualPath.trim()}
-                onClick={() => choosePath(manualPath)}
-              >
-                {savingPath ? "Đang lưu…" : "Chỉ đường dẫn"}
-              </button>
-            </div>
-            <p class="pair-hint" style="display:block;margin-top:6px">
-              Trên máy tính: mở File Explorer → vào thư mục OpenWork → chuột phải OpenWork.exe → Copy as path rồi dán vào đây.
-            </p>
-          </>
-        )}
-        <div class="page-actions" style="margin-top:12px">
-          <button class="btn small" disabled={busy} onClick={recheck}>
-            {busy ? "Đang kiểm tra…" : "Quét lại máy tính"}
-          </button>
-          {openworkFound && (
-            <button class="btn small" onClick={() => setEditing(!editing)}>
-              {editing ? "Đóng" : "Đổi đường dẫn"}
-            </button>
-          )}
-          {openworkFound && openworkInfo?.exe && (
-            <button class="btn small ghost" onClick={() => copyExePath(openworkInfo.exe)}>
-              Chép đường dẫn
-            </button>
-          )}
-        </div>
-        {pathErr && <Banner kind="err">{pathErr}</Banner>}
-        {/* styles.css chưa có .banner.ok (và không thêm ở đây) — dùng màu --ok
-            sẵn có, tránh thêm class mới cho một dòng thông báo. */}
-        {pathMsg && (
-          <p class="sheet-body" style="margin:0;color:var(--ok)" role="status">
-            {pathMsg}
-          </p>
-        )}
       </div>
 
       <div class="card">
@@ -336,7 +340,7 @@ const openworkRunning =
         {devices === null ? (
           <p class="sheet-body">Đang tải…</p>
         ) : devices.length === 0 ? (
-          <p class="sheet-body">Chưa có thiết bị nào dùng mã ghép (bạn đang dùng token dự phòng owm_).</p>
+          <p class="sheet-body">Chưa có thiết bị nào dùng mã ghép.</p>
         ) : (
           <div>
             {devices.map((d) => (
@@ -356,22 +360,6 @@ const openworkRunning =
           </div>
         )}
       </div>
-
-      <div class="card">
-        <h3>Về dự án</h3>
-        <p class="sheet-body">
-          OpenWork Mobile — web app quản lý session/workspace/file của OpenWork desktop.
-          Gặp lỗi thì mở <span class="mono">CODE_SUMMARY.md</span> trong thư mục dự án để biết sửa chỗ nào.
-        </p>
-      </div>
     </>
   );
-}
-
-/** `source` của describeOpenWorkInstall: chỗ bridge tìm ra exe (bridge/src/openwork-version.js). */
-function openworkSourceLabel(source) {
-  if (source === "config") return "đường dẫn đã lưu trong config.json";
-  if (source === "env") return "biến môi trường OPENWORK_EXE";
-  if (source === "wellknown") return "vị trí mặc định khi cài OpenWork";
-  return "—";
 }

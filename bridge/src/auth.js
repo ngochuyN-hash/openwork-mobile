@@ -14,9 +14,11 @@ export function isAuthorized(req, mobileToken) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+// 401 dùng chung cho cả "thiếu/sai token" và "đụng trần rate limit", nên message
+// phải đúng cho cả hai: điện thoại đọc thấy cũng hiểu, và không rò đường dẫn.
 export function deny(res) {
   res.writeHead(401, { "content-type": "application/json" });
-  res.end(JSON.stringify({ code: "unauthorized", message: "Invalid bridge token" }));
+  res.end(JSON.stringify({ code: "unauthorized", message: "Không hợp lệ — thiếu hoặc sai mã kết nối." }));
 }
 
 /** So sánh token đã trích (header hoặc ?_t=) với master token. */

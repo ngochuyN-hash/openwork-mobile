@@ -623,6 +623,11 @@ label.field {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 8%, transparent);
 }
+.banner.ok {
+  border-color: var(--ok);
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+}
 
 /* ---------- Bottom sheet ---------- */
 .sheet-backdrop {
