@@ -1,11 +1,18 @@
 ══════════════════════════════════════════════════════════════
- OPENPOCKET — ĐIỀU KHIỂN MÁY TÍNH NÀY TỪ ĐIỆN THOẠI
- (không cần app trên điện thoại, miễn phí 100%, không cần tài khoản)
+ OPENPOCKET — ĐIỀU KHIỂN OPENWORK TỪ ĐIỆN THOẠI
+ (mở phiên làm việc, chat, gửi-nhận file — không cần app trên
+  điện thoại, miễn phí 100%, không cần tài khoản)
 ══════════════════════════════════════════════════════════════
+
+OpenPocket nối điện thoại với OpenWork trên máy tính này: tạo và
+bật phiên làm việc mới, chat với agent, gửi-nhận file — ngay từ
+trình duyệt điện thoại. (Phần xem/điều khiển màn hình đã bị gỡ —
+app chỉ làm việc với phiên, chat và file của OpenWork.)
 
 CẦN CHỈ 1 THỨ CÀI SẴN: Node.js 20 trở lên
   → Chưa có? Vào https://nodejs.org tải bản LTS, cài next-next là xong.
-  (File setup cũng tự mở trang này giúp nếu phát hiện thiếu Node.)
+  (Setup phát hiện thiếu Node vẫn cài bình thường và chỉ hỏi mở trang
+   tải — phần nối Bridge đã nằm sẵn trong bộ cài, không phải chờ tải.)
 
 BƯỚC 1 — Bấm đúp:  OpenPocket-Setup.exe
   → Tự cài vào máy (thư mục OpenPocket trong tài khoản Windows của bạn),
@@ -14,7 +21,8 @@ BƯỚC 1 — Bấm đúp:  OpenPocket-Setup.exe
    — app chưa mua chữ ký số nên lần đầu bị hỏi vậy, bình thường)
 
   LẦN ĐẦU TRONG APP, tự lo hết:
-  • Bấm "Bật Bridge" → lần đầu tự cài phần nối (1-2 phút, có mạng là được)
+  • Bấm "Bật Bridge" → chạy liền, không đợi cài thêm gì
+    (phần nối đã kèm sẵn trong bộ cài)
   • Tự cấp "định danh" cho máy (ngầm, bạn không phải gõ gì)
   • Đèn xanh Bridge là xong. Tick sẵn "Tự khởi động cùng Windows".
 
@@ -25,8 +33,9 @@ BƯỚC 3 — Trên điện thoại, chọn 1 trong 2 cách:
   • Quét QR bằng camera → bấm link hiện ra → vào app luôn.  (nhanh nhất)
   • Hoặc mở web → gõ mã 8 ký tự → bấm "Vào".
 
-  Xong! Từ giờ mở link (hoặc lưu web vào màn hình chính) là điều khiển
-  máy — chỉ máy NÀY ghép với điện thoại ĐÓ, không ai vào lợm được.
+  Xong! Từ giờ mở link (hoặc lưu web vào màn hình chính) là làm việc
+  với OpenWork trên máy — chỉ máy NÀY ghép với điện thoại ĐÓ, không ai
+  vào lợm được.
 
 MẸO
   • Nút "Mã vĩnh viễn" trong cửa sổ QR: quét 1 lần là không bao giờ phải

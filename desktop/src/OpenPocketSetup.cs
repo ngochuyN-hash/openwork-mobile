@@ -5,10 +5,13 @@ using System.IO;
 using System.IO.Compression;
 using System.Windows.Forms;
 
-// Trình cài OpenPocket — MỘT file exe duy nhất gói trọn bridge + web + app.
-// Gói zip được NHÚNG trong exe (csc /res:package.zip) nên bạn bè chỉ cần
-// đúng 1 file: bấm đúp -> kiểm tra Node -> giải nén vào %LOCALAPPDATA%\OpenPocket
-// -> tạo shortcut -> mở app (app tự lo npm install + định danh + QR sau đó).
+// Trình cài OpenPocket — MỘT file exe duy nhất gói trọn bridge + web + app,
+// và bridge/node_modules đã VENDOR SẴN trong gói (chỉ qrcode-terminal — see
+// desktop/build-setup.js), nên người dùng KHÔNG chạy npm install nữa.
+// Bấm đúp -> giải nén vào %LOCALAPPDATA%\OpenPocket -> tạo shortcut ->
+// mở app (app tự định danh + QR sau đó). Node.js vẫn cần trên máy để CHẠY
+// bridge (node.exe), nhưng thiếu Node KHÔNG còn chặn cài — chỉ một cảnh báo
+// + gợi ý tải trang. Báo thật khi shortcut/app tự mở thất bại, không nuốt lỗi.
 // C# 5 only (csc .NET 4): không string interpolation, không ?., không out var.
 
 namespace OpenPocket.Setup
@@ -26,15 +29,22 @@ namespace OpenPocket.Setup
             bool testMode = !string.IsNullOrEmpty(testDir);
             if (testMode) finalDir = testDir;
 
+            // Node.js vẫn cần để CHẠY bridge (node.exe — FindNodeExe của app),
+            // nhưng node_modules đã vendor trong gói nên cài KHÔNG bị chặn.
+            // Hạ từ "bắt cài + mở trình duyệt + return 1" xuống một cảnh báo:
+            // cài tiếp bình thường, chỉ hỏi có muốn mở trang tải Node không.
             if (!HasNode())
             {
-                MessageBox.Show(
-                    "Máy chưa có Node.js!\n\n" +
-                    "Trình cài sẽ mở trang tải Node.js (chọn bản LTS, cài next-next là xong).\n" +
-                    "Cài xong thì chạy lại OpenPocket-Setup.exe nhé.",
-                    "OpenPocket — thiếu Node.js", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                try { Process.Start("https://nodejs.org"); } catch { }
-                return 1;
+                DialogResult openNode = MessageBox.Show(
+                    "Máy chưa có Node.js — OpenPocket vẫn được cài bình thường.\n\n" +
+                    "Nhưng để bấm \"Bật Bridge\" (mở phiên làm việc, chat, file từ " +
+                    "điện thoại), máy cần Node.js 20 trở lên.\n\n" +
+                    "Mở trang tải Node.js (nodejs.org) bây giờ không?",
+                    "OpenPocket — nên cài Node.js", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                if (openNode == DialogResult.Yes)
+                {
+                    try { Process.Start("https://nodejs.org"); } catch { }
+                }
             }
 
             ShowProgress();
@@ -62,17 +72,59 @@ namespace OpenPocket.Setup
 
             if (!testMode)
             {
+                // Báo thật: shortcut hỏng hay app không tự mở được đều phải
+                // hiện lên, không nuốt lỗi rồi giả vờ cài thành công trọn vẹn.
+                string warn = "";
+                string exePath = Path.Combine(finalDir, "OpenPocket.exe");
+                object shell = null;
                 try
                 {
-                    string exePath = Path.Combine(finalDir, "OpenPocket.exe");
-                    object shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
-                    MakeShortcut(shell, Environment.GetFolderPath(Environment.SpecialFolder.Programs), exePath);
-                    MakeShortcut(shell, Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), exePath);
+                    shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
+                }
+                catch (Exception ex)
+                {
+                    warn = AppendWarn(warn, "không tạo được shortcut nào: " + ex.Message);
+                }
+                if (shell != null)
+                {
+                    try
+                    {
+                        MakeShortcut(shell, Environment.GetFolderPath(Environment.SpecialFolder.Programs), exePath);
+                    }
+                    catch (Exception ex)
+                    {
+                        warn = AppendWarn(warn, "chưa tạo được shortcut Start Menu: " + ex.Message);
+                    }
+                    try
+                    {
+                        MakeShortcut(shell, Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), exePath);
+                    }
+                    catch (Exception ex)
+                    {
+                        warn = AppendWarn(warn, "chưa tạo được shortcut Desktop: " + ex.Message);
+                    }
+                }
+                try
+                {
                     Process.Start(exePath);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    warn = AppendWarn(warn, "chưa tự mở được app — hãy mở: " + exePath +
+                        " (" + ex.Message + ")");
+                }
+                if (warn.Length > 0)
+                {
+                    MessageBox.Show("Đã cài xong, nhưng có việc chưa xong:\n\n" + warn,
+                        "OpenPocket", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
             }
             return 0;
+        }
+
+        static string AppendWarn(string acc, string msg)
+        {
+            return acc.Length == 0 ? msg : acc + "\n" + msg;
         }
 
         static bool HasNode()
@@ -126,14 +178,11 @@ namespace OpenPocket.Setup
 
         static void MakeShortcut(object shell, string folder, string exePath)
         {
-            try
-            {
-                string path = Path.Combine(folder, "OpenPocket.lnk");
-                dynamic lnk = ((dynamic)shell).CreateShortcut(path);
-                lnk.TargetPath = exePath;
-                lnk.Save();
-            }
-            catch { }
+            // Không nuốt lỗi ở đây — caller gom từng lỗi lại và báo người dùng.
+            string path = Path.Combine(folder, "OpenPocket.lnk");
+            dynamic lnk = ((dynamic)shell).CreateShortcut(path);
+            lnk.TargetPath = exePath;
+            lnk.Save();
         }
 
         // Cửa sổ nhỏ báo đang cài — bấm đúp xong phải thấy chuyện gì xảy ra,
