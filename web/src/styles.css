@@ -64,6 +64,16 @@
   --sp-4: 16px;
   --sp-6: 24px;
 
+  /* Chuyển động — mọi transition trong file này đều lấy từ đây.
+     Nếu thấy số giây viết tay, đó là chỗ sót. */
+  --dur-tap: 120ms; /* phản hồi chạm */
+  --dur-ui: 200ms; /* đổi trạng thái (input, hover) */
+  --dur-move: 300ms; /* vào / ra */
+  --dur-spin: 800ms; /* vòng spinner */
+  --dur-shimmer: 1200ms; /* skeleton */
+  --dur-pulse: 1600ms; /* chấm trạng thái nhịp */
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+
   --sat: env(safe-area-inset-top, 0px);
   --sar: env(safe-area-inset-right, 0px);
   --sab: env(safe-area-inset-bottom, 0px);
@@ -277,7 +287,7 @@ h3 {
 .card.tap {
   cursor: pointer;
   min-height: 44px;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color var(--dur-ui) var(--ease), background var(--dur-ui) var(--ease);
 }
 .card.tap:active {
   background: var(--bg-hover);
@@ -400,7 +410,7 @@ h3 {
 }
 .dot.busy {
   background: var(--warn);
-  animation: dot-pulse 1.6s ease-in-out infinite;
+  animation: dot-pulse var(--dur-pulse) ease-in-out infinite;
 }
 .dot.ok {
   background: var(--ok);
@@ -458,13 +468,24 @@ h3 {
   justify-content: center;
   color: var(--text-dim);
 }
+/* Màn trống luôn 3 phần: icon + câu nói tình huống + một nút hành động.
+   Tách class thay vì inline style trong component. */
+.empty-title {
+  margin: 0 0 var(--sp-1);
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text);
+}
+.empty-hint {
+  margin: 0 0 var(--sp-3);
+}
 
 /* Skeleton loading */
 .sk {
   border-radius: 6px;
   background: linear-gradient(90deg, var(--bg-hover) 25%, var(--border-strong) 50%, var(--bg-hover) 75%);
   background-size: 200% 100%;
-  animation: sk-shimmer 1.2s ease-in-out infinite;
+  animation: sk-shimmer var(--dur-shimmer) ease-in-out infinite;
 }
 .sk-title {
   height: 15px;
@@ -502,6 +523,11 @@ button.btn {
   cursor: pointer;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+  /* Chuyển động chỉ transform/opacity/filter — không width/height/margin,
+     để không dồn layout. Trước đây hover/active nhảy tức thì, cảm giác lạnh. */
+  transition: transform var(--dur-tap) var(--ease), filter var(--dur-ui) var(--ease),
+    opacity var(--dur-ui) var(--ease), background-color var(--dur-ui) var(--ease),
+    border-color var(--dur-ui) var(--ease), box-shadow var(--dur-ui) var(--ease);
 }
 button.btn.primary {
   background: var(--primary);
@@ -510,8 +536,10 @@ button.btn.primary {
 button.btn:hover {
   filter: brightness(1.08);
 }
-button.btn:active {
+/* Ấn = lùi nhẹ + tối. Dưới 2px-ish để đọc ra là phản hồi, không phải chuyển cảnh. */
+button.btn:active:not(:disabled) {
   filter: brightness(0.93);
+  transform: scale(0.97);
 }
 button.btn:disabled {
   opacity: 0.45;
@@ -1237,7 +1265,7 @@ label.field {
   /* Tràn viền kiểu 9remote: stream chạm sát mép màn hình — nút nổi + panel tự
      bù safe-area (notch/home-bar), không đẩy ảnh ra xa mép nữa. */
   padding: 0;
-  animation: stage-in 0.18s ease-out;
+  animation: stage-in var(--dur-move) var(--ease);
 }
 @keyframes stage-in {
   from {
@@ -1522,7 +1550,7 @@ label.field {
   border: 2px solid var(--border-strong);
   border-top-color: var(--text);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: spin var(--dur-spin) linear infinite;
 }
 @keyframes spin {
   to {
@@ -1620,7 +1648,7 @@ a {
   background: var(--danger);
 }
 .pc-dot.checking {
-  animation: pulse-dot 1.1s ease-in-out infinite;
+  animation: pulse-dot var(--dur-pulse) ease-in-out infinite;
 }
 @keyframes pulse-dot {
   50% {

@@ -51,6 +51,22 @@ floating 4-tab nav — **Sessions · Workspace · Screen · Settings** (tab labe
 `pwa-workspace-ui` (`.zcode/skills/`): 16px inputs against iOS zoom, ≥44px touch targets,
 safe-area, skeleton loading, `prefers-reduced-motion`, all-SVG icons.
 
+**Motion (v4.1)**: `:root` owns the timing tokens — `--dur-tap` 120ms, `--dur-ui` 200ms,
+`--dur-move` 300ms, `--dur-spin` 800ms, `--dur-shimmer` 1200ms, `--dur-pulse` 1600ms and
+`--ease cubic-bezier(.2,.7,.3,1)`. Every transition in the stylesheet uses them; a literal
+`0.2s` in `styles.css` is a leftover. Buttons animate `transform/filter/opacity` only (never
+`width/height/margin`, which thrash layout) and press to `scale(0.97)` on `:active`. Before
+this the file carried seven hardcoded durations in seven places and `button.btn` had **no
+transition at all** — hover/active snapped instantly, which is what made the UI feel cold.
+
+**Design skills** live in `.zcode/skills/` (gitignored, local only) and each answers a
+different question. `pwa-workspace-ui` = what this project *requires*. `ui-dep` = what to
+*do* to make a screen look and feel good (positive playbook: style layering, a do-this table
+for ten surfaces, motion values, microcopy). `ui-ux-pro-max` = the standard UX rule for one
+specific situation, searchable offline (`search.py "<query>" --domain ux`, 119 rules) — read
+`ui-ux-pro-max/OPENWORK.md` first, because its generated palette and Google Fonts contradict
+this project's hard rules.
+
 ## Requirements
 
 - A Windows computer running **OpenWork desktop** + **Node.js ≥ 20**
@@ -232,7 +248,17 @@ CODE_SUMMARY.md  # code map + the "symptom → where to fix" table
 - OpenWork's `owt_...` owner token never reaches the browser; the proxy whitelist only allows admin paths (`bridge/src/proxy.js`).
 - **Security audit 2026-09-13 (Mimosa deep scan, sealed receipt)**: every flagged item triaged. The SSRF warnings on `bridge/src/proxy.js` and `worker/src/index.js` are already contained — request paths must match a whitelist against a fixed upstream base, redirects are not followed, and `/__register` only accepts `https://*.trycloudflare.com` URLs behind a per-room secret. The `spawnSync` warnings in `bin/openpocket.js` only ever carry the machine owner's own CLI arguments (array-form, no shell). Shipped fixes: `sharp` 0.33.5 → 0.35.4 (libvips/libheif CVEs, high — takes effect at the next bridge restart) and the desktop GUI strips quotes/newlines from the tenant display name and requires an `https://` worker URL before building the `tenant.mjs` command line.
 - **No default room password (2026-09-13)**: pressing Enter at any room-password prompt (CLI or GUI) auto-generates a strong random secret (`owes_` + 48 hex chars) instead of the old default `12345678` — the first password any attacker tries. The generated secret sits inside the invite link, so nothing extra to write down. Rooms created earlier with the old default should be re-keyed: revoke + add.
-- **CSP on the web app (2026-09-13)**: the worker stamps `Content-Security-Policy` on every static asset (`withSecurityHeaders` in `worker/src/index.js`) — scripts strictly same-origin (no inline), styles inline-only, `img-src` allows `data:`/`blob:` for the screen stream and file previews. Verified in a real browser: the app renders, the service worker activates, and DOM-injected inline/external scripts are blocked. Loosen it there if the web ever needs a CDN script or iframe.
+- **CSP on the web app**: `withSecurityHeaders` in `worker/src/index.js` covers Worker-served assets; `web/public/_headers` covers Cloudflare asset-first delivery. Keep both policies synchronized: same-origin scripts, same-origin/inline styles, and `data:`/`blob:` images for screen/file previews. The current local build includes `_headers`; this maintenance pass does not verify deployed headers.
+
+## Reliability checks (2026-09-18, local changes)
+
+- Listener retries share one counter: at most ten retries, 400 ms apart. The startup smoke test runs a real bridge process against temporary bridge/OpenWork data directories, releases a deliberately occupied port, and checks authenticated/unauthenticated HTTP responses.
+- Background stdout no longer prints pairing codes, QR payloads or the master key. Interactive terminals and the authenticated pairing-code API still support pairing. `ota.log` and `ota-watchdog.log` are included in bridge log cleanup; existing historical logs are not modified by this source change.
+- Manual code pairing reads its JSON body once and reuses it across candidate machines, including the empty-list fallback. Invalid JSON returns 400 rather than failing while reading an already-consumed request.
+- `web/public/_headers` supplies the same CSP to Cloudflare's asset-first path without routing every static request through the Worker. Build output includes this file; production headers require deployment verification.
+- OTA persists an atomic, fsynced recovery journal before touching the live tree; partial backups are restored component by component rather than mistaken for a legacy source directory. The installed watchdog is copied into `.ota` before replacement and launched from there, with logs in the bridge data directory. Failed payload downloads continue on the normal retry cadence. Tests cover partial backup failure, blocked state writes, omitted scripts, version stamping, and real loopback HTTP download/install/respawn after three download failures.
+- Recovery remains best-effort under power loss, disk failure or missing/corrupt journals. The watchdog is launched after the synchronous installation, so a process interruption during installation still requires recovery; this is not a fully transactional installer. Boot confirmation proves the listener started, not that the remote tunnel works. Dependency changes still require a setup release.
+- Local verification commands: `npm --prefix bridge test`, `node --test worker/test/*.test.mjs`, `npm --prefix web test`, and `npm --prefix web run build`. These do not publish a release or restart the installed bridge.
 
 ## Quick troubleshooting
 

@@ -26,15 +26,18 @@ export function SkeletonList({ rows = 3 }) {
 }
 
 export function Empty({ title, hint, actionLabel, onAction, icon }) {
+  // `icon` nhận cả hai dạng: component (icon={WsIcon}) hoặc cờ trần (icon →
+  // FolderIcon). Ba page đang dùng dạng cờ, đừng đổi hết sang dạng component.
+  const Icon = typeof icon === "function" ? icon : icon ? FolderIcon : null;
   return (
     <div class="empty">
-      {icon && (
+      {Icon && (
         <span class="empty-ico" aria-hidden="true">
-          <FolderIcon size={26} />
+          <Icon size={26} />
         </span>
       )}
-      <p style="margin:0 0 4px;font-weight:650;color:var(--text);font-size:15px">{title}</p>
-      {hint && <p style="margin:0 0 12px">{hint}</p>}
+      <p class="empty-title">{title}</p>
+      {hint && <p class="empty-hint">{hint}</p>}
       {actionLabel && (
         <button class="btn small primary" onClick={onAction}>
           {actionLabel}
