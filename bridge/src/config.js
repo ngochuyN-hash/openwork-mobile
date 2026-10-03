@@ -30,6 +30,10 @@ export function loadConfig() {
     }
   }
   const config = {
+    // Raw passthrough FIRST: unknown/forward-compat keys survive untouched.
+    // Every known field below re-validates AFTER the spread, so a corrupt
+    // stored value (port as a string, token as null) can never win.
+    ...parsed,
     // Token the PHONE presents to the bridge (never leaves this machine + the phone).
     mobileToken: typeof parsed.mobileToken === "string" && parsed.mobileToken ? parsed.mobileToken : `owm_${randomBytes(24).toString("hex")}`,
     // Owner token we mint into OpenWork's tokens.json (empty until bootstrapped).
@@ -56,7 +60,6 @@ export function loadConfig() {
     // true = mỗi lần bridge khởi động mà chưa thấy server thì tự mở OpenWork.
     // Bật bằng: openpocket autostart --enable --with-openwork
     autoLaunchOpenWork: parsed.autoLaunchOpenWork === true,
-    ...parsed,
   };
   return config;
 }

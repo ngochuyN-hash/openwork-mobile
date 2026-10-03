@@ -72,7 +72,10 @@ async function ensureCloudflared(log) {
   if (fromPath) return fromPath;
 
   log(`[tunnel] tải cloudflared về ${target} (chỉ lần đầu, ~50MB)...`);
-  const response = await fetch(DOWNLOAD_URL, { redirect: "follow" });
+  // Hard deadline: a hung GitHub download used to leave this promise unsettled
+  // forever — bridge alive with phase "starting" and no tunnel, ever. 60s is
+  // plenty for ~50MB, and the same signal aborts a stalled body read.
+  const response = await fetch(DOWNLOAD_URL, { redirect: "follow", signal: AbortSignal.timeout(60_000) });
   if (!response.ok || !response.body) throw new Error(`Tải cloudflared lỗi: HTTP ${response.status}`);
   const buffer = Buffer.from(await response.arrayBuffer());
   const { writeFileSync } = await import("node:fs");
@@ -253,6 +256,20 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
     },
     stop() {
       stopped = true;
+      if (pendingRetryTimer) {
+        clearTimeout(pendingRetryTimer);
+        pendingRetryTimer = null;
+      }
+      const child = currentChild;
+      if (child && child.exitCode === null) {
+        // stop() used to only raise the flag: the live cloudflared outlived
+        // the bridge (SIGINT does not wait) as an orphan tunnel. Kill it now;
+        // suppressExit keeps its exit handler from scheduling a respawn.
+        suppressExit = true;
+        try {
+          child.kill();
+        } catch {}
+      }
     },
   };
 }

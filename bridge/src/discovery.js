@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { openworkFilePath } from "./paths.js";
 
@@ -45,10 +45,25 @@ export function parseListeningPorts(netstatOutput, pid) {
   return [...ports];
 }
 
+/**
+ * Async netstat: the old spawnSync call blocked the event loop for up to 10s
+ * inside the 5s poll — the whole HTTP server froze with it. execFile keeps
+ * the loop free while netstat runs; the timeout caps a hung netstat.
+ */
 export function listeningPortsForPid(pid) {
-  const result = spawnSync("netstat", ["-ano"], { encoding: "utf8", timeout: 10_000, windowsHide: true });
-  if (result.status !== 0 || !result.stdout) return [];
-  return parseListeningPorts(result.stdout, pid);
+  return new Promise((resolve) => {
+    execFile(
+      "netstat",
+      ["-ano"],
+      { encoding: "utf8", timeout: 2500, windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
+      (error, stdout) => {
+        // Partial output still beats nothing: parse whatever netstat managed
+        // to print before dying (parseListeningPorts filters by pid anyway).
+        if (!stdout && error) return resolve([]);
+        resolve(parseListeningPorts(String(stdout ?? ""), pid));
+      }
+    );
+  });
 }
 
 async function fetchJson(url, { headers = {}, timeoutMs = 2500 } = {}) {
@@ -86,7 +101,10 @@ export async function discoverServer(options = {}) {
   if (override) candidates.push(override.replace(/\/+$/, ""));
   if (options.lastServerPort) candidates.push(`http://127.0.0.1:${options.lastServerPort}`);
   const pid = ownerPid();
-  if (pid > 0) candidates.push(...listeningPortsForPid(pid).map((port) => `http://127.0.0.1:${port}`));
+  if (pid > 0) {
+    const ports = await listeningPortsForPid(pid);
+    candidates.push(...ports.map((port) => `http://127.0.0.1:${port}`));
+  }
 
   for (const baseUrl of candidates) {
     const found = await probeServerUrl(baseUrl);

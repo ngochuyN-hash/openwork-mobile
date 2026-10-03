@@ -64,6 +64,9 @@ export async function launchOpenWork({ configOpenworkExe = "", log = console.log
   }
   // OpenWork.exe là ứng dụng GUI người dùng — KHÔNG dùng windowsHide kẻo app bị ẩn
   const child = spawn(exe, [], { detached: true, stdio: "ignore" });
+  // A locked/missing exe fires async 'error' AFTER this function already
+  // returned — without a listener it escapes as an uncaughtException.
+  child.on("error", (err) => log(`[openwork] mở OpenWork lỗi: ${err.message}`));
   child.unref();
   log(`[openwork] đã mở OpenWork (${exe}, pid ${child.pid}) — đợi server lên...`);
   return { launched: true, exe };

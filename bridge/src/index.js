@@ -52,6 +52,8 @@ const state = {
 let tunnelGetState = () => ({ phase: "starting", url: "", streak: 0, nextRetryAt: 0 });
 // Restart thủ công — false = tunnel không chạy (OPENWORK_BRIDGE_TUNNEL=0 / chưa lên)
 let tunnelRestart = () => false;
+// Real tunnel controller — used to kill the cloudflared child on SIGINT.
+let tunnelController = null;
 
 // ---------------------------------------------------------------------------
 // 1.5 Pairing kiểu 9Remote: mã one-time 30 phút trong QR + khóa thiết bị vĩnh viễn
@@ -100,6 +102,20 @@ function wakeRateLimited(ip) {
   wakeAttempts.set(ip, list);
   return false;
 }
+
+// Sweep stale IPs out of the rate-limit maps: entries past the 60s window are
+// dead weight — without this both maps grow forever with every IP ever seen.
+function sweepRateMaps() {
+  const now = Date.now();
+  for (const map of [pairAttempts, wakeAttempts]) {
+    for (const [ip, list] of map) {
+      const alive = list.filter((t) => now - t < 60_000);
+      if (alive.length) map.set(ip, alive);
+      else map.delete(ip);
+    }
+  }
+}
+setInterval(sweepRateMaps, 5 * 60_000).unref();
 
 async function readJsonBody(req, limit = 1_000_000) {
   const chunks = [];
@@ -210,6 +226,14 @@ const server = http.createServer((req, res) => {
 async function handleRequest(req, res) {
   const url = new URL(req.url ?? "/", `http://127.0.0.1:${config.port}`);
   const pathname = decodeURIComponent(url.pathname);
+
+  // SSE (EventSource always sends Accept: text/event-stream): the connection
+  // is long-lived and silent gaps are normal — clear the idle timeout for
+  // THIS socket only; every other request keeps the server defaults.
+  if (String(req.headers["accept"] ?? "").includes("text/event-stream")) {
+    req.socket.setTimeout(0);
+    req.socket.setNoDelay(true);
+  }
 
   if (pathname.startsWith("/api/")) {
     // Ghép thiết bị mới: KHÔNG cần token, chỉ cần mã one-time từ QR/terminal
@@ -496,8 +520,11 @@ async function handleRequest(req, res) {
   res.end();
 }
 
-// Long-lived SSE proxied connections need generous timeouts.
-server.requestTimeout = 0;
+// requestTimeout only bounds RECEIVING a request (measured: a completed GET
+// stream survives far past requestTimeout=1s), so a finite value is safe for
+// every response, SSE included. SSE sockets additionally get their idle
+// timeout cleared per-request in handleRequest.
+server.requestTimeout = 300_000; // slow headers/slowloris bodies stay bounded
 server.headersTimeout = 60_000;
 
 /**
@@ -560,6 +587,7 @@ const onListening = () => {
       },
     })
       .then((tunnel) => {
+        tunnelController = tunnel;
         tunnelGetState = () => tunnel.getState();
         tunnelRestart = () => tunnel.restart();
       })
@@ -589,7 +617,12 @@ const onListening = () => {
 // EADDRINUSE. 8788 belongs to the bridge alone, so a retry always wins.
 let attempt = 0;
 server.on("error", (err) => {
-  if (err.code !== "EADDRINUSE") throw err;
+  if (err.code !== "EADDRINUSE") {
+    // Throwing inside this handler falls into the uncaughtException net: the
+    // process would linger alive while listening on NOTHING. Exit loudly.
+    console.error(`[listener] cannot listen on port ${config.port} (${err.code ?? "no_code"}): ${err.message} - exiting.`);
+    process.exit(1);
+  }
   const retry = () => {
     attempt += 1;
     if (attempt > 10) {
@@ -605,6 +638,9 @@ server.listen(config.port, "127.0.0.1", onListening);
 
 process.on("SIGINT", () => {
   console.log("\n[bridge] bye");
+  try {
+    tunnelController?.stop(); // kill the cloudflared child too — no orphan tunnel
+  } catch {}
   try {
     unlinkSync(join(bridgeDataDir(), "bridge.pid"));
   } catch {}
