@@ -76,6 +76,17 @@ export function FilesPage({ route }) {
     load(path);
   }, [path]);
 
+  // Nhảy từ chat (bấm hàng file): hash có ?open=<path> — đường dẫn đã được
+  // chat stat xác thực (engine nhận cả dạng tuyệt đối) — thì mở thẳng viewer.
+  useEffect(() => {
+    const m = /[?&]open=([^&]+)/.exec(location.hash);
+    if (!m) return;
+    const p = decodeURIComponent(m[1]);
+    const name = String(p).split(/[\\/]/).filter(Boolean).pop() ?? p;
+    const kind = isImage(name) ? "image" : isPdf(name) ? "pdf" : isText(name) ? "text" : "binary";
+    setOpened({ name, path: p, kind });
+  }, []);
+
   useEffect(() => {
     // giữ path trong hash để back/forward hoạt động
     const target = `#/ws/${wsEnc}/files${path ? `?path=${encodeURIComponent(path)}` : ""}`;
@@ -246,6 +257,17 @@ function FileViewer({ wsEnc, file, onClose }) {
     (async () => {
       try {
         const res = await ow(`/workspace/${wsEnc}/files/raw?path=${encodeURIComponent(file.path)}`, { raw: true });
+        if (!res.ok) {
+          // Engine trả JSON lỗi — đừng nhét nó vào làm nội dung file.
+          let msg = `HTTP ${res.status}`;
+          try {
+            const j = await res.json();
+            if (j?.message) msg = j.message;
+          } catch {
+            /* body không phải JSON — giữ HTTP status */
+          }
+          throw new Error(msg);
+        }
         const text = await res.text();
         setContent(text);
         setEdited(text);

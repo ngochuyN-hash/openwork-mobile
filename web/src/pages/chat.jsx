@@ -4,7 +4,7 @@ import { connectEvents } from "../lib/sse.js";
 import { createChatStream, mergeRefetchKeepInflight } from "../lib/chat-stream.js";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
 import { ModelPicker, pushRecentModel } from "../components/model-picker.jsx";
-import { ClipIcon, ExpandIcon, FileIcon, StopIcon, ToolIcon, ThoughtIcon, ChevronDownIcon } from "../components/icons.jsx";
+import { ClipIcon, FileIcon, StopIcon, ToolIcon, ThoughtIcon, ChevronDownIcon } from "../components/icons.jsx";
 
 // Protocol event học từ desktop (apps/app session-sync.ts):
 //  - message.part.updated: snapshot cộng dồn của MỘT part (chìa part.id)
@@ -714,31 +714,47 @@ function collectFileRefs(parts) {
   return out.slice(0, 5);
 }
 
-/** Thẻ file trong chat: bấm để xem/tải ngay, không cần mò sang tab Files. */
+/** Hàng file trong chat: CHỈ một dòng chữ mảnh (icon + tên + mũi tên) như
+ * các hàng tool/suy luận — bấm hàng mới nhảy sang Files mở viewer xem/tải,
+ * chat không bị thẻ nút chiếm chỗ. */
 function FileRefCard({ refPath, name, wsId }) {
-  const [checking, setChecking] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [missing, setMissing] = useState(false);
   const base = `/workspace/${encodeURIComponent(wsId)}`;
 
-  // Agent hay nhắc đường dẫn tuyệt đối Windows (C:\...), còn API file hiểu
-  // đường dẫn tương đối trong workspace — thử cả hai, cái nào có thì dùng.
+  // Agent hay nhắc đường dẫn tuyệt đối Windows (C:\...) hoặc lấy gốc theo ổ
+  // đĩa (Persona/...), còn API file hiểu đường dẫn tương đối trong workspace
+  // (có khi gốc workspace là thư mục con) — thử cả ba dạng, cái nào có thì dùng.
   function candidates() {
     const out = [refPath];
     const m = /^[A-Za-z]:[\\/]/.exec(refPath);
-    if (m) out.push(refPath.slice(2).replace(/\\/g, "/").replace(/^\/+/, ""));
+    let p = refPath;
+    if (m) {
+      p = refPath.slice(2).replace(/\\/g, "/").replace(/^\/+/, "");
+      out.push(p);
+    } else {
+      p = refPath.replace(/\\/g, "/");
+    }
+    const cut = p.indexOf("/");
+    if (cut > 0) out.push(p.slice(cut + 1));
     return out;
   }
 
   async function open() {
-    setChecking(true);
+    if (busy) return;
+    setBusy(true);
     setMissing(false);
     try {
       let found = "";
       for (const p of candidates()) {
         try {
-          await ow(`${base}/files/stat?path=${encodeURIComponent(p)}`);
-          found = p;
-          break;
+          // stat KHÔNG ném lỗi khi file thiếu — trả 200 {exists:false}, phải
+          // đọc trường exists chứ đừng coi "không ném" là có file.
+          const info = await ow(`${base}/files/stat?path=${encodeURIComponent(p)}`);
+          if (info?.exists) {
+            found = p;
+            break;
+          }
         } catch {
           /* thử ứng viên tiếp theo */
         }
@@ -747,30 +763,44 @@ function FileRefCard({ refPath, name, wsId }) {
         setMissing(true);
         return;
       }
-      // Mở tab mới để giữ nguyên trang chat (PWA không bị mất chỗ).
-      window.open(sseUrl(`${base}/files/raw?path=${encodeURIComponent(found)}`), "_blank", "noopener");
+      // Giao diện xem/tải là trang Files mở thẳng viewer cho file này.
+      // Truyền NGUYÊN path vừa stat được (engine nhận cả dạng tuyệt đối) —
+      // bóc chữ ổ đĩa ra là viewer dính file_not_found (sai gốc tương đối).
+      const norm = String(found).replace(/\\/g, "/");
+      const cut = norm.lastIndexOf("/");
+      const dir = cut > 0 ? norm.slice(0, cut) : "";
+      location.hash = `#/ws/${encodeURIComponent(wsId)}/files?path=${encodeURIComponent(dir)}&open=${encodeURIComponent(found)}`;
     } finally {
-      setChecking(false);
+      setBusy(false);
     }
   }
 
   return (
-    <div class="file-ref">
-      <span class="file-ref-ico" aria-hidden="true"><FileIcon size={16} /></span>
-      <span class="file-ref-name">{name}</span>
-      <button class="btn small ghost" disabled={checking} onClick={open}>
-        {checking ? "Đang mở…" : "Mở"}
-      </button>
-      <a
-        class="btn small ghost file-ref-dir"
-        style="text-decoration:none"
-        aria-label="Xem trong Files"
-        title="Xem trong Files"
-        href={`#/ws/${encodeURIComponent(wsId)}/files?path=${encodeURIComponent(dirOf(refPath))}`}
+    <div class="file-row">
+      <div
+        class="file-row-hit"
+        role="button"
+        tabindex="0"
+        aria-label={`Mở ${name} trong Files`}
+        onClick={open}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            open();
+          }
+        }}
       >
-        <ExpandIcon size={15} />
-      </a>
-      {missing && <span class="file-ref-miss">Không thấy file này trong workspace (có thể agent ghi chỗ khác).</span>}
+        <FileIcon size={14} />
+        <span class="file-row-name">{name}</span>
+        {busy ? (
+          <span class="file-row-hint">đang mở…</span>
+        ) : (
+          <span class="file-row-chev" aria-hidden="true"><ChevronDownIcon size={12} /></span>
+        )}
+      </div>
+      {missing && (
+        <div class="file-row-miss">Không thấy file này trong workspace (có thể agent ghi chỗ khác).</div>
+      )}
     </div>
   );
 }

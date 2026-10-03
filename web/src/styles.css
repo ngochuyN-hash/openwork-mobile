@@ -806,79 +806,55 @@ label.field {
   margin: 0 0 var(--sp-2);
   padding-left: 18px;
 }
-/* Thẻ file agent nhắc tới trong chat: tên + nút Mở/Tải về + Xem trong Files. */
-.file-ref {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  padding: 6px 8px 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg);
-  font-size: 13px;
-}
-/* Tên file ăn phần dư, nút bên phải co lại — trước đây tên chiếm 100% nên
-   "Mở / Tải về" bị đẩy xuống hàng riêng và trông như hai nút to. */
-.file-ref-ico {
-  display: inline-flex;
-  color: var(--text-dim);
-  flex: none;
-}
-.file-ref-name {
-  flex: 1 1 60px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+/* Hàng file agent nhắc tới trong chat: CHỈ một dòng chữ mảnh như ZCode
+   (icon + tên + mũi tên), bấm hàng mới nhảy sang Files mở viewer xem/tải. */
+.file-row {
+  margin: 3px 0 0;
   font-size: 12.5px;
 }
-/* Nút trong thẻ file: hình nhỏ lại, vùng chạm vẫn ≥44px nhờ ::after loe
-   (cùng pattern .corner-btn / .zoom-chip — skill pwa-workspace-ui). */
-.file-ref .btn.small {
-  flex: none;
-  min-height: 30px;
-  padding: 3px 9px;
-  font-size: 12px;
-  position: relative;
+.file-row + .file-row {
+  margin-top: 1px;
 }
-.file-ref .btn.small::after {
-  content: "";
-  position: absolute;
-  inset: -7px;
-}
-.file-ref .btn.small.ghost {
-  background: transparent;
-  border-color: var(--border);
-  color: var(--text-dim);
-}
-.file-ref .btn.small.ghost:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-/* Nút icon (sang trang Files) — KHÔNG viền để khác hẳn nút "Mở" có viền,
-   dễ bấm nhầm. Vùng chạm vẫn 44px nhờ ::after ở trên. */
-.file-ref .btn.small.file-ref-dir {
-  display: inline-flex;
+.file-row-hit {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  padding: 3px;
-  min-width: 30px;
-  background: transparent;
-  border-color: transparent;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 6px;
+  margin: 0 -6px; /* vùng bấm tràn hết bề ngang bubble, chữ vẫn thẳng hàng */
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
   color: var(--text-faint);
 }
-.file-ref .btn.small.file-ref-dir:hover {
+.file-row-hit:active {
   background: var(--bg-hover);
-  border-color: transparent;
-  color: var(--text);
 }
-.file-ref-miss {
-  flex-basis: 100%;
+.file-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--text-dim);
-  font-size: 12px;
+  font-weight: 500;
+}
+.file-row-hint {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.file-row-chev {
+  display: inline-flex;
+  color: var(--text-faint);
+}
+.file-row-chev svg {
+  transform: rotate(-90deg); /* mũi tên chỉ ngang: bấm là sang giao diện khác */
+}
+.file-row-miss {
+  margin: 1px 0 0 20px;
+  font-size: 11.5px;
+  color: var(--text-dim);
 }
 /* File đính kèm chờ gửi trong khung chat. */
 .attach-list {
