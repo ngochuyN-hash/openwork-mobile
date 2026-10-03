@@ -232,3 +232,28 @@ export function SendIcon({ size }) {
     </Icon>
   );
 }
+
+export function SearchIcon({ size }) {
+  return (
+    <Icon size={size ?? 16}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m21 21-4.3-4.3" />
+    </Icon>
+  );
+}
+
+export function CheckIcon({ size }) {
+  return (
+    <Icon size={size ?? 18}>
+      <path d="M20 6 9 17l-5-5" />
+    </Icon>
+  );
+}
+
+export function ChevronDownIcon({ size }) {
+  return (
+    <Icon size={size ?? 14}>
+      <path d="m6 9 6 6 6-6" />
+    </Icon>
+  );
+}
