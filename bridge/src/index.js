@@ -13,7 +13,6 @@ import { startLookup } from "./lookup.js";
 import { PairingService, CODE_TTL_MINUTES } from "./pairing.js";
 import { findOpenWorkExe, launchOpenWork } from "./openwork-launch.js";
 import { listDirs, listRoots, makeDir } from "./fslist.js";
-import { ScreenService, createRateLimiter } from "./screen.js";
 import { rotateStaleLogs, scheduleDailyWipe, wipeLogs } from "./logwipe.js";
 import { startUpdater, markBootOk, currentVersion } from "./update.js";
 import { fileURLToPath } from "node:url";
@@ -101,12 +100,6 @@ function wakeRateLimited(ip) {
   wakeAttempts.set(ip, list);
   return false;
 }
-
-// Xem/điều khiển màn hình (v1.7, học cơ chế 9remote). Drag từ phone phát lệnh
-// move liên tục nên limiter theo GIÂY, không theo phút như các route khác.
-const screen = new ScreenService();
-let webrtc = null; // WebRtcService — nạp lười khi có phone gọi /api/webrtc/signal
-const screenInputRateLimited = createRateLimiter(40, 1_000);
 
 async function readJsonBody(req, limit = 1_000_000) {
   const chunks = [];
@@ -474,110 +467,6 @@ async function handleRequest(req, res) {
       return;
     }
 
-    // Xem màn hình máy tính: bridge đẩy frame JPEG liên tục (binary stream).
-    // Ảnh KHÔNG ghi đĩa — RAM giữ đúng 1 khung gần nhất như 9remote.
-    if (req.method === "GET" && pathname === "/api/screen/stream") {
-      // Chặn biên server-side: chỉ phone đã pair mới gọi được, nhưng w=99999
-      // vẫn khiến sharp cháy RAM vô ích. Thiếu/số vô lý → dùng mặc định.
-      const clamp = (raw, min, max, fallback) => {
-        const n = Number(raw);
-        if (!Number.isFinite(n) || n <= 0) return fallback;
-        return Math.min(max, Math.max(min, Math.round(n)));
-      };
-      // Focus-rect zoom qua đường HTTP DỰ PHÒNG (không có control channel): vùng
-      // nhìn chuẩn hóa 0..1 đóng gói JSON — áp ngay cho viewer kết nối này.
-      let focus = null;
-      const fq = url.searchParams.get("f");
-      if (fq) {
-        try {
-          const f = JSON.parse(fq);
-          if (f && Number.isFinite(f.x) && Number.isFinite(f.y) && Number.isFinite(f.w) && Number.isFinite(f.h)) {
-            focus = { x: f.x, y: f.y, w: f.w, h: f.h };
-          }
-        } catch {}
-      }
-      screen.addViewer(req, res, {
-        w: clamp(url.searchParams.get("w"), 320, 1920, 880),
-        q: clamp(url.searchParams.get("q"), 30, 90, 55),
-        focus,
-      });
-      return;
-    }
-
-    if (req.method === "GET" && pathname === "/api/screen/info") {
-      if (!screen.available) {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ available: false, message: screen.setupError ?? "Chỉ hỗ trợ Windows" }));
-        return;
-      }
-      try {
-        await screen.ensureReady();
-      } catch (error) {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ available: false, message: String(error.message ?? error) }));
-        return;
-      }
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ available: true, screen: screen.dims(), viewers: screen.viewers.size }));
-      return;
-    }
-
-    // Điều khiển chuột/bàn phím qua daemon C# (SendInput). Tọa độ client gửi
-    // chuẩn hóa 0..1, bridge nhân theo kích thước màn thật.
-    if (req.method === "POST" && pathname === "/api/screen/input") {
-      const ip = req.socket.remoteAddress ?? "?";
-      if (screenInputRateLimited(ip)) {
-        res.writeHead(429, { "content-type": "application/json" });
-        res.end(JSON.stringify({ code: "rate_limited", message: "Gửi lệnh quá nhanh" }));
-        return;
-      }
-      try {
-        const body = await readJsonBody(req, 64_000);
-        await screen.input(body);
-        res.writeHead(204);
-        res.end();
-      } catch (error) {
-        res.writeHead(400, { "content-type": "application/json" });
-        res.end(JSON.stringify({ code: "input_error", message: String(error?.message ?? error) }));
-      }
-      return;
-    }
-
-    // WebRTC làm mối (SDP/ICE một lượt, non-trickle): sau khi bắt tay xong,
-    // frame + lệnh đi đường trực tiếp phone <-> PC qua datachannel, không qua
-    // tunnel/worker — latency bằng mạng thật giữa hai máy (cùng WiFi ~2-10ms).
-    if (req.method === "GET" && pathname === "/api/webrtc/ice") {
-      // Danh sách ICE server cho phone DỰNG offer (gọi trước khi bắt tay —
-      // có TURN Cloudflare khi chủ máy đã cấu hình key, không thì STUN thôi).
-      try {
-        const { webrtcIceServers } = await import("./webrtc.js");
-        const ice = await webrtcIceServers();
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ iceServers: ice }));
-      } catch (error) {
-        res.writeHead(502, { "content-type": "application/json" });
-        res.end(JSON.stringify({ code: "ice_error", message: String(error?.message ?? error) }));
-      }
-      return;
-    }
-
-    if (req.method === "POST" && pathname === "/api/webrtc/signal") {
-      if (!webrtc) {
-        const { WebRtcService } = await import("./webrtc.js");
-        webrtc = new WebRtcService(screen);
-      }
-      try {
-        const body = await readJsonBody(req, 200_000);
-        const result = await webrtc.handleSignal(body);
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(result));
-      } catch (error) {
-        res.writeHead(502, { "content-type": "application/json" });
-        res.end(JSON.stringify({ code: "webrtc_error", message: String(error?.message ?? error) }));
-      }
-      return;
-    }
-
     if (pathname.startsWith("/api/ow/")) {
       if (!state.server || !state.tokenActive) {
         res.writeHead(503, { "content-type": "application/json" });
@@ -617,6 +506,7 @@ server.headersTimeout = 60_000;
  * trên máy, KHÔNG chụp màn hình/chia sẻ vì có quyền vĩnh viễn.
  */
 function printPairing(base, note, { withMaster = false } = {}) {
+  if (!process.stdout.isTTY) return;
   printingPairing = true;
   const code = pairing.ensureCode();
   printingPairing = false;
@@ -695,26 +585,23 @@ const onListening = () => {
     });
   }
 
-  console.log(`Pairing token dự phòng (chỉ dùng tại máy, không đưa cho ai): ${config.mobileToken}`);
   console.log(`Bridge data dir: ${bridgeDataDir()}`);
 
   // OTA: máy bạn bè tự nhận bản bridge mới (16/09/2026). Check sau 30s (tunnel
   // kịp "up") rồi mỗi 6h. Gate an toàn bên trong update.js: tunnel ổn, không
-  // ai đang xem, cài qua stage + watchdog rollback — một bản vỡ không bao giờ
-  // làm chết máy. Máy dev (có .git) mặc định tắt.
+  // vừa khởi động, cài qua stage + watchdog rollback. Mặc định bật mọi máy.
   startUpdater({
     config,
     getTunnelState: () => tunnelGetState(),
-    getViewerCount: () => screen.viewers.size,
   });
 };
 
 // OTA respawn: bridge cũ nhường cổng chậm hơn node mới boot (timer 500ms vs ~400ms)
 // → EADDRINUSE làm bridge mới chết → watchdog tưởng "bản vỡ" rollback oan. 8788 chỉ
 // dành riêng bridge, nhả trong <1s nên retry là đủ, không cần chết.
+let attempt = 0;
 server.on("error", (err) => {
   if (err.code !== "EADDRINUSE") throw err;
-  let attempt = 0;
   const retry = () => {
     attempt += 1;
     if (attempt > 10) {

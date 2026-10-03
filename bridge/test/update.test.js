@@ -1,6 +1,12 @@
 import { test } from "node:test";
+import { once } from "node:events";
+import { watchdogPaths } from "../scripts/ota-watchdog.mjs";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import fs, { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { pathToFileURL } from "node:url";
+import { createServer } from "node:http";
+import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -27,7 +33,6 @@ test("shouldUpdateNow: đủ mọi cửa an toàn mới cho cập nhật", () =>
     remote: { version: "2026.09.16.0" },
     current: "2026.09.15.1",
     tunnel: { phase: "up", url: "https://x.trycloudflare.com" },
-    viewerCount: 0,
     uptimeMs: 10 * 60 * 1000,
   };
   assert.deepEqual(shouldUpdateNow(base), { ok: true });
@@ -47,9 +52,6 @@ test("shouldUpdateNow: đủ mọi cửa an toàn mới cho cập nhật", () =>
   // Tunnel chưa lên / đang backoff
   assert.equal(shouldUpdateNow({ ...base, tunnel: { phase: "starting", url: "" } }).ok, false);
   assert.equal(shouldUpdateNow({ ...base, tunnel: { phase: "backoff", url: "" } }).ok, false);
-
-  // Có người đang xem màn hình — không được đá giữa chừng
-  assert.equal(shouldUpdateNow({ ...base, viewerCount: 1 }).ok, false);
 
   // Bridge vừa dậy chưa đủ 5 phút — không restart sớm (tránh 429)
   assert.equal(shouldUpdateNow({ ...base, uptimeMs: 1000 }).ok, false);
@@ -163,6 +165,137 @@ test("restoreBackup: bản mới vỡ → trả về đầy đủ bản cũ (src
     assert.equal(state.phase, "rollback");
     assert.equal(state.failedVersion, "2026.09.16.0");
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("partial backup failure restores moved src and leaves scripts intact", () => {
+  const root = fakeBridgeRoot();
+  const rename = fs.renameSync;
+  try {
+    fs.renameSync = (from, to) => {
+      if (from === join(root, "scripts")) throw new Error("injected scripts lock");
+      return rename(from, to);
+    };
+    syncBuiltinESMExports();
+    assert.throws(() => installRelease({ version: "2.0", files: {
+      "src/index.js": Buffer.from("new").toString("base64"),
+      "scripts/ota-watchdog.mjs": Buffer.from("new watchdog").toString("base64"),
+    } }, { bridgeRoot: root }), /injected scripts lock/);
+    assert.equal(readFileSync(join(root, "src/index.js"), "utf8"), 'console.log("old")');
+    assert.equal(readFileSync(join(root, "scripts/ota-watchdog.mjs"), "utf8"), 'console.log("wd-old")');
+    assert.equal(readFileSync(join(root, "VERSION"), "utf8"), "2026.09.15.1");
+  } finally {
+    fs.renameSync = rename;
+    syncBuiltinESMExports();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("state write failure prevents all live-tree and previous-backup changes", () => {
+  const root = fakeBridgeRoot();
+  try {
+    writeFileSync(join(root, ".ota"), "blocked");
+    mkdirSync(join(root, ".ota-backup"));
+    writeFileSync(join(root, ".ota-backup/keep"), "previous");
+    assert.throws(() => installRelease({ version: "2.0", files: {
+      "src/index.js": Buffer.from("new").toString("base64"),
+    } }, { bridgeRoot: root }));
+    assert.equal(readFileSync(join(root, "src/index.js"), "utf8"), 'console.log("old")');
+    assert.equal(readFileSync(join(root, ".ota-backup/keep"), "utf8"), "previous");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("empty backup is not legacy src; omitted scripts survive install and rollback", () => {
+  const root = fakeBridgeRoot();
+  try {
+    mkdirSync(join(root, ".ota-backup"));
+    assert.equal(restoreBackup(root), false);
+    assert.ok(existsSync(join(root, "src/index.js")));
+    installRelease({ version: "2.0", files: {
+      "src/index.js": Buffer.from("new").toString("base64"),
+      "VERSION": Buffer.from("stale").toString("base64"),
+    } }, { bridgeRoot: root });
+    assert.equal(readFileSync(join(root, "VERSION"), "utf8"), "2.0");
+    assert.equal(readFileSync(join(root, ".ota/ota-watchdog.mjs"), "utf8"), 'console.log("wd-old")');
+    assert.equal(restoreBackup(root), true);
+    assert.equal(readFileSync(join(root, "scripts/ota-watchdog.mjs"), "utf8"), 'console.log("wd-old")');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("watchdog logs use data directory with old-launcher fallback", () => {
+  assert.equal(watchdogPaths(join("root", ".ota", "state.json"), "data").output, join("data", "ota.log"));
+  assert.equal(watchdogPaths(join("root", ".ota", "state.json")).log, join("root", ".ota", "ota-watchdog.log"));
+});
+
+
+test("OTA downloads after three failures, installs and respawns the new version", { timeout: 20000 }, async () => {
+  const root = fakeBridgeRoot();
+  const data = join(root, "data");
+  mkdirSync(data);
+  writeFileSync(join(root, "package.json"), '{"type":"module"}');
+  const updater = readFileSync(new URL("../src/update.js", import.meta.url), "utf8");
+  const watchdog = readFileSync(new URL("../scripts/ota-watchdog.mjs", import.meta.url), "utf8");
+  const config = `export function bridgeDataDir() { return ${JSON.stringify(data)}; }`;
+  writeFileSync(join(root, "src/update.js"), updater);
+  writeFileSync(join(root, "src/config.js"), config);
+  writeFileSync(join(root, "scripts/ota-watchdog.mjs"), watchdog);
+  const marker = join(root, "restarted.json");
+  const entry = `import { markBootOk, currentVersion } from './update.js';
+import { writeFileSync } from 'node:fs';
+markBootOk();
+writeFileSync(${JSON.stringify(marker)}, JSON.stringify({version:currentVersion(), pid:process.pid}));`;
+  const files = Object.fromEntries(Object.entries({
+    "src/index.js": entry, "src/update.js": updater, "src/config.js": config,
+    "scripts/ota-watchdog.mjs": watchdog + "\n// next release watchdog\n",
+    "VERSION": "wrong stamp",
+  }).map(([name, text]) => [name, Buffer.from(text).toString("base64")]));
+  const payload = JSON.stringify({ version: "2099.1", files });
+  let downloads = 0;
+  const server = createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/bridge-release") {
+      res.end(JSON.stringify({ version: "2099.1", sha256: sha256Hex(payload) }));
+    } else if (req.url === "/bridge-release/files") {
+      downloads += 1;
+      if (downloads <= 3) { res.statusCode = 503; res.end('{}'); }
+      else res.end(payload);
+    } else { res.statusCode = 404; res.end('{}'); }
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const base = `http://127.0.0.1:${server.address().port}`;
+  // Accelerate only the test launcher's clocks; fetch, install, watchdog and respawn are real.
+  const launcher = `const realTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...args) => realTimeout(fn, [30000,1800000,21600000].includes(ms) ? 10 : ms, ...args);
+process.uptime = () => 600;
+const { startUpdater } = await import('./src/update.js');
+startUpdater({config:{lookupUrl:${JSON.stringify(base)}}, getTunnelState:()=>({phase:'up',url:'test'})});`;
+  writeFileSync(join(root, "launch.mjs"), launcher);
+  let output = "";
+  const child = spawn(process.execPath, [join(root, "launch.mjs")], {
+    env: { ...process.env, OPENWORK_BRIDGE_OTA: "1", OPENWORK_BRIDGE_DIR: data },
+    stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+  });
+  const exited = once(child, "exit");
+  child.stdout.on("data", (chunk) => { output += chunk; });
+  child.stderr.on("data", (chunk) => { output += chunk; });
+  try {
+    const deadline = Date.now() + 12000;
+    while (!existsSync(marker) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    assert.ok(existsSync(marker), output);
+    assert.equal(downloads, 4);
+    const restarted = JSON.parse(readFileSync(marker, "utf8"));
+    assert.equal(restarted.version, "2099.1");
+    assert.notEqual(restarted.pid, child.pid);
+    assert.equal(JSON.parse(readFileSync(join(root, ".ota/state.json"), "utf8")).phase, "done");
+    assert.equal(readFileSync(join(root, ".ota/ota-watchdog.mjs"), "utf8"), watchdog);
+    assert.ok(existsSync(join(data, "ota.log")));
+    assert.deepEqual(await exited, [0, null]);
+    await new Promise((r) => setTimeout(r, 1500));
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) { child.kill(); await exited; }
+    await new Promise((r) => server.close(r));
     rmSync(root, { recursive: true, force: true });
   }
 });

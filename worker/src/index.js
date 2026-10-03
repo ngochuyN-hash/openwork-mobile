@@ -293,17 +293,22 @@ export default {
         (url.pathname === "/api/pair" && request.method === "POST") ||
         (url.pathname === "/api/state" && request.method === "GET");
       if (!tenant && bootstrap) {
+        const body = request.method === "POST" ? await readJson(request) : null;
+        if (request.method === "POST" && (!body || typeof body !== "object" || Array.isArray(body))) {
+          return json({ code: "invalid_body", message: "Body JSON không hợp lệ" }, 400);
+        }
         const slots = await env.OWM_STATE.list({ prefix: "machine:" });
         let wrongCode = null;
         let noneOnline = null;
         for (const key of slots.keys.slice(0, 10)) {
-          const res = await relay(env, key.name, request, url);
+          const res = await relay(env, key.name, request, url, body);
           if (res.ok) return res;
           if (res.status === 401) wrongCode = res;
           else noneOnline = res;
         }
         if (wrongCode) return wrongCode;
         if (noneOnline) return noneOnline;
+        return relay(env, MAIN_KEY, request, url, body);
       }
       return relay(env, tenant ? `machine:${tenant}` : MAIN_KEY, request, url);
     }

@@ -1,140 +1,131 @@
-// OTA watchdog (16/09/2026) — tiến trình ĐỘC LẬP spawn bởi update.js trước khi
-// bridge tự respawn. Nó theo dõi pid của bridge CŨ và file state:
-//   - pid cũ chết = bridge cũ đã nhường đời
-//   - chờ tới WATCHDOG_DEADLINE_MS: bridge mới ghi phase "done" (qua markBootOk
-//     sau khi listen OK) → watchdog tự thoát, mọi thứ ổn
-//   - quá deadline mà state vẫn "applying" = bản mới vỡ/không boot được →
-//     tự rollback: xóa src mới, trả .ota-backup về src, respawn bridge cũ
-// Spawn detached + kế thừa token elevated của cha nên quyền ghi file/restart
-// không bao giờ thiếu — đây là lưới an toàn cuối: update vỡ không bao giờ
-// làm chết máy vĩnh viễn.
-//
-// ARGV: <pidCu> <stateFile> <bridgeRoot> <entryScript>
-import { copyFileSync, existsSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+// Standalone OTA watchdog. Copied into .ota before scripts/ is replaced.
+// ARGV: <oldPid> <stateFile> <bridgeRoot> <entryScript> [dataDir]
+import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
-const [pidOld, stateFile, bridgeRoot, entryScript] = process.argv.slice(2);
-const DEADLINE_MS = 90_000;
-const POLL_MS = 1000;
-
-function log(msg) {
+export function readStateFile(file) {
   try {
-    writeFileSync(join(stateFile, "..", "ota-watchdog.log"), `${new Date().toISOString()} ${msg}\n`, { flag: "a" });
-  } catch {}
-}
-
-function readState() {
-  try {
-    const s = JSON.parse(readFileSync(stateFile, "utf8"));
+    const s = JSON.parse(readFileSync(file, "utf8"));
     return s && typeof s === "object" ? s : null;
   } catch {
     return null;
   }
 }
 
-function oldPidAlive() {
+// A failed write must stop the transaction, never leave a truncated journal.
+export function writeStateFile(file, state) {
+  mkdirSync(dirname(file), { recursive: true });
+  const temporary = `${file}.tmp`;
+  let fd;
   try {
-    process.kill(Number(pidOld), 0);
-    return true;
-  } catch {
-    return false; // EPERM cũng coi là sống (cùng quyền nên khó xảy ra)
+    fd = openSync(temporary, "w");
+    writeFileSync(fd, JSON.stringify(state) + "\n", "utf8");
+    fsyncSync(fd);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
+  renameSync(temporary, file);
 }
 
-function respawnBridge() {
-  try {
-    // Detached + stdio ra file riêng — không nối vào console đã chết.
-    const out = join(stateFile, "..", "ota.log");
-    const fd = openSync(out, "a");
-    const child = spawn(process.execPath, [entryScript], { detached: true, stdio: ["ignore", fd, fd], windowsHide: true });
-    child.unref();
-  } catch (e) {
-    log(`respawn lỗi: ${e.message}`);
-  }
+function isFile(file) {
+  try { return statSync(file).isFile(); } catch { return false; }
 }
 
-(async () => {
-  // Chờ pid cũ thực sự chết (bridge cũ exit ngay sau khi spawn mình).
+/** Restore each saved component independently; a partial bundle is NOT flat src. */
+export function rollbackBackup(root, stateFile = join(root, ".ota", "state.json")) {
+  const backup = join(root, ".ota-backup");
+  const state = readStateFile(stateFile) ?? {};
+  const transaction = state.backupFormat === "bundle-v1";
+  if (transaction && !state.backupReady) return false;
+  const saved = ["src", "scripts", "VERSION"].filter((name) => existsSync(join(backup, name)));
+  const legacy = !transaction && saved.length === 0 && isFile(join(backup, "index.js"));
+  if (!saved.length && !legacy) return false;
+
+  // Persist recovery intent before deleting or moving any live component.
+  const recovering = { ...state, phase: "rolling_back", failedVersion: state.to ?? null };
+  writeStateFile(stateFile, recovering);
+  if (legacy) {
+    rmSync(join(root, "src"), { recursive: true, force: true });
+    renameSync(backup, join(root, "src"));
+    // Older releases did not save VERSION; use their journal when available.
+    if (state.from) writeFileSync(join(root, "VERSION"), String(state.from), "utf8");
+  } else {
+    for (const name of ["src", "scripts"]) {
+      const source = join(backup, name);
+      const target = join(root, name);
+      if (existsSync(source)) {
+        rmSync(target, { recursive: true, force: true });
+        renameSync(source, target);
+      } else if (transaction && state.original?.[name] === false && (name === "src" || state.replaceScripts)) {
+        rmSync(target, { recursive: true, force: true });
+      }
+    }
+    if (existsSync(join(backup, "VERSION"))) {
+      copyFileSync(join(backup, "VERSION"), join(root, "VERSION"));
+    } else if (transaction && state.original?.VERSION === false) {
+      rmSync(join(root, "VERSION"), { force: true });
+    }
+  }
+  writeStateFile(stateFile, { ...recovering, phase: "rollback", rolledBackAt: Date.now() });
+  rmSync(backup, { recursive: true, force: true });
+  return true;
+}
+
+export function watchdogPaths(stateFile, dataDir) {
+  const directory = dataDir || dirname(stateFile); // four-argument old launcher
+  return { directory, log: join(directory, "ota-watchdog.log"), output: join(directory, "ota.log") };
+}
+
+export async function runWatchdog([pidOld, stateFile, bridgeRoot, entryScript, dataDir]) {
+  const paths = watchdogPaths(stateFile, dataDir);
+  const log = (msg) => {
+    try {
+      mkdirSync(paths.directory, { recursive: true });
+      writeFileSync(paths.log, `${new Date().toISOString()} ${msg}\n`, { flag: "a" });
+    } catch {}
+  };
+  const oldPidAlive = () => {
+    try { process.kill(Number(pidOld), 0); return true; }
+    catch (e) { return e.code === "EPERM"; }
+  };
   const t0 = Date.now();
   while (oldPidAlive() && Date.now() - t0 < 15_000) {
     await new Promise((r) => setTimeout(r, 200));
   }
   if (oldPidAlive()) {
-    log("pid cũ vẫn sống sau 15s — có gì đó lạ, thoát không đụng.");
-    process.exit(0);
+    log("pid cũ vẫn sống sau 15s — thoát không đụng.");
+    return;
   }
-
-  // Bridge mới (hoặc rollback) boot. Quan sát state tới deadline.
-  let saw = null;
-  const deadline = Date.now() + DEADLINE_MS;
+  const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
-    const s = readState();
-    if (!s) {
-      log("state biến mất — bỏ qua, không rollback.");
-      process.exit(0);
-    }
-    saw = s.phase;
-    if (s.phase === "done") {
-      log(`bridge mới (tới ${s.to}) xác nhận OK — kết thúc.`);
-      process.exit(0);
-    }
-    if (s.phase === "rollback" || s.phase === "failed") {
-      log(`state=${s.phase} — có tiến trình khác đã lo, thoát.`);
-      process.exit(0);
-    }
-    await new Promise((r) => setTimeout(r, POLL_MS));
+    const s = readStateFile(stateFile);
+    if (!s || ["done", "rollback", "failed"].includes(s.phase)) return;
+    await new Promise((r) => setTimeout(r, 1000));
   }
-
-  // Quá deadline mà vẫn "applying": bản mới không boot được → rollback.
+  const state = readStateFile(stateFile);
+  if (!["preparing", "applying", "rolling_back"].includes(state?.phase)) return;
   log("DEADLINE — bản mới không xác nhận, rollback về backup.");
-  const srcDir = join(bridgeRoot, "src");
-  const scriptsDir = join(bridgeRoot, "scripts");
-  const backupDir = join(bridgeRoot, ".ota-backup");
-  const backupSrc = join(backupDir, "src");
-  const state = readState() ?? {};
   try {
-    if (existsSync(backupSrc)) {
-      if (existsSync(srcDir)) rmSync(srcDir, { recursive: true, force: true });
-      renameSync(backupSrc, srcDir);
-      log("backup src đã trả về.");
-
-      const backupScripts = join(backupDir, "scripts");
-      if (existsSync(backupScripts)) {
-        if (existsSync(scriptsDir)) rmSync(scriptsDir, { recursive: true, force: true });
-        renameSync(backupScripts, scriptsDir);
-        log("backup scripts đã trả về.");
-      }
-
-      const backupVersion = join(backupDir, "VERSION");
-      if (existsSync(backupVersion)) {
-        copyFileSync(backupVersion, join(bridgeRoot, "VERSION"));
-        log("backup VERSION đã trả về.");
-      }
-
-      rmSync(backupDir, { recursive: true, force: true });
-    } else if (existsSync(backupDir)) {
-      // Tương thích ngược nếu .ota-backup là thư mục src cũ
-      if (existsSync(srcDir)) rmSync(srcDir, { recursive: true, force: true });
-      renameSync(backupDir, srcDir);
-      log("backup cũ (flat) đã trả về src.");
-    } else {
-      log("KHÔNG có backup — chỉ xóa src mới hỏng, bridge hết đường tự dậy.");
+    if (!rollbackBackup(bridgeRoot, stateFile)) {
+      log("Không có backup hợp lệ — giữ nguyên cây hiện tại, không respawn.");
+      return;
     }
-    writeFileSync(
-      stateFile,
-      JSON.stringify({
-        ...state,
-        phase: "rollback",
-        failedVersion: state.to ?? null,
-        rolledBackAt: Date.now(),
-      }) + "\n",
-      "utf8"
-    );
-    respawnBridge();
+    mkdirSync(paths.directory, { recursive: true });
+    const fd = openSync(paths.output, "a");
+    try {
+      const child = spawn(process.execPath, [entryScript], { detached: true, stdio: ["ignore", fd, fd], windowsHide: true });
+      child.on("error", (e) => log(`respawn lỗi: ${e.message}`));
+      child.unref();
+    } finally { closeSync(fd); }
     log("đã respawn bridge bản cũ.");
   } catch (e) {
     log(`rollback lỗi: ${e.message}`);
   }
-  setTimeout(() => process.exit(0), 2000);
-})();
+}
+
+// Importable for isolated tests and updater recovery; imports never start a process.
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  await runWatchdog(process.argv.slice(2));
+}

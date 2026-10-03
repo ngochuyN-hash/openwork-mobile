@@ -133,15 +133,6 @@ export function StopIcon({ size }) {
   );
 }
 
-export function ScreenIcon({ size }) {
-  return (
-    <Icon size={size ?? 22}>
-      <rect x="2" y="3" width="20" height="14" rx="2" />
-      <path d="M8 21h8m-4-4v4" />
-    </Icon>
-  );
-}
-
 export function PcsIcon({ size }) {
   // Nhiều máy xếp chồng (Lucide "server") — tab danh sách PC, phân biệt với
   // ScreenIcon (1 màn hình). Chấm vuông vẽ path h.01 như các icon khác.

@@ -1,20 +1,20 @@
-// OTA cập nhật bridge từ xa (16/09/2026) — máy bạn bè tự nhận bản bridge mới,
-// không cần ai đụng tay; máy dev (có .git) MẶC ĐỊNH TẮT để không ghi đè working
-// tree. Worker phục vụ 2 key KV tĩnh:
+// OTA is enabled by default on every installation; config/env can opt out.
+// Worker phục vụ 2 key KV tĩnh:
 //   `bridge-release:latest` = {version, sha256}   (manifest rẻ, bridge check định kỳ)
 //   `bridge-release:files`  = {version, files: {"src/index.js": "<base64>", ...}}
-// Chuỗi an toàn: so version → gate (tunnel ổn, không ai đang xem, không vừa
-// khởi động) → tải payload → verify sha256 → giải nén vào STAGE (cùng volume)
-// → verify cấu trúc → backup src → swap atomic → arm watchdog + respawn.
+// Chuỗi an toàn: so version → gate (tunnel ổn, không vừa khởi động) → tải
+// payload → verify sha256 → giải nén vào STAGE (cùng volume) → verify cấu
+// trúc → backup src → swap atomic → arm watchdog + respawn.
 // Watchdog đứng NGOÀI process: nếu bridge mới không xác nhận boot-ok trong
 // deadline thì tự trả về bản backup — một bản cập nhật vỡ không bao giờ
 // làm chết máy. Không thêm dependency nào (payload là base64 plain).
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bridgeDataDir } from "./config.js";
+import { readStateFile, writeStateFile, rollbackBackup } from "../scripts/ota-watchdog.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridge/src
 export const bridgeRoot = resolve(here, "..");
@@ -25,7 +25,7 @@ export const VERSION_FILE = join(bridgeRoot, "VERSION");
 export const WATCHDOG_SCRIPT = join(bridgeRoot, "scripts", "ota-watchdog.mjs");
 
 export const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // check định kỳ — không poll liên tục
-export const RETRY_SOON_MS = 30 * 60 * 1000; // gate tạm (tunnel/viewer/uptime) — thử lại sớm
+export const RETRY_SOON_MS = 30 * 60 * 1000; // gate tạm (tunnel/uptime) — thử lại sớm
 export const MIN_UPTIME_MS = 5 * 60 * 1000; // không restart ngay sau khi bridge vừa dậy (429)
 export const WATCHDOG_DEADLINE_MS = 90 * 1000; // bridge mới xác nhận boot trong bao lâu
 
@@ -53,7 +53,7 @@ export function sha256Hex(buf) {
   return createHash("sha256").update(buf).digest("hex");
 }
 
-export function shouldUpdateNow({ remote, current, tunnel, viewerCount, uptimeMs, failedVersion = null }) {
+export function shouldUpdateNow({ remote, current, tunnel, uptimeMs, failedVersion = null }) {
   if (!remote?.version || compareVersions(remote.version, current) <= 0) {
     return { ok: false, reason: "no_newer_version" };
   }
@@ -63,7 +63,6 @@ export function shouldUpdateNow({ remote, current, tunnel, viewerCount, uptimeMs
   if (!tunnel || tunnel.phase !== "up" || !tunnel.url) {
     return { ok: false, reason: "tunnel_not_ready" };
   }
-  if (viewerCount > 0) return { ok: false, reason: "viewers_active" };
   if (uptimeMs < MIN_UPTIME_MS) return { ok: false, reason: "recently_started" };
   return { ok: true };
 }
@@ -105,23 +104,15 @@ export function versionFileFor(root = bridgeRoot) {
 }
 
 function readState(root = bridgeRoot) {
-  const file = stateFileFor(root);
-  try {
-    const s = JSON.parse(readFileSync(file, "utf8"));
-    return s && typeof s === "object" ? s : null;
-  } catch {
-    return null;
-  }
+  return readStateFile(stateFileFor(root));
 }
 
 function writeState(s, root = bridgeRoot) {
-  const file = stateFileFor(root);
-  try {
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, JSON.stringify(s) + "\n", "utf8");
-  } catch (e) {
-    console.error("[ota] không ghi được state:", e.message);
-  }
+  writeStateFile(stateFileFor(root), s);
+}
+
+export function trustedWatchdogFor(root = bridgeRoot) {
+  return join(root, ".ota", "ota-watchdog.mjs");
 }
 
 /**
@@ -140,46 +131,50 @@ export function installRelease(payload, opts = {}) {
   const from = opts.from ?? currentVersion(root);
   const to = String(payload.version ?? from);
 
-  if (readState(root)?.phase === "applying") {
+  if (["preparing", "applying", "rolling_back"].includes(readState(root)?.phase)) {
     // Lần swap trước chưa xong mà có swap mới — đừng chồng, chờ watchdog lo.
     throw new Error("[ota] đang có update chưa xác nhận, bỏ qua");
   }
 
   extractPayload(payload, stageDir);
 
-  // Chuẩn bị backup trọn gói (src, scripts, VERSION)
-  rmSync(backupDir, { recursive: true, force: true });
-  mkdirSync(backupDir, { recursive: true });
-
-  if (existsSync(srcDir)) {
-    renameSync(srcDir, join(backupDir, "src"));
-  }
-  if (existsSync(scriptsDir)) {
-    renameSync(scriptsDir, join(backupDir, "scripts"));
-  }
-  const vFile = versionFileFor(root);
-  if (existsSync(vFile)) {
-    copyFileSync(vFile, join(backupDir, "VERSION"));
-  }
-
+  const replaceScripts = existsSync(stageScripts);
+  const state = {
+    phase: "preparing", from, to, pid: process.pid, at: Date.now(),
+    backupFormat: "bundle-v1", backupReady: false, replaceScripts,
+    original: Object.fromEntries(["src", "scripts", "VERSION"].map((name) => [name, existsSync(join(root, name))])),
+  };
+  // No live-tree or previous-backup mutations until this journal is persisted.
+  writeState(state, root);
+  let backupReady = false;
   try {
+    // Use the currently installed watchdog, never code supplied by this payload.
+    copyFileSync(join(scriptsDir, "ota-watchdog.mjs"), trustedWatchdogFor(root));
+    rmSync(backupDir, { recursive: true, force: true });
+    mkdirSync(backupDir, { recursive: true });
+    state.backupReady = true;
+    writeState(state, root);
+    backupReady = true;
+    // Save VERSION before any directory moves (copy failure leaves live files alone).
+    if (state.original.VERSION) copyFileSync(versionFileFor(root), join(backupDir, "VERSION"));
+    if (state.original.src) renameSync(srcDir, join(backupDir, "src"));
+    // Omitted scripts stay live and untouched, including throughout rollback.
+    if (state.original.scripts && replaceScripts) renameSync(scriptsDir, join(backupDir, "scripts"));
     renameSync(stageSrc, srcDir);
-    if (existsSync(stageScripts)) {
-      renameSync(stageScripts, scriptsDir);
-    } else if (existsSync(join(backupDir, "scripts"))) {
-      // Giữ scripts cũ nếu payload không có scripts
-      renameSync(join(backupDir, "scripts"), scriptsDir);
-    }
-    const vInStage = join(stageDir, "VERSION");
-    if (existsSync(vInStage)) {
-      writeFileSync(versionFileFor(root), readFileSync(vInStage));
-    }
+    if (replaceScripts) renameSync(stageScripts, scriptsDir);
+    // The verified manifest is authoritative, even when payload VERSION is absent/stale.
+    writeFileSync(versionFileFor(root), to, "utf8");
+    writeState({ ...state, phase: "applying" }, root);
   } catch (e) {
-    // Swap lỗi giữa chừng: trả nguyên bản cũ rồi ném.
-    restoreBackup(root);
+    try {
+      if (!backupReady || !restoreBackup(root)) {
+        writeState({ ...state, phase: "failed", failedVersion: to }, root);
+      }
+    } catch (recoveryError) {
+      throw new AggregateError([e, recoveryError], `[ota] cài lỗi: ${e.message}; rollback lỗi: ${recoveryError.message}`);
+    }
     throw e;
   }
-  writeState({ phase: "applying", from, to, pid: process.pid, at: Date.now() }, root);
   return to;
 }
 
@@ -192,7 +187,7 @@ export function markBootOk(root = bridgeRoot) {
   }
 }
 
-function respawnAndExit(log) {
+async function respawnAndExit(log) {
   const script = join(bridgeRoot, "src", "index.js");
   // stdout/stderr của đời mới đổ vào log riêng — không nối vào console cũ đã chết.
   const out = join(bridgeDataDir(), "ota.log");
@@ -208,9 +203,13 @@ function respawnAndExit(log) {
       stdio: ["ignore", fd, fd],
       windowsHide: true, // không mở cửa sổ console trên desktop người dùng
     });
+    await new Promise((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.once("error", reject);
+    });
     child.unref();
-  } catch (e) {
-    log(`[ota] respawn lỗi: ${e.message}`);
+  } finally {
+    if (fd !== 1) closeSync(fd);
   }
   // Cho log kịp in xong rồi mới nhường.
   setTimeout(() => process.exit(0), 500);
@@ -223,7 +222,7 @@ function respawnAndExit(log) {
  * trên máy repo không mất: bản cũ (kèm WIP) nằm nguyên trong .ota-backup/
  * cho tới lần swap kế — hồi lại bằng tay nếu cần.
  */
-export function startUpdater({ config, getTunnelState, getViewerCount, log = console.log }) {
+export function startUpdater({ config, getTunnelState, log = console.log }) {
   const enabled = process.env.OPENWORK_BRIDGE_OTA !== "0" && config.ota !== false;
   if (!enabled) {
     log("[ota] tắt (config.ota=false hoặc OPENWORK_BRIDGE_OTA=0).");
@@ -234,11 +233,10 @@ export function startUpdater({ config, getTunnelState, getViewerCount, log = con
     return;
   }
   const base = String(config.lookupUrl).replace(/\/+$/, "");
-  let timers = 0;
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let installing = false;
 
   const check = async () => {
-    if (timers > 2) return; // watchdog đang lo việc swap, ngừng vòng mới
+    if (installing) return;
     const current = currentVersion();
     let remote = null;
     try {
@@ -256,7 +254,6 @@ export function startUpdater({ config, getTunnelState, getViewerCount, log = con
       remote,
       current,
       tunnel: getTunnelState(),
-      viewerCount: getViewerCount(),
       uptimeMs: process.uptime() * 1000,
       failedVersion: state?.failedVersion ?? null,
     });
@@ -276,9 +273,7 @@ export function startUpdater({ config, getTunnelState, getViewerCount, log = con
       payloadText = await res.text();
     } catch (e) {
       log(`[ota] tải payload lỗi: ${e.message}`);
-      timers += 1;
-      setTimeout(check, RETRY_SOON_MS);
-      return;
+      return schedule(RETRY_SOON_MS);
     }
     if (sha256Hex(Buffer.from(payloadText)) !== remote.sha256) {
       log("[ota] sha256 KHÔNG khớp manifest — bỏ qua (nguồn lạ?).");
@@ -292,24 +287,34 @@ export function startUpdater({ config, getTunnelState, getViewerCount, log = con
       return schedule(CHECK_INTERVAL_MS);
     }
 
-    timers += 1; // chặn vòng mới trong lúc swap
+    installing = true;
     log(`[ota] cập nhật ${current} → ${remote.version}...`);
     try {
       const to = installRelease({ version: remote.version, files: payload.files ?? {} });
       log(`[ota] swap xong (${to}), khởi động watchdog + respawn.`);
       const watch = spawn(process.execPath, [
-        WATCHDOG_SCRIPT,
+        trustedWatchdogFor(),
         String(process.pid),
         STATE_FILE,
         bridgeRoot,
         join(bridgeRoot, "src", "index.js"),
+        bridgeDataDir(),
       ], { detached: true, stdio: "ignore", windowsHide: true });
+      await new Promise((resolve, reject) => {
+        watch.once("spawn", resolve);
+        watch.once("error", reject);
+      });
       watch.unref();
-      respawnAndExit(log);
+      await respawnAndExit(log);
     } catch (e) {
-      log(`[ota] cài thất bại (đã trả lại bản cũ): ${e.message}`);
-      timers -= 1;
-      setTimeout(check, RETRY_SOON_MS);
+      try {
+        if (readState()?.phase === "applying") restoreBackup();
+      } catch (recoveryError) {
+        log(`[ota] rollback cần can thiệp: ${recoveryError.message}`);
+      }
+      log(`[ota] cài thất bại: ${e.message}`);
+      installing = false;
+      schedule(RETRY_SOON_MS);
     }
   };
 
@@ -320,40 +325,5 @@ export function startUpdater({ config, getTunnelState, getViewerCount, log = con
 
 /** Phục hồi backup (dùng cho test / lệnh tay khi watchdog chết). */
 export function restoreBackup(root = bridgeRoot) {
-  const srcDir = join(root, "src");
-  const scriptsDir = join(root, "scripts");
-  const backupDir = backupDirFor(root);
-  const backupSrc = join(backupDir, "src");
-  const backupScripts = join(backupDir, "scripts");
-  const backupVersion = join(backupDir, "VERSION");
-
-  if (!existsSync(backupSrc) && !existsSync(backupDir)) return false;
-
-  if (existsSync(backupSrc)) {
-    rmSync(srcDir, { recursive: true, force: true });
-    renameSync(backupSrc, srcDir);
-
-    if (existsSync(backupScripts)) {
-      rmSync(scriptsDir, { recursive: true, force: true });
-      renameSync(backupScripts, scriptsDir);
-    }
-
-    if (existsSync(backupVersion)) {
-      copyFileSync(backupVersion, versionFileFor(root));
-    }
-  } else if (existsSync(backupDir)) {
-    // Tương thích ngược nếu .ota-backup là thư mục src cũ
-    rmSync(srcDir, { recursive: true, force: true });
-    renameSync(backupDir, srcDir);
-  }
-
-  const oldState = readState(root) ?? {};
-  writeState({
-    ...oldState,
-    phase: "rollback",
-    failedVersion: oldState.to ?? null,
-    rolledBackAt: Date.now(),
-  }, root);
-  rmSync(backupDir, { recursive: true, force: true });
-  return true;
+  return rollbackBackup(root, stateFileFor(root));
 }
