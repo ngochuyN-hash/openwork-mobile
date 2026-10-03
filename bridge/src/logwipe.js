@@ -1,5 +1,5 @@
 // Dọn log bridge (owner yêu cầu 13/09: log không giữ lại quá 1 ngày, tắt app /
-// dừng bridge là xóa sạch). Log CLI, task scheduler, watchdog và OTA nằm trong
+// dừng bridge là xóa sạch). Log CLI, task scheduler và watchdog nằm trong
 // data dir. Mọi bên ghi đều mở kiểu append ("a" / ">>") nên TRUNCATE an toàn
 // khi bridge còn chạy: handle cũ tự ghi tiếp ở EOF mới. Xóa hẳn file chỉ làm
 // được sau khi tiến trình ghi đã chết (CLI stop / nút Dừng của GUI).
@@ -7,7 +7,7 @@ import { statSync, truncateSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { bridgeDataDir } from "./config.js";
 
-export const LOG_NAMES = ["bridge.log", "bridge-task.log", "watchdog.log", "ota.log", "ota-watchdog.log"];
+export const LOG_NAMES = ["bridge.log", "bridge-task.log", "watchdog.log"];
 
 // Xóa sạch nội dung (truncate về 0 byte, giữ nguyên file).
 export function wipeLogs(dir = bridgeDataDir()) {

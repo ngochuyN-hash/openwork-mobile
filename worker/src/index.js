@@ -70,21 +70,26 @@ async function rateLimited(request, kind, limit) {
 /** Ghi slot máy từ /__register: URL tunnel mới, hoặc "máy sống, tunnel đang chết". */
 async function storeRegister(env, slotKey, body) {
   const url = String(body?.url ?? "");
-  if (url && TUNNEL_RE.test(url)) {
-    await env.OWM_STATE.put(slotKey, JSON.stringify({ url, updatedAt: Date.now() }));
-    return json({ ok: true });
+  try {
+    if (url && TUNNEL_RE.test(url)) {
+      await env.OWM_STATE.put(slotKey, JSON.stringify({ url, updatedAt: Date.now() }));
+      return json({ ok: true });
+    }
+    // Heartbeat "hiện diện không URL" từ bridge khi đang chờ Cloudflare hết 429:
+    // slot còn tươi (updatedAt mới) nên worker biết máy SỐNG, chỉ đường hầm chết
+    // — điện thoại nhận lời nhắn rõ thay vì 503 offline/530 mơ hồ.
+    if (body?.tunnelDown === true) {
+      await env.OWM_STATE.put(
+        slotKey,
+        JSON.stringify({ url: "", tunnelDown: true, retryAt: Number(body.retryAt) || 0, updatedAt: Date.now() })
+      );
+      return json({ ok: true });
+    }
+    return json({ error: "invalid_url" }, 400);
+  } catch (error) {
+    console.error(`[worker] register: KV write failed for ${slotKey}:`, error?.stack ?? String(error));
+    return json({ error: "kv_write_failed" }, 503);
   }
-  // Heartbeat "hiện diện không URL" từ bridge khi đang chờ Cloudflare hết 429:
-  // slot còn tươi (updatedAt mới) nên worker biết máy SỐNG, chỉ đường hầm chết
-  // — điện thoại nhận lời nhắn rõ thay vì 503 offline/530 mơ hồ.
-  if (body?.tunnelDown === true) {
-    await env.OWM_STATE.put(
-      slotKey,
-      JSON.stringify({ url: "", tunnelDown: true, retryAt: Number(body.retryAt) || 0, updatedAt: Date.now() })
-    );
-    return json({ ok: true });
-  }
-  return json({ error: "invalid_url" }, 400);
 }
 
 /** Relay request tới slot `slotKey`; bodyJson khác null thì gửi lại body đó. */
@@ -92,7 +97,8 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
   let machine = null;
   try {
     machine = JSON.parse((await env.OWM_STATE.get(slotKey)) ?? "null");
-  } catch {
+  } catch (error) {
+    console.error(`[worker] relay: KV read failed for ${slotKey}:`, error?.stack ?? String(error));
     machine = null;
   }
   if (!machine) {
@@ -166,7 +172,8 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
     const result = new Response(body, { status: response.status, statusText: response.statusText, headers: out });
     result.headers.set("cache-control", "no-store");
     return result;
-  } catch {
+  } catch (error) {
+    console.error(`[worker] relay: fetch ${machine.url}${url.pathname} failed:`, error?.stack ?? String(error));
     return json({ code: "bridge_unreachable", message: "Không nối được tunnel của bridge (vừa đổi địa chỉ? thử lại vài giây)." }, 502);
   }
 }
@@ -196,140 +203,137 @@ function withSecurityHeaders(page) {
   return new Response(page.body, { status: page.status, statusText: page.statusText, headers });
 }
 
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
+async function handle(request, env) {
+  const url = new URL(request.url);
 
-    // 1. Bridge đăng ký địa chỉ tunnel hiện tại của phòng mình
-    if (url.pathname === "/__register" && request.method === "POST") {
-      const body = await readJson(request);
-      const tenant = String(body?.tenant ?? "").trim().toLowerCase();
-      if (tenant) {
-        if (!TENANT_RE.test(tenant)) return json({ error: "invalid_tenant" }, 400);
-        const record = await env.OWM_STATE.get(`tenant:${tenant}`, "json").catch(() => null);
-        if (!record?.secret || !(await sameSecret(request.headers.get("x-owm-secret"), record.secret))) {
-          return json({ error: "unauthorized" }, 401);
-        }
-        return storeRegister(env, `machine:${tenant}`, body);
-      }
-      // Luồng cũ của chủ worker (không tenant): secret môi trường -> machine:main
-      if (!env.BRIDGE_SECRET || !(await sameSecret(request.headers.get("x-owm-secret"), env.BRIDGE_SECRET))) {
+  // 1. Bridge đăng ký địa chỉ tunnel hiện tại của phòng mình
+  if (url.pathname === "/__register" && request.method === "POST") {
+    const body = await readJson(request);
+    const tenant = String(body?.tenant ?? "").trim().toLowerCase();
+    if (tenant) {
+      if (!TENANT_RE.test(tenant)) return json({ error: "invalid_tenant" }, 400);
+      const record = await env.OWM_STATE.get(`tenant:${tenant}`, "json").catch(() => null);
+      if (!record?.secret || !(await sameSecret(request.headers.get("x-owm-secret"), record.secret))) {
         return json({ error: "unauthorized" }, 401);
       }
-      return storeRegister(env, MAIN_KEY, body);
+      return storeRegister(env, `machine:${tenant}`, body);
+    }
+    // Luồng cũ của chủ worker (không tenant): secret môi trường -> machine:main
+    if (!env.BRIDGE_SECRET || !(await sameSecret(request.headers.get("x-owm-secret"), env.BRIDGE_SECRET))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    return storeRegister(env, MAIN_KEY, body);
+  }
+
+  // 2. /api/* → relay tới tunnel hiện tại của phòng
+  if (url.pathname.startsWith("/api/")) {
+    // Đăng nhập web: phòng nằm trong body.user (web chưa có phòng để gửi header).
+    // Worker tự so secret TRƯỚC khi relay: phòng lạ và sai mật khẩu cùng một câu
+    // 401 — người lạ không dò ra được phòng nào tồn tại (bridge vẫn so lại lần 2).
+    if (url.pathname === "/api/pair/tenant" && request.method === "POST") {
+      if (await rateLimited(request, "pair-tenant", 10)) {
+        return json({ code: "rate_limited", message: "Đăng nhập quá nhiều lần — đợi khoảng 1 phút rồi thử lại." }, 429);
+      }
+      const body = await readJson(request);
+      const tenant = String(body?.user ?? "").trim().toLowerCase();
+      if (!TENANT_RE.test(tenant)) {
+        return json({ code: "invalid_credentials", message: "Sai tên đăng nhập hoặc mật khẩu." }, 401);
+      }
+      const record = await env.OWM_STATE.get(`tenant:${tenant}`, "json").catch(() => null);
+      if (!record?.secret || !(await sameSecret(String(body?.secret ?? ""), record.secret))) {
+        return json({ code: "invalid_credentials", message: "Sai tên đăng nhập hoặc mật khẩu." }, 401);
+      }
+      return relay(env, `machine:${tenant}`, request, url, body);
     }
 
-    // 2. /api/* → relay tới tunnel hiện tại của phòng
-    if (url.pathname.startsWith("/api/")) {
-      // Đăng nhập web: phòng nằm trong body.user (web chưa có phòng để gửi header).
-      // Worker tự so secret TRƯỚC khi relay: phòng lạ và sai mật khẩu cùng một câu
-      // 401 — người lạ không dò ra được phòng nào tồn tại (bridge vẫn so lại lần 2).
-      if (url.pathname === "/api/pair/tenant" && request.method === "POST") {
-        if (await rateLimited(request, "pair-tenant", 10)) {
-          return json({ code: "rate_limited", message: "Đăng nhập quá nhiều lần — đợi khoảng 1 phút rồi thử lại." }, 429);
-        }
-        const body = await readJson(request);
-        const tenant = String(body?.user ?? "").trim().toLowerCase();
-        if (!TENANT_RE.test(tenant)) {
-          return json({ code: "invalid_credentials", message: "Sai tên đăng nhập hoặc mật khẩu." }, 401);
-        }
-        const record = await env.OWM_STATE.get(`tenant:${tenant}`, "json").catch(() => null);
-        if (!record?.secret || !(await sameSecret(String(body?.secret ?? ""), record.secret))) {
-          return json({ code: "invalid_credentials", message: "Sai tên đăng nhập hoặc mật khẩu." }, 401);
-        }
-        return relay(env, `machine:${tenant}`, request, url, body);
+    // Tự tạo phòng (self-serve): người cài bridge gõ tên phòng + mật khẩu của
+    // chính mình là có phòng vĩnh viễn trên KV — không cần chủ worker cấp link
+    // mời. Phòng đã tồn tại + ĐÚNG mật khẩu = vào lại bình thường (cài lại máy
+    // lần nào cũng gõ lại y như cũ là xong); sai mật khẩu = 1 câu 401 chung.
+    // "main" bị cấm — đó là slot machine:main của chủ worker, nếu cho tạo
+    // tenant:main thì bridge lạ đăng ký đè luôn địa chỉ máy nhà. Trần 50 phòng
+    // + rate-limit chặn ngập KV nếu URL worker bị lộ.
+    if (url.pathname === "/api/tenant/create" && request.method === "POST") {
+      if (await rateLimited(request, "create-room", 5)) {
+        return json({ code: "rate_limited", message: "Tạo phòng quá nhiều lần — đợi khoảng 1 phút rồi thử lại." }, 429);
       }
-
-      // Tự tạo phòng (self-serve): người cài bridge gõ tên phòng + mật khẩu của
-      // chính mình là có phòng vĩnh viễn trên KV — không cần chủ worker cấp link
-      // mời. Phòng đã tồn tại + ĐÚNG mật khẩu = vào lại bình thường (cài lại máy
-      // lần nào cũng gõ lại y như cũ là xong); sai mật khẩu = 1 câu 401 chung.
-      // "main" bị cấm — đó là slot machine:main của chủ worker, nếu cho tạo
-      // tenant:main thì bridge lạ đăng ký đè luôn địa chỉ máy nhà. Trần 50 phòng
-      // + rate-limit chặn ngập KV nếu URL worker bị lộ.
-      if (url.pathname === "/api/tenant/create" && request.method === "POST") {
-        if (await rateLimited(request, "create-room", 5)) {
-          return json({ code: "rate_limited", message: "Tạo phòng quá nhiều lần — đợi khoảng 1 phút rồi thử lại." }, 429);
-        }
-        const body = await readJson(request);
-        const user = String(body?.user ?? "").trim().toLowerCase();
-        const secret = String(body?.secret ?? "");
-        if (!TENANT_RE.test(user) || ["main", "admin", "root", "api", "www"].includes(user)) {
-          return json({ code: "invalid_user", message: "Tên phòng chỉ gồm 2-32 ký tự a-z, 0-9, gạch ngang." }, 400);
-        }
-        if (secret.length < 8 || secret.length > 128 || /[\s"':&]/.test(secret)) {
-          return json({ code: "invalid_secret", message: "Mật khẩu cần 8-128 ký tự, không chứa dấu cách, nháy, ':' hoặc '&'." }, 400);
-        }
-        let name = String(body?.name ?? "").replace(/[\r\n"']/g, "").trim().slice(0, 60);
-        if (!name) name = user;
-        const existing = await env.OWM_STATE.get(`tenant:${user}`, "json").catch(() => null);
-        if (existing) {
-          if (existing.secret && (await sameSecret(secret, existing.secret))) {
-            return json({ ok: true, existed: true, user, name: existing.name || name });
-          }
-          return json({ code: "taken", message: "Tên phòng này đã có người dùng và mật khẩu không khớp." }, 401);
-        }
-        const rooms = await env.OWM_STATE.list({ prefix: "tenant:" });
-        if (rooms.keys.length >= 50) {
-          return json({ code: "full", message: "Hết chỗ cho phòng mới — liên hệ chủ worker." }, 403);
-        }
-        await env.OWM_STATE.put(`tenant:${user}`, JSON.stringify({ secret, name, createdAt: Date.now() }));
-        return json({ ok: true, created: true, user, name });
+      const body = await readJson(request);
+      const user = String(body?.user ?? "").trim().toLowerCase();
+      const secret = String(body?.secret ?? "");
+      if (!TENANT_RE.test(user) || ["main", "admin", "root", "api", "www"].includes(user)) {
+        return json({ code: "invalid_user", message: "Tên phòng chỉ gồm 2-32 ký tự a-z, 0-9, gạch ngang." }, 400);
       }
-
-      const tenant = (request.headers.get("x-owm-tenant") || url.searchParams.get("_m") || "")
-        .trim()
-        .toLowerCase();
-      if (tenant && !TENANT_RE.test(tenant)) {
-        return json({ code: "bridge_offline", message: "Mã máy (phòng) không hợp lệ." }, 503);
+      if (secret.length < 8 || secret.length > 128 || /[\s"':&]/.test(secret)) {
+        return json({ code: "invalid_secret", message: "Mật khẩu cần 8-128 ký tự, không chứa dấu cách, nháy, ':' hoặc '&'." }, 400);
       }
-      // Gõ mã ghép tay hay dán khóa trần (owd_/owt_ không kèm phòng) thì web
-      // chưa biết phòng nào (chỉ link QR/master mới mang &m=), mà machine:main
-      // đã không còn. Dạo qua các phòng còn đăng ký máy, phòng nào nhận mã/khóa
-      // thì lấy đáp án của phòng đó — thường chỉ có đúng 1 máy live. Sai ở mọi
-      // phòng vẫn về 1 câu 401 của bridge như cũ. /api/state trả edge.tenant
-      // nên web đọc luôn phòng từ thân phản hồi.
-      const bootstrap =
-        (url.pathname === "/api/pair" && request.method === "POST") ||
-        (url.pathname === "/api/state" && request.method === "GET");
-      if (!tenant && bootstrap) {
-        const body = request.method === "POST" ? await readJson(request) : null;
-        if (request.method === "POST" && (!body || typeof body !== "object" || Array.isArray(body))) {
-          return json({ code: "invalid_body", message: "Body JSON không hợp lệ" }, 400);
+      let name = String(body?.name ?? "").replace(/[\r\n"']/g, "").trim().slice(0, 60);
+      if (!name) name = user;
+      const existing = await env.OWM_STATE.get(`tenant:${user}`, "json").catch(() => null);
+      if (existing) {
+        if (existing.secret && (await sameSecret(secret, existing.secret))) {
+          return json({ ok: true, existed: true, user, name: existing.name || name });
         }
-        const slots = await env.OWM_STATE.list({ prefix: "machine:" });
-        let wrongCode = null;
-        let noneOnline = null;
-        for (const key of slots.keys.slice(0, 10)) {
-          const res = await relay(env, key.name, request, url, body);
-          if (res.ok) return res;
-          if (res.status === 401) wrongCode = res;
-          else noneOnline = res;
-        }
-        if (wrongCode) return wrongCode;
-        if (noneOnline) return noneOnline;
-        return relay(env, MAIN_KEY, request, url, body);
+        return json({ code: "taken", message: "Tên phòng này đã có người dùng và mật khẩu không khớp." }, 401);
       }
-      return relay(env, tenant ? `machine:${tenant}` : MAIN_KEY, request, url);
+      let rooms;
+      try {
+        rooms = await env.OWM_STATE.list({ prefix: "tenant:" });
+      } catch (error) {
+        console.error("[worker] tenant/create: KV list failed:", error?.stack ?? String(error));
+        return json({ code: "kv_error", message: "Worker bận (KV lỗi) — thử lại sau ít phút." }, 503);
+      }
+      if (rooms.keys.length >= 50) {
+        return json({ code: "full", message: "Hết chỗ cho phòng mới — liên hệ chủ worker." }, 403);
+      }
+      await env.OWM_STATE.put(`tenant:${user}`, JSON.stringify({ secret, name, createdAt: Date.now() }));
+      return json({ ok: true, created: true, user, name });
     }
 
-    // 2.5. OTA bridge update: manifest rẻ (bridge check thường xuyên) + payload
-    // nặng (chỉ tải khi có bản mới đáng cài). Payload = JSON base64 phẳng, không
-    // cần worker giải mã gì — bridge tự băm sha256 đối chiếu manifest rồi mới
-    // đụng tới code. KHÔNG chứa secret (config.json ngoài repo, không vào gói).
-    if (url.pathname === "/bridge-release" && request.method === "GET") {
-      const meta = await env.OWM_STATE.get("bridge-release:latest", "json").catch(() => null);
-      return meta ? json(meta) : json({ version: "", sha256: "" });
+    const tenant = (request.headers.get("x-owm-tenant") || url.searchParams.get("_m") || "")
+      .trim()
+      .toLowerCase();
+    if (tenant && !TENANT_RE.test(tenant)) {
+      return json({ code: "bridge_offline", message: "Mã máy (phòng) không hợp lệ." }, 503);
     }
-    if (url.pathname === "/bridge-release/files" && request.method === "GET") {
-      const files = await env.OWM_STATE.get("bridge-release:files").catch(() => null);
-      if (!files) return json({ error: "no_release" }, 404);
-      return new Response(files, {
-        headers: { "content-type": "application/json", "cache-control": "no-store" },
-      });
+    // No room on the bootstrap routes: refuse with a clear error instead of
+    // fanning a stranger's code/key out to other people's machines. Every
+    // real pairing entry point (QR, master link) carries the room and room
+    // sign-in reads body.user, so only stale/roomless links land here.
+    if (
+      !tenant &&
+      ((url.pathname === "/api/pair" && request.method === "POST") ||
+        (url.pathname === "/api/state" && request.method === "GET"))
+    ) {
+      return json(
+        {
+          code: "tenant_required",
+          message:
+            "Thiếu phòng (tenant) — mở lại link ghép mã đầy đủ từ máy tính (QR luôn kèm phòng) hoặc đăng nhập phòng trong tab Đăng nhập.",
+        },
+        400
+      );
     }
+    return relay(env, tenant ? `machine:${tenant}` : MAIN_KEY, request, url);
+  }
 
-    // 3. Còn lại: static web app (web/dist) qua assets binding
-    return withSecurityHeaders(await env.ASSETS.fetch(request));
+  // 3. Còn lại: static web app (web/dist) qua assets binding
+  return withSecurityHeaders(await env.ASSETS.fetch(request));
+}
+
+export default {
+  // Thin wrapper around handle(): any crash becomes a clean JSON response +
+  // console.error — Cloudflare would otherwise serve its HTML 1101 error page,
+  // which the app cannot parse. Errors inside handle() bubble up to here.
+  async fetch(request, env) {
+    let path = "?";
+    try {
+      path = new URL(request.url).pathname;
+    } catch {}
+    try {
+      return await handle(request, env);
+    } catch (error) {
+      console.error(`[worker] ${request.method} ${path} failed:`, error?.stack ?? String(error));
+      return json({ code: "worker_error", message: "Worker gặp lỗi bất ngờ — thử lại sau ít phút." }, 500);
+    }
   },
 };

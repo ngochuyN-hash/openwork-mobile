@@ -21,7 +21,7 @@ test("background bridge retries occupied port, serves API and does not log pairi
   const token = "owm_test_background_secret";
   writeFileSync(join(data, "config.json"), JSON.stringify({
     mobileToken: token, port, lookupUrl: "", lookupSecret: "", lookupTenant: "",
-    autoLaunchOpenWork: false, ota: false,
+    autoLaunchOpenWork: false,
   }));
   let child;
   let output = "";
@@ -29,7 +29,7 @@ test("background bridge retries occupied port, serves API and does not log pairi
   try {
     child = spawn(process.execPath, [fileURLToPath(new URL("../src/index.js", import.meta.url))], {
       env: { ...process.env, OPENWORK_BRIDGE_DIR: data, OPENWORK_DIR: openwork,
-        OPENWORK_SERVER_URL: "", OPENWORK_PUBLIC_URL: "", OPENWORK_BRIDGE_TUNNEL: "0", OPENWORK_BRIDGE_OTA: "0" },
+        OPENWORK_SERVER_URL: "", OPENWORK_PUBLIC_URL: "", OPENWORK_BRIDGE_TUNNEL: "0" },
       stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
     });
     child.stdout.on("data", (chunk) => { output += chunk; });

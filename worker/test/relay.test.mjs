@@ -2,12 +2,23 @@
 // detection cho phép import thẳng file .js kiểu ESM), KHÔNG đụng mạng thật:
 //   - global fetch bị thay bằng mock ghi lại mọi lần gọi (url/method/headers/body)
 //   - env.OWM_STATE là KV giả trong bộ nhớ (get/put/list đủ cho worker)
+//   - caches.default (Cache API của runtime Workers, dùng cho rate-limit) được
+//     stub vì Node không có — không stub thì rateLimited ném TypeError.
 // Chạy: node --test worker/test/*.test.mjs
 
 import test from "node:test";
 import assert from "node:assert/strict";
 
 const worker = (await import("../src/index.js")).default;
+
+// Node test env lacks the Workers Cache API — stub caches.default so
+// rateLimited() works (every miss = not limited).
+if (!globalThis.caches?.default) {
+  globalThis.caches = {
+    ...globalThis.caches,
+    default: { match: async () => undefined, put: async () => {} },
+  };
+}
 
 // ---------- Mock hạ tầng ----------
 
@@ -84,99 +95,85 @@ const bodyOf = (call) => {
 
 // ---------- Các kịch bản ----------
 
-test("bootstrap /api/pair: máy 1 trả 401, máy 2 nhận body y hệt và thành công", async (t) => {
+test("bootstrap /api/pair: không tenant → 400 tenant_required, KHÔNG đụng máy của phòng khác", async (t) => {
   const kv = mockKV({
     "machine:alpha": slot("https://alpha.trycloudflare.com"),
     "machine:beta": slot("https://beta.trycloudflare.com"),
   });
-  const payload = { code: "owd_test_key", device: "phone-1", nested: { ok: true } };
-  const { calls, restore } = mockFetch((url) => {
-    if (url.startsWith("https://alpha.trycloudflare.com/")) return jsonRes(401, { code: "bad_key" });
-    if (url.startsWith("https://beta.trycloudflare.com/")) return jsonRes(200, { ok: true, pong: payload.code });
-    return jsonRes(500, { unexpected: url });
-  });
-  t.after(restore);
-
-  const res = await worker.fetch(apiRequest("/api/pair", { body: JSON.stringify(payload) }), {
-    OWM_STATE: kv,
-  });
-
-  assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { ok: true, pong: payload.code });
-
-  // Quét đủ 2 slot theo thứ tự KV list: alpha (401) trước, beta (200) sau
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].url, "https://alpha.trycloudflare.com/api/pair");
-  assert.equal(calls[1].url, "https://beta.trycloudflare.com/api/pair");
-
-  // Body đọc MỘT lần từ request rồi truyền nguyên văn cho TẤT CẢ ứng viên —
-  // máy 2 phải nhận chuỗi body giống hệt máy 1 (không phải stream đã tiêu)
-  const expected = JSON.stringify(payload);
-  for (const call of calls) {
-    assert.equal(call.init.method, "POST");
-    assert.equal(call.init.body, expected);
-    assert.deepEqual(JSON.parse(call.init.body), payload);
-    assert.equal(call.headers.get("content-type"), "application/json");
-    assert.equal(call.headers.get("host"), null); // host bị gỡ trước khi relay
-    assert.equal(call.headers.get("accept-encoding"), "identity");
-  }
-});
-
-test("bootstrap /api/pair: mọi máy cùng từ chối 401 → trả 401 của bridge", async (t) => {
-  const kv = mockKV({
-    "machine:alpha": slot("https://alpha.trycloudflare.com"),
-    "machine:beta": slot("https://beta.trycloudflare.com"),
-  });
-  const { calls, restore } = mockFetch(() => jsonRes(401, { code: "bad_key", message: "Sai khóa" }));
-  t.after(restore);
-
-  const res = await worker.fetch(apiRequest("/api/pair", { body: '{"code":"owd_wrong"}' }), {
-    OWM_STATE: kv,
-  });
-
-  assert.equal(res.status, 401);
-  assert.deepEqual(await res.json(), { code: "bad_key", message: "Sai khóa" });
-  // Chỉ quét đúng các slot machine:*, mỗi slot đúng 1 lần
-  assert.equal(calls.length, 2);
-  for (const call of calls) assert.equal(call.init.body, JSON.stringify({ code: "owd_wrong" }));
-});
-
-test("bootstrap /api/pair: không còn slot machine nào → fallback relay về machine:main", async (t) => {
-  // KV list có thể chưa thấy slot mà get đã đọc được (eventual consistency).
-  // Buộc danh sách rỗng nhưng main tồn tại để kiểm tra body ở nhánh fallback.
-  const kv = mockKV({
-    "machine:main": slot("https://main.trycloudflare.com"),
-  });
-  kv.list = async () => ({ keys: [], list_complete: true, cursor: "" });
-  const { calls, restore } = mockFetch(() => jsonRes(200, { ok: true }));
+  const { calls, restore } = mockFetch(() => jsonRes(200, { unexpected: true }));
   t.after(restore);
 
   const res = await worker.fetch(apiRequest("/api/pair", { body: '{"code":"owd_x"}' }), {
     OWM_STATE: kv,
   });
 
-  assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { ok: true });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "https://main.trycloudflare.com/api/pair");
-  assert.equal(calls[0].init.method, "POST");
-  assert.equal(calls[0].init.body, '{"code":"owd_x"}');
-  assert.deepEqual(kv.reads, ["machine:main"]);
+  assert.equal(res.status, 400);
+  const payload = await res.json();
+  assert.equal(payload.code, "tenant_required");
+  assert.ok(payload.message.length > 10);
+  // Chặn ngay từ cổng: không relay đi máy nào, không đốt lượt đọc KV
+  assert.equal(calls.length, 0);
+  assert.equal(kv.reads.length, 0);
 });
 
-test("bootstrap /api/pair: body JSON hỏng / không phải object → 400, không relay", async (t) => {
+test("bootstrap /api/pair: không tenant → kể cả machine:main tồn tại vẫn bị chặn, không fallback", async (t) => {
+  const kv = mockKV({
+    "machine:main": slot("https://main.trycloudflare.com"),
+    "machine:alpha": slot("https://alpha.trycloudflare.com"),
+  });
+  const { calls, restore } = mockFetch(() => jsonRes(200, { unexpected: true }));
+  t.after(restore);
+
+  const res = await worker.fetch(apiRequest("/api/pair", { body: '{"code":"owd_x"}' }), {
+    OWM_STATE: kv,
+  });
+
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).code, "tenant_required");
+  assert.equal(calls.length, 0);
+  assert.equal(kv.reads.length, 0);
+});
+
+test("bootstrap GET /api/state: không tenant → 400 tenant_required, không quét slot", async (t) => {
+  const kv = mockKV({ "machine:alpha": slot("https://alpha.trycloudflare.com") });
+  const { calls, restore } = mockFetch(() => jsonRes(200, { unexpected: true }));
+  t.after(restore);
+
+  const res = await worker.fetch(apiRequest("/api/state", { method: "GET" }), { OWM_STATE: kv });
+
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).code, "tenant_required");
+  assert.equal(calls.length, 0);
+  assert.equal(kv.reads.length, 0);
+});
+
+test("bootstrap /api/pair: body JSON hỏng + không tenant → vẫn tenant_required, không relay", async (t) => {
   const kv = mockKV();
-  const { calls, restore } = mockFetch(() => jsonRes(200, { never: true }));
+  const { calls, restore } = mockFetch(() => jsonRes(200, { unexpected: true }));
   t.after(restore);
 
   for (const bad of ["{không phải json", "[]", '"chuỗi"', "5"]) {
     const res = await worker.fetch(apiRequest("/api/pair", { body: bad }), { OWM_STATE: kv });
     assert.equal(res.status, 400, `body ${JSON.stringify(bad)} phải trả 400`);
-    assert.equal((await res.json()).code, "invalid_body");
+    assert.equal((await res.json()).code, "tenant_required");
   }
-  // Chặn ngay từ cổng: không gọi mạng, không đốt lượt đọc KV
+  // Body không còn được đọc/relay đi đâu — chặn ngay ở cửa thiếu phòng
   assert.equal(calls.length, 0);
   assert.equal(kv.reads.length, 0);
+});
+
+test("route thường (không phải bootstrap) không tenant → vẫn relay về machine:main như luồng cũ", async (t) => {
+  const kv = mockKV({ "machine:main": slot("https://main.trycloudflare.com") });
+  const { calls, restore } = mockFetch(() => jsonRes(200, { ok: true, devices: [] }));
+  t.after(restore);
+
+  const res = await worker.fetch(apiRequest("/api/devices", { method: "GET" }), { OWM_STATE: kv });
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, devices: [] });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://main.trycloudflare.com/api/devices");
+  assert.equal(calls[0].init.method, "GET");
 });
 
 test("request có x-owm-tenant → relay đúng 1 lần tới phòng đó, không quét slot khác", async (t) => {
@@ -209,12 +206,15 @@ test("request có x-owm-tenant → relay đúng 1 lần tới phòng đó, khôn
   assert.equal(calls[0].headers.get("host"), null);
 });
 
-test("bootstrap GET /api/state: không tenant → quét slot, relay GET không body", async (t) => {
+test("GET /api/state: có tenant (header) → relay đúng 1 lần, GET không mang body", async (t) => {
   const kv = mockKV({ "machine:alpha": slot("https://alpha.trycloudflare.com") });
   const { calls, restore } = mockFetch(() => jsonRes(200, { edge: { tenant: "alpha", online: true } }));
   t.after(restore);
 
-  const res = await worker.fetch(apiRequest("/api/state", { method: "GET" }), { OWM_STATE: kv });
+  const res = await worker.fetch(
+    apiRequest("/api/state", { method: "GET", headers: { "x-owm-tenant": "alpha" } }),
+    { OWM_STATE: kv }
+  );
 
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { edge: { tenant: "alpha", online: true } });
@@ -222,4 +222,70 @@ test("bootstrap GET /api/state: không tenant → quét slot, relay GET không b
   assert.equal(calls[0].url, "https://alpha.trycloudflare.com/api/state");
   assert.equal(calls[0].init.method, "GET");
   assert.equal(calls[0].init.body, undefined); // GET không mang body
+});
+
+test("relay: tunnel không nối được (fetch ném lỗi) → 502 JSON bridge_unreachable", async (t) => {
+  const kv = mockKV({ "machine:myroom": slot("https://myroom.trycloudflare.com") });
+  const { restore } = mockFetch(() => {
+    throw new Error("econnrefused");
+  });
+  t.after(restore);
+
+  const res = await worker.fetch(
+    apiRequest("/api/devices", { method: "GET", headers: { "x-owm-tenant": "myroom" } }),
+    { OWM_STATE: kv }
+  );
+
+  assert.equal(res.status, 502);
+  assert.equal((await res.json()).code, "bridge_unreachable");
+});
+
+test("/api/tenant/create: KV list lỗi → 503 JSON kv_error, không ném ra ngoài", async (t) => {
+  const failingKV = {
+    get: async () => null,
+    put: async () => {},
+    list: async () => {
+      throw new Error("kv down");
+    },
+  };
+  const res = await worker.fetch(
+    apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "newroom", secret: "strongpass1" }) }),
+    { OWM_STATE: failingKV }
+  );
+
+  assert.equal(res.status, 503);
+  assert.equal((await res.json()).code, "kv_error");
+});
+
+test("/__register: KV ghi lỗi → 503 JSON kv_write_failed, không ném ra ngoài", async (t) => {
+  const failingKV = {
+    get: async () => null,
+    put: async () => {
+      throw new Error("kv down");
+    },
+    list: async () => ({ keys: [] }),
+  };
+  const res = await worker.fetch(
+    apiRequest("/__register", {
+      body: JSON.stringify({ url: "https://fresh.trycloudflare.com" }),
+      headers: { "x-owm-secret": "main-secret" },
+    }),
+    { OWM_STATE: failingKV, BRIDGE_SECRET: "main-secret" }
+  );
+
+  assert.equal(res.status, 503);
+  assert.equal((await res.json()).error, "kv_write_failed");
+});
+
+test("lỗi bất ngờ trong handle() → JSON worker_error thay vì trang 1101 HTML của Cloudflare", async (t) => {
+  // URL hỏng làm new URL() ném ngay đầu handle() — đủ để chạm nhánh catch wrapper.
+  const res = await worker.fetch(
+    { url: "://bad-url", method: "GET", headers: new Headers() },
+    { OWM_STATE: mockKV() }
+  );
+
+  assert.equal(res.status, 500);
+  const payload = await res.json();
+  assert.equal(payload.code, "worker_error");
+  assert.equal(typeof payload.message, "string");
 });

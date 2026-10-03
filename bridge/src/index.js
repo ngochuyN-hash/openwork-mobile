@@ -1,5 +1,5 @@
 import http from "node:http";
-import { watch, writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, watch, writeFileSync, unlinkSync } from "node:fs";
 import qrcode from "qrcode-terminal";
 import { loadConfig, saveConfig, bridgeDataDir } from "./config.js";
 import { ensureOwnerToken } from "./bootstrap.js";
@@ -14,12 +14,12 @@ import { PairingService, CODE_TTL_MINUTES } from "./pairing.js";
 import { findOpenWorkExe, launchOpenWork } from "./openwork-launch.js";
 import { listDirs, listRoots, makeDir } from "./fslist.js";
 import { rotateStaleLogs, scheduleDailyWipe, wipeLogs } from "./logwipe.js";
-import { startUpdater, markBootOk, currentVersion } from "./update.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const BRIDGE_VERSION = currentVersion();
 const __dirname = dirname(fileURLToPath(import.meta.url));
+// Single version source of truth: bridge/package.json (the OTA VERSION file is gone).
+const BRIDGE_VERSION = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8")).version;
 
 const config = loadConfig();
 
@@ -530,10 +530,6 @@ function printPairing(base, note, { withMaster = false } = {}) {
 
 const onListening = () => {
   const local = `http://127.0.0.1:${config.port}`;
-  // Nếu lần boot này là do OTA swap bản mới, xác nhận với watchdog là đã sống
-  // (phase applying → done) — nói nó thoát; quá hạn mà chưa tới đây là
-  // watchdog tự rollback về bản cũ.
-  markBootOk();
   // Ghi pid NGAY TRONG bridge: mọi đường khởi động (task admin, openpocket
   // start, tay) đều hiện diện với `openpocket status/stop/ensure`. Trước đây
   // chỉ `openpocket start` ghi, instance từ task VBS là vô hình với CLI — hai
@@ -586,19 +582,11 @@ const onListening = () => {
   }
 
   console.log(`Bridge data dir: ${bridgeDataDir()}`);
-
-  // OTA: máy bạn bè tự nhận bản bridge mới (16/09/2026). Check sau 30s (tunnel
-  // kịp "up") rồi mỗi 6h. Gate an toàn bên trong update.js: tunnel ổn, không
-  // vừa khởi động, cài qua stage + watchdog rollback. Mặc định bật mọi máy.
-  startUpdater({
-    config,
-    getTunnelState: () => tunnelGetState(),
-  });
 };
 
-// OTA respawn: bridge cũ nhường cổng chậm hơn node mới boot (timer 500ms vs ~400ms)
-// → EADDRINUSE làm bridge mới chết → watchdog tưởng "bản vỡ" rollback oan. 8788 chỉ
-// dành riêng bridge, nhả trong <1s nên retry là đủ, không cần chết.
+// The port frees within ~1s after the previous bridge exits (slow child
+// teardown, task-scheduler restarts) — a short listen retry beats dying on
+// EADDRINUSE. 8788 belongs to the bridge alone, so a retry always wins.
 let attempt = 0;
 server.on("error", (err) => {
   if (err.code !== "EADDRINUSE") throw err;
