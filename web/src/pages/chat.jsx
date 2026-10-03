@@ -90,9 +90,14 @@ export function ChatPage({ route }) {
   const [attached, setAttached] = useState([]); // [{file, path?, status:'ready'|'uploading'|'done'|'error', error?}]
   const attachRef = useRef(null);
   const queueRef = useRef([]);
+  const [queueCount, setQueueCount] = useState(0); // chỉ báo "đang gửi lại (n)"
   const bottomRef = useRef(null);
   const draftRef = useRef("");
   draftRef.current = draft;
+  // Mirror của model: flushQueue chạy trong listener SSE/online đóng từ effect
+  // cũ (deps không có model) — đọc state thì gửi tin queue đi với model CŨ.
+  const modelRef = useRef(model);
+  modelRef.current = model;
   // Mốc event SSE cuối + trạng thái running cho watchdog/poll dự phòng.
   const lastEventAt = useRef(Date.now());
   const runningRef = useRef(false);
@@ -161,14 +166,15 @@ export function ChatPage({ route }) {
           method: "POST",
           body: { parts: [{ type: "text", text }], ...(modelBody() ? { model: modelBody() } : {}) },
         });
-        queueRef.current.shift();
+        queueRef.current = queueRef.current.slice(1);
+        setQueueCount(queueRef.current.length);
       } catch {
         return; // vẫn mất mạng - giữ lại lần sau
       }
     }
     loadMessages();
     loadStatus();
-  }, [wsId, sessionId]);
+  }, [wsId, sessionId, loadMessages, loadStatus]);
 
   useEffect(() => {
     loadSession();
@@ -516,8 +522,11 @@ export function ChatPage({ route }) {
   }, [messages]);
 
   function modelBody() {
-    if (!model || !model.includes("/")) return undefined;
-    const [providerID, modelID] = model.split("/");
+    // Đọc qua modelRef (không phải state): hàm này chạy cả trong flushQueue —
+    // listener đóng từ effect setup lúc mount, state mới không chạm tới được.
+    const current = modelRef.current;
+    if (!current || !current.includes("/")) return undefined;
+    const [providerID, modelID] = current.split("/");
     return { providerID, modelID };
   }
 
@@ -568,7 +577,8 @@ export function ChatPage({ route }) {
       loadMessages();
       loadStatus();
     } catch {
-      queueRef.current.push(fullText); // offline queue
+      queueRef.current = [...queueRef.current, fullText]; // offline queue
+      setQueueCount(queueRef.current.length);
       setError("Mất kết nối - tin nhắn sẽ tự gửi lại khi có mạng.");
     } finally {
       setSending(false);
@@ -636,7 +646,7 @@ export function ChatPage({ route }) {
         </div>
       ))}
 
-      <div class="chat-list" aria-live="polite">
+      <div class="chat-list">
         {messages === null && <Loading />}
         {messages?.length === 0 && (
           <Empty title="Session trống" hint="Gửi prompt đầu tiên cho agent nhé." />
@@ -644,11 +654,22 @@ export function ChatPage({ route }) {
         {messages?.map((m, i) => (
           <MessageBubble key={m.info?.id ?? m.id ?? `msg-${i}`} message={m} wsId={wsId} />
         ))}
-        {running && (
-          <div class="msg assistant">
-            <span class="spinner" /> agent đang chạy…
-          </div>
-        )}
+        {/* Dòng trạng thái DUY NHẤT phát ngôn cho screen reader (aria-live):
+            trước đây thuộc tính này bọc TOÀN BỘ list tin nhắn — mỗi delta stream
+            là đọc lại cả transcript. Vừa làm chỉ báo hàng đợi offline:
+            "Đang gửi lại (n)" — hiện duy nhất khi có tin chờ/tác vụ chạy. */}
+        <div class="msg assistant chat-status" role="status" aria-live="polite">
+          {running && (
+            <>
+              <span class="spinner" /> agent đang chạy…
+            </>
+          )}
+          {queueCount > 0 && (
+            <>
+              {running ? " · " : ""}Đang gửi lại {queueCount} tin nhắn khi có mạng…
+            </>
+          )}
+        </div>
         <div ref={bottomRef} />
       </div>
 
@@ -687,6 +708,7 @@ export function ChatPage({ route }) {
               }}
             />
             <textarea
+              aria-label="Nhập prompt cho agent"
               placeholder={busy ? "Agent đang chạy… gõ tiếp câu mới, bấm ■ để dừng" : "Nhập prompt cho agent…"}
               value={draft}
               onInput={(e) => setDraft(e.currentTarget.value)}

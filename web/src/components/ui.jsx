@@ -79,17 +79,6 @@ export function ConfirmDialog({ title, body, confirmLabel = "Xác nhận", onCon
   );
 }
 
-export function BackButton({ label, onBack }) {
-  return (
-    <button class="btn small ghost btn-icon" onClick={onBack} aria-label={`Quay lại ${label}`}>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="m15 18-6-6 6-6" />
-      </svg>
-      <span>{label}</span>
-    </button>
-  );
-}
-
 /** Hook xác nhận phá hủy (thay confirm() native). */
 export function useConfirm() {
   const [pending, setPending] = useState(null);
@@ -219,6 +208,10 @@ export function SwipeRow({ open, requestOpen, onAction, onTap, actionLabel = "Xo
         class="swipe-action"
         type="button"
         aria-label={actionLabel}
+        // Nút nằm SƯỜN khi hàng đóng (chỉ lộ khi vuốt trái) — vẫn focusable
+        // bằng Tab là bẫy keyboard; hàng đóng thì tabindex="-1", mở mới Tab tới.
+        tabindex={open ? undefined : "-1"}
+        aria-hidden={open ? undefined : "true"}
         onClick={(e) => {
           e.stopPropagation();
           onAction?.();

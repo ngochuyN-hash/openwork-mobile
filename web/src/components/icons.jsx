@@ -145,90 +145,10 @@ export function PcsIcon({ size }) {
   );
 }
 
-export function MouseIcon({ size }) {
-  return (
-    <Icon size={size ?? 18}>
-      <rect x="6" y="2" width="12" height="20" rx="6" />
-      <path d="M12 6v4" />
-    </Icon>
-  );
-}
-
 export function ExpandIcon({ size }) {
   return (
     <Icon size={size ?? 18}>
       <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
-    </Icon>
-  );
-}
-
-export function CameraIcon({ size }) {
-  return (
-    <Icon size={size ?? 18}>
-      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-      <circle cx="12" cy="13" r="4" />
-    </Icon>
-  );
-}
-
-export function PasteIcon({ size }) {
-  return (
-    <Icon size={size ?? 18}>
-      <rect x="8" y="2" width="8" height="4" rx="1" />
-      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-    </Icon>
-  );
-}
-
-export function KeyboardIcon({ size }) {
-  return (
-    <Icon size={size ?? 20}>
-      <rect x="2" y="5" width="20" height="14" rx="2" />
-      <path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M7 13h.01M17 13h.01M9 16.5h6" />
-    </Icon>
-  );
-}
-
-export function MousePointerIcon({ size }) {
-  return (
-    <Icon size={size ?? 20}>
-      <path d="M4 3.5l7.5 17.5 2.3-7.2L21 11.5z" />
-    </Icon>
-  );
-}
-
-export function ClipboardIcon({ size }) {
-  return (
-    <Icon size={size ?? 20}>
-      <rect x="8" y="2" width="8" height="4" rx="1" />
-      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-    </Icon>
-  );
-}
-
-export function LockIcon({ size }) {
-  return (
-    <Icon size={size ?? 18}>
-      <rect x="3" y="11" width="18" height="11" rx="2" />
-      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-    </Icon>
-  );
-}
-
-export function UnlockIcon({ size }) {
-  return (
-    <Icon size={size ?? 18}>
-      <rect x="3" y="11" width="18" height="11" rx="2" />
-      <path d="M7 11V7a5 5 0 0 1 9.9-1" />
-    </Icon>
-  );
-}
-
-export function SendIcon({ size }) {
-  return (
-    <Icon size={size ?? 16}>
-      <path d="M22 2 11 13" />
-      <path d="M22 2 15 22l-4-9-9-4z" />
     </Icon>
   );
 }

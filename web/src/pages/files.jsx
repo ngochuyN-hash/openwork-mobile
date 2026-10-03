@@ -38,23 +38,39 @@ export function FilesPage({ route }) {
   const [opened, setOpened] = useState(null); // {name, path, kind: 'text'|'image'|'pdf'|'binary'}
   const uploadRef = useRef(null);
   const wsEnc = encodeURIComponent(wsId);
+  // Chống race khi bấm nhanh 2 thư mục: hủy fetch cũ (AbortController) + đếm
+  // lượt (seq) — kết quả về trễ của thư mục CŨ không được vẽ dưới breadcrumb MỚI.
+  const loadSeq = useRef(0);
+  const loadAbort = useRef(null);
 
   const load = useCallback(
     async (dir) => {
+      const seq = ++loadSeq.current;
+      loadAbort.current?.abort();
+      const controller = new AbortController();
+      loadAbort.current = controller;
       try {
-        const payload = await ow(`/workspace/${wsEnc}/opencode/file?path=${encodeURIComponent(dir)}`);
+        const payload = await ow(`/workspace/${wsEnc}/opencode/file?path=${encodeURIComponent(dir)}`, {
+          signal: controller.signal,
+        });
+        if (seq !== loadSeq.current) return; // đã có lượt load mới hơn — bỏ kết quả stale
         const nodes = unwrap(payload) ?? [];
         const dirs = nodes.filter((n) => n.type === "directory").sort((a, b) => a.name.localeCompare(b.name));
         const files = nodes.filter((n) => n.type !== "directory").sort((a, b) => a.name.localeCompare(b.name));
         setEntries([...dirs, ...files]);
         setError("");
       } catch (e) {
+        if (controller.signal.aborted || e?.name === "AbortError") return;
+        if (seq !== loadSeq.current) return;
         setError(String(e.message || e));
         setEntries([]);
       }
     },
     [wsEnc]
   );
+
+  // Rời trang thì hủy fetch đang treo (nếu có).
+  useEffect(() => () => loadAbort.current?.abort(), []);
 
   useEffect(() => {
     load(path);
@@ -154,14 +170,37 @@ export function FilesPage({ route }) {
       {entries === null && <Loading />}
 
       {path && (
-        <div class="file-row" onClick={() => setPath(crumbs.slice(0, -1).join("/"))}>
+        <div
+          class="file-row"
+          role="button"
+          tabIndex={0}
+          onClick={() => setPath(crumbs.slice(0, -1).join("/"))}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setPath(crumbs.slice(0, -1).join("/"));
+            }
+          }}
+        >
           <span class="icon"><FolderIcon /></span>
           <span class="name" style="color:var(--text-dim)">..</span>
         </div>
       )}
 
       {entries?.map((node) => (
-        <div class="file-row" key={node.path ?? node.name} onClick={() => (node.type === "directory" ? setPath(node.path) : openFile(node))}>
+        <div
+          class="file-row"
+          key={node.path ?? node.name}
+          role="button"
+          tabIndex={0}
+          onClick={() => (node.type === "directory" ? setPath(node.path) : openFile(node))}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              node.type === "directory" ? setPath(node.path) : openFile(node);
+            }
+          }}
+        >
           <span class="icon">
             {node.type === "directory" ? <FolderIcon /> : isImage(node.name) ? <ImageIcon /> : <FileIcon />}
           </span>
@@ -190,6 +229,11 @@ function FileViewer({ wsEnc, file, onClose }) {
   const abortRef = useRef(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  // Mirror của dl cho cleanup: effect unmount đóng qua state sẽ STALE (giá trị
+  // render đầu) — revokeObjectURL của lần tải xong không bao giờ chạy, mở vài
+  // file lớn là iOS Safari giết tab. Đọc qua ref thì luôn là giá trị mới nhất.
+  const dlRef = useRef(null);
+  dlRef.current = dl;
 
   // Nút Đóng mượn topbar (ghim cố định): báo lên App qua event nội bộ, gửi 1 lần lúc mở.
   useEffect(() => {
@@ -235,6 +279,11 @@ function FileViewer({ wsEnc, file, onClose }) {
   // trong tab thay vì lưu). Bản này hiện % + hủy được, xong mới kích <a download>.
   async function downloadFile() {
     if (abortRef.current) return;
+    // Mở URL blob mới trước khi mở: thu hồi URL lần tải trước ngay tại đây
+    // (setDl({loaded:0,...}) bên dưới sẽ đè trạng thái done cũ — không revoke
+    // ở đây thì URL cũ leak cho tới khi unmount).
+    if (dlRef.current?.url) URL.revokeObjectURL(dlRef.current.url);
+    dlRef.current = null;
     const controller = new AbortController();
     abortRef.current = controller;
     setDl({ loaded: 0, total: 0 });
@@ -244,10 +293,6 @@ function FileViewer({ wsEnc, file, onClose }) {
         signal: controller.signal,
         fallbackName: file.name,
         onProgress: ({ loaded, total }) => setDl({ loaded, total }),
-      });
-      setDl((prev) => {
-        if (prev?.url) URL.revokeObjectURL(prev.url);
-        return prev;
       });
       const url = URL.createObjectURL(blob);
       setDl({ done: true, filename, url, blob });
@@ -291,10 +336,14 @@ function FileViewer({ wsEnc, file, onClose }) {
     }
   }
 
-  useEffect(() => () => {
-    abortRef.current?.abort();
-    if (dl?.url) URL.revokeObjectURL(dl.url);
-  }, []);
+  useEffect(
+    () => () => {
+      abortRef.current?.abort();
+      const url = dlRef.current?.url;
+      if (url) URL.revokeObjectURL(url);
+    },
+    []
+  );
 
   const dlBusy = !!dl && !dl.done;
   const dlLabel = !dl

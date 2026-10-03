@@ -18,6 +18,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
   const [busy, setBusy] = useState(false);
   const [waking, setWaking] = useState(false);
   const [wakeMsg, setWakeMsg] = useState("");
+  const [checkMsg, setCheckMsg] = useState("");
   const [confirmDialog, askConfirm] = useConfirm();
   const [devices, setDevices] = useState(null);
   const [thisDeviceLabel, setThisDeviceLabel] = useState("");
@@ -45,9 +46,17 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
 
   async function recheck() {
     setBusy(true);
+    setCheckMsg("");
     try {
       await apiRecheck();
       onRecheck();
+    } catch (e) {
+      // Tunnel chết / 401 phải báo rõ, không im lặng trả nút về trạng thái cũ.
+      setCheckMsg(
+        e.message === "UNPAIRED"
+          ? "Chìa hết hiệu lực (401) — máy đã thu hồi khóa này, hãy ghép lại."
+          : `Kiểm tra lỗi: ${String(e.message || e)}`
+      );
     } finally {
       setBusy(false);
     }
@@ -130,6 +139,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
             Gỡ pairing
           </button>
         </div>
+        {checkMsg && <p class="sheet-body" style="margin:8px 0 0;color:var(--danger)" role="alert">{checkMsg}</p>}
         {wakeMsg && <p class="sheet-body" style="margin:8px 0 0">{wakeMsg}</p>}
       </div>
 

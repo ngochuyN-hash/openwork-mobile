@@ -172,6 +172,16 @@ function StatusBanners({ state, onRecheck }) {
       </Banner>
     );
   }
+  // Lỗi thật từ lần poll gần nhất (mạng hỏng, HTTP 5xx...): hiện ĐÚNG lỗi,
+  // không đổ cho "không tìm thấy openwork-server" — sai sự thật đó đẩy người
+  // dùng đi restart một máy đang khoẻ.
+  if (state.error) {
+    return (
+      <Banner kind="err" actionLabel="Thử lại" onAction={onRecheck}>
+        Mất kết nối tới bridge: <b>{state.error}</b> — kiểm tra mạng/Wi-Fi rồi thử lại.
+      </Banner>
+    );
+  }
   if (!state.server) {
     const wake = async () => {
       setWaking(true);

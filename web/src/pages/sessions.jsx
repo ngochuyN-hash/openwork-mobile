@@ -109,7 +109,17 @@ export function SessionsPage({ route }) {
             onAction={() => remove(s)}
             onTap={() => navigate(`#/ws/${encodeURIComponent(wsId)}/chat/${encodeURIComponent(s.id)}`)}
           >
-            <div class="card tap">
+            <div
+              class="card tap"
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  navigate(`#/ws/${encodeURIComponent(wsId)}/chat/${encodeURIComponent(s.id)}`);
+                }
+              }}
+            >
               <div class="row-between">
                 <h3>{s.title || "Không tiêu đề"}</h3>
                 <span class={`dot ${status === "busy" ? "busy" : "ok"}`} aria-label={status ?? "idle"} />

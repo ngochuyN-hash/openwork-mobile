@@ -49,7 +49,15 @@ export function WorkspacesPage() {
           key={ws.id}
           class="card tap ws-card"
           style={`--ws-c:${wsColor(ws.id)}`}
+          role="button"
+          tabIndex={0}
           onClick={() => navigate(`#/ws/${encodeURIComponent(ws.id)}`)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              navigate(`#/ws/${encodeURIComponent(ws.id)}`);
+            }
+          }}
         >
           <div style="display:flex;gap:12px;align-items:flex-start">
             <span class="tile" aria-hidden="true"><WsIcon /></span>
