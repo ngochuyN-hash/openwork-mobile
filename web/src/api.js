@@ -49,6 +49,7 @@ function cleanTenantId(id) {
 }
 
 function loadKeys() {
+  migrateKeys();
   try {
     const parsed = JSON.parse(localStorage.getItem(KEYS_KEY) ?? "null");
     if (Array.isArray(parsed)) return parsed.filter((k) => k && typeof k.token === "string");
@@ -60,9 +61,12 @@ function saveKeys(keys) {
   localStorage.setItem(KEYS_KEY, JSON.stringify(keys));
 }
 
-// Migration 1 lần: bản cũ giữ đúng 1 chìa — nạp luôn vào chùm, không ai phải
-// đăng nhập lại sau khi cập nhật.
-(function migrateKeys() {
+// One-time migration: an old install kept exactly one key — load it into the
+// keyring so nobody has to sign in again after updating. Runs lazily on the
+// first keyring read instead of at import time (importing this module in bare
+// Node must not touch localStorage — that is what makes it unit-testable) and
+// is a no-op once owm_keys exists, so calling it repeatedly is safe.
+export function migrateKeys() {
   try {
     if (localStorage.getItem(KEYS_KEY)) return;
     const token = localStorage.getItem(TOKEN_KEY);
@@ -77,10 +81,6 @@ function saveKeys(keys) {
       },
     ]);
   } catch {}
-})();
-
-export function listKeys() {
-  return loadKeys();
 }
 
 /** Thêm/cập nhật chìa: trùng tenant = thay chìa mới (máy cấp khóa mới), không
@@ -111,40 +111,9 @@ export function removeKey(tenant) {
   return true;
 }
 
-/** Đổi tên hiển thị của 1 máy trong chùm chìa — chỉ đổi LOCAL trên app này,
- * không đụng machineName trong config của bridge (cái tên người khác thấy lúc
- * đăng nhập). Active machine đổi tên thì cả "Máy đang kết nối" đổi theo. */
-export function renameKey(tenant, name) {
-  const clean = cleanTenantId(tenant);
-  const nice = String(name ?? "").trim().slice(0, 60);
-  if (!nice) return false;
-  const keys = loadKeys();
-  const entry = keys.find((k) => k.tenant === clean);
-  if (!entry) return false;
-  entry.name = nice;
-  saveKeys(keys);
-  if (cleanTenantId(getTenant()) === clean) {
-    // tenant rỗng: setTenant từ chối lưu (guard !clean) — ghi thẳng tên để
-    // hàng "Máy đang kết nối" ở Settings cũng đổi theo
-    if (clean) setTenant(clean, nice);
-    else localStorage.setItem(TENANT_NAME_KEY, nice);
-  }
-  return true;
-}
-
 /** Báo App biết chùm chìa đổi (xóa chìa máy active có thể đổi trạng thái paired). */
 export function notifyKeysChanged() {
   window.dispatchEvent(new CustomEvent("owm:keys"));
-}
-
-/** Lưới an toàn: máy đang active phải luôn có mặt trong chùm (bắt được máy
- * nối theo đường cũ không qua addKey — token dán tay, bản lưu trước migration). */
-export function ensureActiveKeyEntry() {
-  const token = getToken();
-  if (!token) return;
-  const tenant = cleanTenantId(getTenant());
-  if (loadKeys().some((k) => k.tenant === tenant)) return;
-  addKey({ tenant, token, name: getTenantName() });
 }
 
 // Bóc giá trị từ hash dạng #<key>=GIÁ_TRỊ[&m=PHÒNG], xóa hash sau khi đọc.
@@ -179,15 +148,6 @@ export function pairingCodeFromHash() {
   return "";
 }
 
-// Link mời multi-tenant dạng .../#i=<user>:<secret> — trả {user, secret}
-// (xóa hash ngay) để màn pairing tự đăng nhập; bấm link là vào, không gõ gì.
-export function inviteFromHash() {
-  const match = /^#i=([A-Za-z0-9][A-Za-z0-9-]{0,31}):([^&]+)/.exec(location.hash);
-  if (!match) return null;
-  history.replaceState(null, "", location.pathname + location.search);
-  return { user: match[1].toLowerCase(), secret: match[2] };
-}
-
 /** Ghép thiết bị bằng mã 30 phút → nhận khóa vĩnh viễn owd_... */
 export async function apiPair(code, label) {
   const res = await fetch("/api/pair", {
@@ -203,30 +163,6 @@ export async function apiPair(code, label) {
   return payload; // {token, device}
 }
 
-/** Đăng nhập multi-tenant: user+pass do chủ worker cấp → khóa vĩnh viễn.
- * Trả {token, device, tenant, machineName}; chìa ghi vào chùm (tab PCs) và
- * mặc định thành máy active — mật khẩu KHÔNG được lưu, lần sau mở app là vào
- * thẳng. activate=false để chỉ thêm chìa mà không rời máy đang dùng. */
-export async function apiPairTenant(user, secret, label, { activate = true } = {}) {
-  const res = await fetch("/api/pair/tenant", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      user: String(user ?? "").trim().toLowerCase(),
-      secret: String(secret ?? ""),
-      label: label?.trim() || undefined,
-    }),
-  });
-  const payload = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(payload?.message ?? `HTTP ${res.status}`);
-  addKey({ tenant: payload.tenant, token: payload.token, name: payload.machineName });
-  if (activate) {
-    setToken(payload.token);
-    setTenant(payload.tenant, payload.machineName);
-  }
-  return payload;
-}
-
 export async function apiDevices() {
   const res = await fetch("/api/devices", { headers: authHeaders() });
   if (res.status === 401) throw new Error("UNPAIRED");
@@ -240,38 +176,13 @@ export async function apiRevokeDevice(id) {
   return res.json();
 }
 
-// ---- Thao tác với máy BẤT KỲ trong chùm chìa (không cần đổi máy active) ----
-
+// Authorization + tenant headers, optionally for a key other than the active one.
 function authHeadersFor(token, tenant, extra = {}) {
   const headers = { ...extra };
   if (token) headers["authorization"] = `Bearer ${token}`;
   const clean = cleanTenantId(tenant);
   if (clean) headers["x-owm-tenant"] = clean;
   return headers;
-}
-
-/** Trạng thái 1 máy bằng chìa của chính nó — gọi ĐÚNG 1 LẦN khi mở tab PCs,
- * không poll. online / offline (máy tắt hoặc tunnel chết) / revoked (chìa đã
- * bị thu hồi trên máy). */
-export async function apiMachineStatus(token, tenant) {
-  try {
-    const res = await fetch("/api/state", { headers: authHeadersFor(token, tenant) });
-    if (res.status === 401) return { status: "revoked" };
-    if (!res.ok) return { status: "offline" };
-    return { status: "online", state: await res.json().catch(() => null) };
-  } catch {
-    return { status: "offline" };
-  }
-}
-
-/** Ngắt hẳn: thu hồi TRÊN MÁY đó khóa của chìa đang cầm (deviceId lấy từ
- * thisDevice của /api/state cùng chìa). 404 coi như xong — khóa đã chết trước đó. */
-export async function apiRevokeMachineKey(token, tenant, deviceId) {
-  const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}`, {
-    method: "DELETE",
-    headers: authHeadersFor(token, tenant),
-  });
-  if (!res.ok && res.status !== 404) throw new Error(`revoke ${res.status}`);
 }
 
 function authHeaders(extra = {}) {
@@ -400,8 +311,9 @@ export async function owDownload(wsId, path, { onProgress, signal, fallbackName 
   return { blob: new Blob(chunks, type ? { type } : undefined), filename };
 }
 
-/** Bóc tên file từ header content-disposition (ưu tiên filename* UTF-8). */
-function filenameFromDisposition(header) {
+/** Bóc tên file từ header content-disposition (ưu tiên filename* UTF-8).
+ * Exported (pure helper) so the content-disposition rules stay unit-testable. */
+export function filenameFromDisposition(header) {
   if (!header) return "";
   const star = /filename\*\s*=\s*(?:UTF-8''|utf-8'')?([^;]+)/i.exec(header);
   if (star?.[1]) {
@@ -447,7 +359,7 @@ export function timeAgo(ts) {
 // ---- File hai chiều (điện thoại <-> workspace) ----
 
 /** Trần upload thô: base64 phồng ~37%, proxy chặn body trên 64MB. */
-export const MAX_UPLOAD_BYTES = 40 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 40 * 1024 * 1024;
 
 /** Định dạng dung lượng theo Intl (vi-VN). */
 export function formatBytes(bytes) {
@@ -470,7 +382,7 @@ export function bytesToBase64(bytes) {
 }
 
 /** File/Blob -> base64 (qua FileReader, gọn RAM hơn arrayBuffer + btoa). */
-export function fileToBase64(file) {
+function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {

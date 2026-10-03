@@ -5,6 +5,36 @@
 > 📌 **Rules (project owner's requirements):** every time code/structure/behavior changes,
 > BOTH this file AND `README.md` MUST be updated in the same commit — **in English**.
 
+## Web API cleanup + first real unit tests — 2026-10-03
+
+`web/src/api.js` dropped the seven exports orphaned by the remote-screen removal (grep-verified zero
+importers across the repo): `listKeys`, `renameKey`, `ensureActiveKeyEntry`, `inviteFromHash`,
+`apiPairTenant`, `apiMachineStatus`, `apiRevokeMachineKey`. `fileToBase64` and `MAX_UPLOAD_BYTES`
+stay but are module-internal now (only `owUploadFile` uses them). `filenameFromDisposition` gained
+an `export` — a pure helper — so the content-disposition rules are testable directly.
+
+The keyring migration IIFE no longer runs at import time: it is now an exported, idempotent
+`migrateKeys()` invoked lazily on the first `loadKeys()` read, so importing `api.js` in bare Node
+(no `localStorage`) has zero side effects — that is what makes the module unit-testable. App
+behavior is unchanged: every keyring read/write still promotes the legacy single token into
+`owm_keys` on first touch, and nothing outside these functions reads `owm_keys`.
+
+`web/test/` (previously empty — `npm --prefix web test` was green with 0 tests) now holds two real
+suites; they shim `localStorage`/`location`/`fetch` and point `OPENWORK_BRIDGE_DIR`/`OPENWORK_DIR`
+at temp dirs, so no real bridge is ever touched:
+- `api-keyring.test.js` (10 tests): addKey entry/replace-same-tenant/append; removeKey promoting
+  `keys[0]` to active, leaving non-active removals alone, and clearing `owm_token`/`owm_tenant` when
+  the bundle empties; migrateKeys writing exactly one entry, staying idempotent, and keeping a
+  pre-existing `owm_keys`; plus an import-probe asserting zero storage reads at import time.
+- `api-contract.test.js` (12 tests): `ow()` 401 → `Error("UNPAIRED")` (the string app.jsx matches),
+  non-OK → `error.status` + `payload.message` with `HTTP <status>` fallback, 204 → `null`, success
+  JSON passthrough, auth/tenant/JSON-body request headers; `sseUrl()` `_t`/`_m` joining (`&` vs `?`)
+  and percent-encoding; `filenameFromDisposition()` preferring `filename*` UTF-8, falling back to
+  the raw value on broken percent-encoding, plain/missing header handling.
+
+Verified: `cmd /c npm --prefix web test` → 22 pass / 0 fail; `npm --prefix web run build` → OK.
+README.md needs no change (it only lists `npm --prefix web test` as a verification command).
+
 ## Reliability maintenance — 2026-09-18 (local, not deployed)
 
 | Symptom | Implementation and regression evidence |
