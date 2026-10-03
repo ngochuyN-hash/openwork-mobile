@@ -52,11 +52,17 @@ namespace OpenPocket.Desktop
         private string bridgeDir = "";
         private string nodeExe = "";
         // 1 PC, hết tài khoản: lần đầu mở app, app TỰ cấp định danh máy (room
-        // ngầm + mật khẩu ngầm qua /api/tenant/create) và TỰ npm install bridge
-        // — exe chính là bộ cài, người dùng chỉ bấm Bật và quét QR.
-        private bool bridgeNeedsInstall = false;
+        // ngầm + mật khẩu ngầm qua /api/tenant/create) — người dùng chỉ bấm
+        // Bật và quét QR. Dependency (node_modules) được VENDOR sẵn trong zip
+        // bởi người đóng gói — hết npm install lúc chạy nữa.
         private bool provisioning = false;
         private bool provisionDone = false;
+        // Lỗi provision KHÔNG nuốt âm thầm nữa: giữ message + hiện lên hàng
+        // trạng thái riêng với nút thử lại (audit pass này).
+        private string provisionError = "";
+        // Vừa tạo định danh xong mà bridge đang chạy: gợi ý khởi động lại để
+        // bridge nạp identity mới (điện thoại mới thấy được máy).
+        private bool provisionHintRestart = false;
 
         // Bấm X = ẩn xuống khay chạy nền (owner yêu cầu 13/09); thoát hẳn chỉ
         // qua menu chuột phải của icon khay
@@ -264,6 +270,9 @@ namespace OpenPocket.Desktop
         private RoundedButton btnShowQr;
         private RoundedButton btnOpenLogs;
         private CheckBox chkAutostart;
+        // Hàng định danh máy (provision): trạng thái + nút thử lại khi lỗi
+        private Label lblProvision;
+        private RoundedButton btnProvisionRetry;
 
         public MainForm()
         {
@@ -296,6 +305,7 @@ namespace OpenPocket.Desktop
                 : "Thiếu quyền Admin: các cửa sổ đang chạy quyền Admin sẽ không điều khiển được. Thoát hẳn (icon khay) rồi mở lại OpenPocket.exe bằng tay, chấp nhận UAC là đủ.");
             // Icon ↻ thay chữ — nghĩa của nút chuyển sang tooltip
             tipAdmin.SetToolTip(btnTunnelRestart, "Mở lại đường hầm Cloudflare ngay — không đợi bộ đếm 429");
+            tipAdmin.SetToolTip(btnProvisionRetry, "Tạo lại định danh máy (room + mật khẩu ngầm) — dùng khi lần tạo đầu thất bại");
 
             refreshTimer = new System.Windows.Forms.Timer();
             refreshTimer.Interval = 3500;
@@ -322,9 +332,9 @@ namespace OpenPocket.Desktop
                 }
             }
 
-            // Bridge trong zip mới bung chưa có node_modules — exe tự cài
-            bridgeNeedsInstall = bridgeDir != "" &&
-                !Directory.Exists(Path.Combine(bridgeDir, "node_modules"));
+            // node_modules được VENDOR sẵn trong zip (người đóng gói lo) — hết
+            // npm install lúc chạy. Thiếu thì Bật Bridge báo rõ (EnsureBridgeDepsPresent)
+            // thay vì tự cài ngầm hàng phút.
 
             // Tìm node.exe
             nodeExe = FindNodeExe();
@@ -334,8 +344,8 @@ namespace OpenPocket.Desktop
         {
             this.Text = "OpenPocket — Điều khiển OpenWork từ điện thoại";
             // MỘT cột, nền trắng toàn phần: TRẠNG THÁI (đèn kết nối) → tự khởi
-            // động (cấu hình duy nhất còn lại) → hành động. Client 496x372 =
-            // header 48 + trạng thái 164 + kẽ 8 + hàng tự-khởi-động 24 + kẽ 8
+            // động (cấu hình duy nhất còn lại) → hành động. Client 496x396 =
+            // header 48 + trạng thái 188 + kẽ 8 + hàng tự-khởi-động 24 + kẽ 8
             // + hành động 120. BỀ RỘNG giữ khổ 512 cũ (owner 13/09 tối: không
             // thu hẹp, phải CÂN ĐỐI 2 bên). Lưới spacing 8px: 8px trong nhóm,
             // 12px giữa dòng, 24px giữa nhóm, lề 16 hai bên, nút đồng nhất
@@ -344,7 +354,7 @@ namespace OpenPocket.Desktop
             // phân như vậy làm gì đâu"; nút theo skill UI (Primary đen /
             // Ghost viền / viền đỏ cho Dừng), tự vẽ AntiAlias hết răng cưa.
             // Mọi hàng nút/ô dàn ĐẦY bề ngang bằng RelayoutContent().
-            this.ClientSize = new Size(496, 372);
+            this.ClientSize = new Size(496, 396);
             this.MinimumSize = this.Size;
             this.StartPosition = FormStartPosition.CenterScreen;
             // Nền TRẮNG toàn phần (owner 13/09: "gọt sạch hết còn nền trắng
@@ -364,7 +374,7 @@ namespace OpenPocket.Desktop
             this.pnlContent = pnlContent;
 
             int yL = 0;
-            cardStatus = CreateCard(0, ref yL, 496, 164, pnlContent);
+            cardStatus = CreateCard(0, ref yL, 496, 188, pnlContent);
             CreateCardTitle("TRẠNG THÁI KẾT NỐI", cardStatus);
 
             lblStatusBridge = CreateStatusLabel("● Bridge: Đang kiểm tra...", 16, 39, cardStatus);
@@ -403,6 +413,18 @@ namespace OpenPocket.Desktop
             lblStatusOpenWork = CreateStatusLabel("● OpenWork Desktop: Đang kiểm tra...", 16, 127, cardStatus);
             lblStatusOpenWork.Size = new Size(448, 22);
             lblStatusOpenWork.Font = new Font("Segoe UI", 9.75f);
+
+            // Hàng ĐỊNH DANH MÁY (provision): lỗi lần đầu từng bị nuốt SILENT —
+            // đèn Bridge vẫn xanh nhưng máy không bao giờ hiện trên điện thoại.
+            // Lỗi giờ hiện chữ đỏ + nút ↻ thử lại ngay trên thẻ trạng thái;
+            // máy đã ghép ngon thì hàng này tự ẩn (UpdateProvisionStatus).
+            lblProvision = CreateStatusLabel("● Định danh máy: đang kiểm tra…", 16, 159, cardStatus);
+            lblProvision.Size = new Size(424, 20);
+            lblProvision.AutoEllipsis = true;
+            btnProvisionRetry = CreateButton("\uE72C", ButtonKind.InlineIcon, 456, 157, 24, 24, cardStatus);
+            btnProvisionRetry.Font = new Font("Segoe MDL2 Assets", 10f);
+            btnProvisionRetry.Radius = 12;
+            btnProvisionRetry.Click += delegate { ActionRetryProvision(); };
 
             // Hàng TỰ KHỞI ĐỘNG: cấu hình DUY NHẤT còn lại của cửa sổ (owner
             // 13/09 đêm: "mỗi người sở hữu cái này là 1 người dùng rồi" — cụm
@@ -565,6 +587,8 @@ namespace OpenPocket.Desktop
             lblStatusTunnel.Width = inner - 132;
             lblStatusOpenWork.Width = inner;
             lblStatusTunnelUrl.Width = inner;
+            lblProvision.Width = inner - 32;
+            btnProvisionRetry.Left = 16 + inner - 24;
             PlaceTunnelRestart();
 
             int gap = 8;
@@ -688,6 +712,32 @@ namespace OpenPocket.Desktop
             // Owner 14/09: nâng 5px thì quá cao — hạ lại còn -2 để mặt chữ
             // xuyên đúng qua tâm icon
             btnTunnelRestart.Top = lblStatusTunnel.Top - 2;
+        }
+
+        // ================= SAFE UI MARSHAL =================
+
+        // Callback nền (provision, POST bridge, fetch QR) có thể bay về SAU khi
+        // form đã chết: bấm "Thoát hẳn" ở khay trong lúc "Restart tunnel" còn
+        // đang chờ là this.Invoke ném ObjectDisposedException giết cả tiến
+        // trình (crash lúc thoát). SafeInvoke bỏ qua khi target đã gone —
+        // kiểm IsDisposed + IsHandleCreated TRƯỚC, nuốt race ở khoảng giữa.
+        internal static void SafeInvoke(Control target, Action action)
+        {
+            if (target == null || action == null) return;
+            try
+            {
+                if (target.IsDisposed || !target.IsHandleCreated) return;
+                if (target.InvokeRequired) target.Invoke(action);
+                else action();
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        }
+
+        // Bản gọn cho form này: SafeInvoke(delegate { ... }) trên UI marshal
+        private void SafeInvoke(Action action)
+        {
+            MainForm.SafeInvoke(this, action);
         }
 
         // ================= CONFIG & LOGIC =================
@@ -818,13 +868,17 @@ namespace OpenPocket.Desktop
                         SaveConfig(save);
                     }
                 }
-                catch { ok = false; }
+                catch (Exception ex) { ok = false; provisionError = ex.Message; }
+                if (!ok && provisionError == "")
+                    provisionError = "Máy chủ định danh từ chối (kiểm tra mạng / lookupUrl)";
+                if (ok) provisionError = "";
 
-                this.Invoke(new MethodInvoker(delegate {
+                SafeInvoke(delegate {
                     provisioning = false;
                     provisionDone = ok;
+                    if (ok) provisionHintRestart = isBridgeRunning;
                     CheckStatus();
-                }));
+                });
             });
         }
 
@@ -846,49 +900,34 @@ namespace OpenPocket.Desktop
             return "ows_" + BitConverter.ToString(entropy).Replace("-", "").ToLowerInvariant();
         }
 
-        // Bridge trong zip mới bung chưa có node_modules — exe TỰ npm install
-        // (bộ cài chính là exe, hết cần .bat). Chạy ngầm; xong tự gọi lại
-        // ActionStartBridge để đi tiếp chuỗi. Trả false = chuỗi dừng ở đây.
-        private bool EnsureBridgeInstalledAsync()
+        // Dependency của bridge (node_modules) được VENDOR sẵn trong zip —
+        // KHÔNG còn npm install lúc chạy (khối cũ chạy ngầm tối đa 5 phút mà
+        // không nói gì, và giữ nút "Đang cài bridge" treo không hồi kết).
+        // Kiểm presence ĐỒNG BỘ: thiếu là bản zip đóng gói hỏng — báo rõ.
+        private bool EnsureBridgeDepsPresent()
         {
-            if (!bridgeNeedsInstall) return true;
-            if (bridgeDir == "" || !File.Exists(nodeExe))
+            if (bridgeDir == "" || !File.Exists(Path.Combine(bridgeDir, "src", "index.js")))
             {
-                MessageBox.Show(this, "Không tìm thấy thư mục bridge hoặc Node.js.\nCài Node.js 20+ (nodejs.org) và giữ bố cục zip: thư mục bridge nằm cạnh OpenPocket.exe.", "Thiếu thành phần", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this,
+                    "Không tìm thấy thư mục bridge (cần bridge\\src\\index.js nằm cạnh OpenPocket.exe).\nLấy lại bản zip đúng bố cục rồi bấm Bật Bridge lại.",
+                    "Thiếu thành phần", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
-            string npmCmd = Path.Combine(Path.GetDirectoryName(nodeExe), "npm.cmd");
-            if (!File.Exists(npmCmd)) npmCmd = "npm.cmd";
-            string npmAt = npmCmd;
-
-            SetBridgeButton(btnStartBridge, false);
-            btnStartBridge.Text = "Đang cài bridge (1-2 phút)…";
-            ThreadPool.QueueUserWorkItem(delegate {
-                bool ok = false;
-                try
-                {
-                    var psi = new ProcessStartInfo("cmd.exe", "/c \"\"" + npmAt + "\" install --no-audit --no-fund\"");
-                    psi.WorkingDirectory = bridgeDir;
-                    psi.CreateNoWindow = true;
-                    psi.UseShellExecute = false;
-                    var p = Process.Start(psi);
-                    ok = p != null && p.WaitForExit(300000) && p.ExitCode == 0;
-                }
-                catch { ok = false; }
-
-                this.Invoke(new MethodInvoker(delegate {
-                    SetBridgeButton(btnStartBridge, true);
-                    btnStartBridge.Text = "Bật Bridge";
-                    if (!ok)
-                    {
-                        MessageBox.Show(this, "Cài bridge (npm install) chưa thành công — kiểm tra mạng rồi bấm Bật Bridge lại.", "Chưa cài xong", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        return;
-                    }
-                    bridgeNeedsInstall = false;
-                    ActionStartBridge();
-                }));
-            });
-            return false;
+            if (!File.Exists(nodeExe))
+            {
+                MessageBox.Show(this,
+                    "Không tìm thấy Node.js (node.exe).\nCài Node.js 20+ (nodejs.org) rồi bấm Bật Bridge lại.",
+                    "Thiếu thành phần", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            if (!Directory.Exists(Path.Combine(bridgeDir, "node_modules")))
+            {
+                MessageBox.Show(this,
+                    "Thiếu bridge\\node_modules — bản zip bị đóng gói thiếu dependency.\nLấy lại bản zip đầy đủ (node_modules được vendor sẵn) rồi bấm Bật Bridge lại.",
+                    "Thiếu thành phần", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            return true;
         }
 
 
@@ -903,7 +942,9 @@ namespace OpenPocket.Desktop
                 if (int.TryParse(Convert.ToString(config["port"]), out p) && p > 0) port = p;
             }
 
-            isBridgeRunning = IsPortOpen("127.0.0.1", port, 500);
+            // 150ms là đủ cho cổng localhost — tick 3.5s cũ chờ 500ms làm GUI
+            // giật cục trên máy chậm (audit pass này).
+            isBridgeRunning = IsPortOpen("127.0.0.1", port, 150);
 
             if (isBridgeRunning)
             {
@@ -984,6 +1025,63 @@ namespace OpenPocket.Desktop
             // Chấm ● / ○ giờ có trên cả 3 dòng, icon restart lại ngồi sát sau
             // chữ tunnel — text đổi thì phải xếp lại vị trí icon
             PlaceTunnelRestart();
+
+            // Hàng định danh máy: đang tạo / lỗi / gợi ý khởi động lại. Hint
+            // tắt khi bridge DỪNG lại (người dùng đã khởi động lại xong).
+            if (provisionHintRestart && !isBridgeRunning) provisionHintRestart = false;
+            UpdateProvisionStatus();
+        }
+
+        // Hàng "Định danh máy" trên thẻ trạng thái — hiện CHỈ khi có chuyện để
+        // nói: đang tạo, tạo THẤT BẠI (đỏ + nút ↻ thử lại), hoặc vừa tạo xong
+        // mà bridge đang chạy (gợi ý Khởi động lại để bridge nạp identity mới).
+        // Máy đã có định danh ổn định thì hàng này ẩn sạch, không nhiễu.
+        private void UpdateProvisionStatus()
+        {
+            if (lblProvision == null || btnProvisionRetry == null) return;
+            if (provisionDone && provisionError == "" && !provisionHintRestart)
+            {
+                lblProvision.Visible = false;
+                btnProvisionRetry.Visible = false;
+                return;
+            }
+            lblProvision.Visible = true;
+            btnProvisionRetry.Visible = true;
+            if (provisioning)
+            {
+                lblProvision.Text = "● Định danh máy: đang tạo lần đầu…";
+                lblProvision.ForeColor = ColorAmber;
+                btnProvisionRetry.Enabled = false;
+            }
+            else if (provisionError != "")
+            {
+                lblProvision.Text = "● Định danh máy: THẤT BẠI — " + provisionError;
+                lblProvision.ForeColor = ColorDanger;
+                btnProvisionRetry.Enabled = true;
+            }
+            else if (provisionHintRestart)
+            {
+                lblProvision.Text = "● Định danh máy: đã có — bấm Khởi động lại Bridge để máy hiện trên điện thoại";
+                lblProvision.ForeColor = ColorSuccess;
+                btnProvisionRetry.Enabled = false;
+            }
+            else
+            {
+                lblProvision.Text = "○ Định danh máy: chưa có — bấm ↻ để tạo";
+                lblProvision.ForeColor = ColorMuted;
+                btnProvisionRetry.Enabled = true;
+            }
+        }
+
+        // Nút ↻ trên hàng định danh: tạo lại identity sau lần thất bại. Trước
+        // đây lỗi bị nuốt SILENT nên người dùng nhìn đèn xanh mà không bao giờ
+        // hiểu sao máy không lên điện thoại — giờ thấy lỗi và tự thử lại được.
+        private void ActionRetryProvision()
+        {
+            if (provisioning) return;
+            provisionError = "";
+            UpdateProvisionStatus();
+            BeginProvisionIfNeeded();
         }
 
         private bool IsPortOpen(string host, int port, int timeoutMs)
@@ -1022,12 +1120,21 @@ namespace OpenPocket.Desktop
                     DateTime modified = File.GetLastWriteTime(logPath);
                     string found = "";
                     using (FileStream fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                    using (StreamReader sr = new StreamReader(fs, Encoding.UTF8))
                     {
-                        string content = sr.ReadToEnd();
-                        Match last = default(Match);
-                        foreach (Match m in Regex.Matches(content, @"https://[a-z0-9-]+\.trycloudflare\.com")) last = m;
-                        if (last != null && last.Success) found = last.Value;
+                        // Đọc CHỈ 32KB CUỐI file (FileStream.Seek): bản cũ
+                        // ReadToEnd TOÀN BỘ log mỗi nhịp 3.5s — log phình to là
+                        // GUI giật cục. URL tunnel luôn nằm ở dòng gần cuối
+                        // nên phần đuôi là đủ.
+                        const int TailBytes = 32 * 1024;
+                        long start = Math.Max(0, fs.Length - TailBytes);
+                        fs.Seek(start, SeekOrigin.Begin);
+                        using (StreamReader sr = new StreamReader(fs, Encoding.UTF8))
+                        {
+                            string tail = sr.ReadToEnd();
+                            Match last = default(Match);
+                            foreach (Match m in Regex.Matches(tail, @"https://[a-z0-9-]+\.trycloudflare\.com")) last = m;
+                            if (last != null && last.Success) found = last.Value;
+                        }
                     }
                     if (found != "" && modified > bestTime)
                     {
@@ -1078,9 +1185,9 @@ namespace OpenPocket.Desktop
                 return;
             }
 
-            // Lần đầu chạy zip mới: exe tự npm install trước (bộ cài = exe).
-            // Trả false = đang cài ngầm hoặc lỗi đã báo — chuỗi sẽ tự đi tiếp.
-            if (!EnsureBridgeInstalledAsync()) return;
+            // Dependency vendored trong zip — kiểm presence ĐỒNG BỘ (false =
+            // thiếu thành phần, MessageBox đã báo rõ, nút không kẹt trạng thái).
+            if (!EnsureBridgeDepsPresent()) return;
 
             SetBridgeButton(btnStartBridge, false);
             btnStartBridge.Text = "Đang chuẩn bị…";
@@ -1088,34 +1195,73 @@ namespace OpenPocket.Desktop
                 // Định danh máy (lần đầu, qua mạng) phải xong TRƯỚC khi boot —
                 // bridge đọc config một lúc mở, thiếu là đăng ký không được.
                 for (int i = 0; i < 30 && provisioning; i++) Thread.Sleep(500);
-                this.Invoke(new MethodInvoker(delegate {
+                SafeInvoke(delegate {
                     SetBridgeButton(btnStartBridge, true);
                     btnStartBridge.Text = "Bật Bridge";
                     try
                     {
-                        // Máy mới chưa có task tự khởi động → tạo luôn (bridge
-                        // chạy bằng task elevated; thiếu task thì /run vô hiệu)
-                        if (!IsAutostartTaskExisting())
+                        if (IsAutostartTaskExisting())
                         {
-                            EnsureAutostartTaskEnabled();
+                            // Chạy task có sẵn — PHẢI kiểm exit code: trước đây
+                            // /run hụt (task hỏng, thiếu quyền…) mà không ai hay,
+                            // đèn xanh chỉ là mơ hồ của tick sau.
+                            var psiRun = new ProcessStartInfo("schtasks.exe", "/run /tn OpenPocketBridge");
+                            psiRun.CreateNoWindow = true;
+                            psiRun.UseShellExecute = false;
+                            psiRun.RedirectStandardOutput = true;
+                            psiRun.RedirectStandardError = true;
+                            using (Process p = Process.Start(psiRun))
+                            {
+                                bool exited = p.WaitForExit(10000);
+                                if (!exited)
+                                {
+                                    MessageBox.Show(this, "Không bật được bridge: lệnh schtasks /run không thoát sau 10 giây.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                    return;
+                                }
+                                if (p.ExitCode != 0)
+                                {
+                                    string err = "";
+                                    try { err = p.StandardError.ReadToEnd().Trim(); } catch { }
+                                    if (err == "") { try { err = p.StandardOutput.ReadToEnd().Trim(); } catch { } }
+                                    MessageBox.Show(this, "Không bật được bridge — task OpenPocketBridge chạy thất bại (schtasks exit " + p.ExitCode + "): " + err, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                    return;
+                                }
+                            }
                         }
-                        ProcessStartInfo psiRun = new ProcessStartInfo
+                        else
                         {
-                            FileName = "schtasks.exe",
-                            Arguments = "/run /tn OpenPocketBridge",
-                            CreateNoWindow = true,
-                            UseShellExecute = false,
-                        };
-                        Process.Start(psiRun);
+                            // Chưa có task (cài mới, hoặc autostart người dùng
+                            // vừa TẮT): chạy node trực tiếp. TUYỆT ĐỐI không tự
+                            // tạo lại task ở đây — bản cũ tự bật lại autostart
+                            // ngay sau khi người dùng bỏ tick, rất khó chịu.
+                            StartBridgeDirect();
+                        }
                         Thread.Sleep(800);
                         CheckStatus();
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show(this, "Không khởi động được task: " + ex.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        MessageBox.Show(this, "Không khởi động được bridge: " + ex.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     }
-                }));
+                });
             });
+        }
+
+        // Bật bridge KHÔNG qua task scheduler: node chạy trực tiếp, cửa sổ ẩn,
+        // log ghi tiếp bridge-task.log (cùng dòng lệnh với .vbs của task). GUI
+        // chạy elevated (manifest) nên tiến trình con kế thừa quyền — tương
+        // đương /RL HIGHEST. Được dùng khi task tự khởi động chưa tồn tại:
+        // Bật Bridge phải LUÔN chạy được, còn autostart chỉ qua checkbox.
+        private void StartBridgeDirect()
+        {
+            string entry = Path.Combine(bridgeDir, "src", "index.js");
+            string logPath = Path.Combine(GetBridgeDataDir(), "bridge-task.log");
+            var psi = new ProcessStartInfo("cmd.exe",
+                "/c \"\"" + nodeExe + "\" \"" + entry + "\" >> \"" + logPath + "\" 2>&1\"");
+            psi.WorkingDirectory = bridgeDir;
+            psi.CreateNoWindow = true;
+            psi.UseShellExecute = false;
+            Process.Start(psi);
         }
 
         private void ActionStopBridge()
@@ -1150,29 +1296,37 @@ namespace OpenPocket.Desktop
                 }
 
                 // 2. Fallback WMI: bridge do task scheduler mở chạy elevated KHÔNG có
-                // pid file — dò đúng process node mang "bridge\src\index.js" trong
-                // command line rồi kill (GUI elevated nên kill được).
-                try
+                // pid file — dò process node có ĐẦY ĐỦ đường dẫn entry script của
+                // cài đặt NÀY trong command line rồi kill. Điều kiện cũ (chỉ cần
+                // chữ "bridge" + "index.js" xuất hiện riêng lẻ) từng giết NHẦM
+                // node.exe của người khác đang chạy bridge trong repo/thư mục
+                // khác trên cùng máy. bridgeDir chưa xác định thì KHÔNG kill mò.
+                if (bridgeDir != "" && File.Exists(Path.Combine(bridgeDir, "src", "index.js")))
                 {
-                    using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
-                        "SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name = 'node.exe'"))
+                    string entryThis = Path.Combine(bridgeDir, "src", "index.js")
+                        .ToLowerInvariant().Replace('/', '\\');
+                    try
                     {
-                        foreach (ManagementObject proc in searcher.Get())
+                        using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                            "SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name = 'node.exe'"))
                         {
-                            string cmdLine = Convert.ToString(proc["CommandLine"]) ?? "";
-                            string lower = cmdLine.ToLower();
-                            if (lower.Contains("bridge") && lower.Contains("index.js"))
+                            foreach (ManagementObject proc in searcher.Get())
                             {
-                                try
+                                string cmdLine = (Convert.ToString(proc["CommandLine"]) ?? "")
+                                    .ToLowerInvariant().Replace('/', '\\');
+                                if (cmdLine.Contains(entryThis))
                                 {
-                                    Process.GetProcessById(Convert.ToInt32(proc["ProcessId"])).Kill();
+                                    try
+                                    {
+                                        Process.GetProcessById(Convert.ToInt32(proc["ProcessId"])).Kill();
+                                    }
+                                    catch { }
                                 }
-                                catch { }
                             }
                         }
                     }
+                    catch { }
                 }
-                catch { }
 
                 Thread.Sleep(800);
                 // Bridge đã chết — xóa hẳn file log (owner 13/09: log không giữ ở máy).
@@ -1260,7 +1414,7 @@ namespace OpenPocket.Desktop
                 }
                 Dictionary<string, object> result = dict;
                 string errText = error;
-                this.Invoke(new MethodInvoker(delegate { onDone(result, errText); }));
+                SafeInvoke(delegate { onDone(result, errText); });
             });
         }
 
@@ -1327,8 +1481,10 @@ namespace OpenPocket.Desktop
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
                 var p = Process.Start(psi);
-                p.WaitForExit();
-                return p.ExitCode == 0;
+                // schtasks chạy trên UI thread — chờ CÓ GIỚI HẠN, không đóng
+                // băng cửa sổ vô hạn; quá hạn coi như task không tồn tại.
+                bool exited = p.WaitForExit(10000);
+                return exited && p.ExitCode == 0;
             }
             catch
             {
@@ -1386,9 +1542,11 @@ namespace OpenPocket.Desktop
                 psi.CreateNoWindow = true;
                 psi.UseShellExecute = false;
                 var p = Process.Start(psi);
-                p.WaitForExit();
+                // Timeout 10s — schtasks trên UI thread không được treo vô hạn;
+                // quá hạn thì chưa thể đọc ExitCode, coi như tạo chưa xong.
+                bool exited = p.WaitForExit(10000);
 
-                chkAutostart.Checked = (p.ExitCode == 0);
+                chkAutostart.Checked = exited && p.ExitCode == 0;
             }
             catch (Exception ex)
             {
@@ -1404,7 +1562,7 @@ namespace OpenPocket.Desktop
                 psi.CreateNoWindow = true;
                 psi.UseShellExecute = false;
                 var p = Process.Start(psi);
-                p.WaitForExit();
+                p.WaitForExit(10000); // timeout — không đóng băng UI vô hạn
                 chkAutostart.Checked = false;
             }
             catch { }
@@ -1699,21 +1857,21 @@ namespace OpenPocket.Desktop
                         liveQr = dict.ContainsKey("qr") ? Convert.ToString(dict["qr"]) : "";
                         masterQr = dict.ContainsKey("masterQr") ? Convert.ToString(dict["masterQr"]) : "";
 
-                        this.Invoke(new MethodInvoker(delegate {
+                        MainForm.SafeInvoke(this, delegate {
                             lblPairCode.Text = codeFormatted;
                             lblExpiry.Text = string.Format("Mã 1 lần sống ~{0} phút — quét bằng camera điện thoại", Math.Ceiling(secondsLeft / 60.0));
                             txtPairUrl.Text = livePairUrl;
                             txtMasterUrl.Text = liveMasterUrl;
                             ShowQr(false);
-                        }));
+                        });
                     }
                 }
                 catch (Exception ex)
                 {
-                    this.Invoke(new MethodInvoker(delegate {
+                    MainForm.SafeInvoke(this, delegate {
                         lblPairCode.Text = "Không đọc được mã";
                         lblExpiry.Text = "Bridge trả lỗi: " + ex.Message;
-                    }));
+                    });
                 }
             });
         }
