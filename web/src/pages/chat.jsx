@@ -1483,6 +1483,7 @@ export function ChatPage({ route }) {
             />
             <textarea
               aria-label="Nhập prompt cho agent"
+              rows="1"
               placeholder={composerHintVi({ running, sending })}
               value={draft}
               onInput={(e) => setDraft(e.currentTarget.value)}

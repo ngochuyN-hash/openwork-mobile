@@ -1606,16 +1606,30 @@ a {
 }
 
 .composer-pills {
+  /* MỘT hàng, cuộn ngang — không xuống dòng. Ba pill model/suy luận/agent vừa
+     nhau là 280–330px mà khổ điện thoại chỉ ~390px: `flex-wrap: wrap` làm hàng
+     này cao 94px, cộng dồn composer lên 191px — mất 1/5 màn hình chỉ để đổi
+     model. Cuộn ngang giữ đúng một hàng 34px. */
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
   margin-bottom: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.composer-pills::-webkit-scrollbar {
+  display: none;
+}
+.composer-pills > * {
+  flex: none;
 }
 .composer-pills .model-pill {
   margin-bottom: 0;
+  max-width: 52vw;
 }
 .agent-pill .model-pill-label {
-  max-width: 34vw;
+  max-width: 30vw;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
