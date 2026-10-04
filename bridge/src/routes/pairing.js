@@ -67,20 +67,25 @@ export function createPairingRoutes(ctx) {
   // trị, không phát cho người lạ chưa token. baseUrl = tunnel/worker hiện
   // tại để CLI ghép QR. QR render ASCII bằng qrcode-terminal NGAY TẠI ĐÂY —
   // GUI desktop không phải gọi API QR ngoài (mã ghép không rời máy).
-  function pairingCode({ res }) {
+  //
+  // MASTER URL + MASTER QR CHỈ cho caller là master (app.js: `device` = null
+  // khi chìa khớp `config.mobileToken`, khác null khi chìa là device key).
+  // Lý do: master token nhúng trong `/#t=` là thứ vĩnh viễn, gỡ device key không
+  // thu hồi được nó — nếu device key gọi được route này thì chỉ cần GỌI MỘT
+  // LẦN trước khi bị gỡ là cầm vĩnh viễn master, hỏng hẳn mô hình "mất máy →
+  // gỡ là sạch". Device key vẫn nhận đủ phần ghép (code/pairUrl/qr) vì đó là
+  // thông tin đã dành cho nó; thiếu 2 field master thì BỎ HẲN khỏi response
+  // (không trả ""), dễ thấy bằng mắt khi soi network tab.
+  function pairingCode({ res, device }) {
     const { config } = ctx;
+    const isMaster = !device;
     const code = ctx.pairing.ensureCode();
     const pairUrl = `${ctx.getBaseUrl()}/#p=${code}${ctx.tenantHashSuffix()}`;
-    const masterUrl = `${ctx.getBaseUrl()}/#t=${config.mobileToken}${ctx.tenantHashSuffix()}`;
     let qr = "";
-    let masterQr = "";
     qrcode.generate(pairUrl, { small: true }, (s) => {
       qr = s;
     });
-    qrcode.generate(masterUrl, { small: true }, (s) => {
-      masterQr = s;
-    });
-    sendJson(res, 200, {
+    const payload = {
       ok: true,
       code,
       codeFormatted: `${code.slice(0, 4)}-${code.slice(4)}`,
@@ -89,9 +94,17 @@ export function createPairingRoutes(ctx) {
       tenant: config.lookupTenant || null,
       pairUrl,
       qr,
-      masterUrl,
-      masterQr,
-    });
+    };
+    if (isMaster) {
+      const masterUrl = `${ctx.getBaseUrl()}/#t=${config.mobileToken}${ctx.tenantHashSuffix()}`;
+      let masterQr = "";
+      qrcode.generate(masterUrl, { small: true }, (s) => {
+        masterQr = s;
+      });
+      payload.masterUrl = masterUrl;
+      payload.masterQr = masterQr;
+    }
+    sendJson(res, 200, payload);
   }
 
   return [
