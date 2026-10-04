@@ -107,16 +107,16 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
     // vĩnh viễn câu "offline" không có lối ra.
     const tenantId = slotKey.startsWith("machine:") ? slotKey.slice("machine:".length) : "";
     if (tenantId && (await env.OWM_STATE.get(`tenant:${tenantId}`)) === null) {
-      return json({ code: "unpaired", message: "Phòng này đã bị xóa — ghép lại bằng mã ghép mới." }, 401);
+      return json({ code: "unpaired", message: "This room was deleted - pair again with a new pairing code." }, 401);
     }
     return json(
-      { code: "bridge_offline", message: "Máy tính của phòng này chưa đăng ký hoặc đã offline quá 20 phút." },
+      { code: "bridge_offline", message: "This room's computer has not registered, or has been offline for over 20 minutes." },
       503
     );
   }
   if (Date.now() - machine.updatedAt > STALE_MS) {
     return json(
-      { code: "bridge_offline", message: "Máy tính của phòng này chưa đăng ký hoặc đã offline quá 20 phút." },
+      { code: "bridge_offline", message: "This room's computer has not registered, or has been offline for over 20 minutes." },
       503
     );
   }
@@ -127,9 +127,9 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
     return json(
       {
         code: "tunnel_down",
-        message: `Máy tính đang bật và bridge đang sống, nhưng Cloudflare đang tạm chặn mở đường hầm (giới hạn 429). Bridge tự thử lại${
-          waitMin ? ` (lần tới sau ~${waitMin} phút)` : ""
-        } — đừng restart bridge, càng restart càng lâu.`,
+        message: `The computer is on and the bridge is alive, but Cloudflare is temporarily blocking tunnel creation (429 rate limit). The bridge retries on its own${
+          waitMin ? ` (next try in ~${waitMin} min)` : ""
+        } - do not restart the bridge, restarting only makes it longer.`,
       },
       503
     );
@@ -154,7 +154,7 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
       return json(
         {
           code: "tunnel_down",
-          message: "Đường hầm tới máy vừa đứt — bridge tự mở đường mới trong vài phút rồi điện thoại tự vào lại. Đừng restart bridge.",
+          message: "The tunnel to your computer just broke - the bridge opens a new one within a few minutes and your phone reconnects by itself. Do not restart the bridge.",
         },
         502
       );
@@ -174,7 +174,7 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
     return result;
   } catch (error) {
     console.error(`[worker] relay: fetch ${machine.url}${url.pathname} failed:`, error?.stack ?? String(error));
-    return json({ code: "bridge_unreachable", message: "Không nối được tunnel của bridge (vừa đổi địa chỉ? thử lại vài giây)." }, 502);
+    return json({ code: "bridge_unreachable", message: "Could not reach the bridge tunnel (address just changed? retry in a few seconds)." }, 502);
   }
 }
 
@@ -232,16 +232,16 @@ async function handle(request, env) {
     // 401 — người lạ không dò ra được phòng nào tồn tại (bridge vẫn so lại lần 2).
     if (url.pathname === "/api/pair/tenant" && request.method === "POST") {
       if (await rateLimited(request, "pair-tenant", 10)) {
-        return json({ code: "rate_limited", message: "Đăng nhập quá nhiều lần — đợi khoảng 1 phút rồi thử lại." }, 429);
+        return json({ code: "rate_limited", message: "Too many sign-in attempts - wait about 1 minute and try again." }, 429);
       }
       const body = await readJson(request);
       const tenant = String(body?.user ?? "").trim().toLowerCase();
       if (!TENANT_RE.test(tenant)) {
-        return json({ code: "invalid_credentials", message: "Sai tên đăng nhập hoặc mật khẩu." }, 401);
+        return json({ code: "invalid_credentials", message: "Wrong login name or password." }, 401);
       }
       const record = await env.OWM_STATE.get(`tenant:${tenant}`, "json").catch(() => null);
       if (!record?.secret || !(await sameSecret(String(body?.secret ?? ""), record.secret))) {
-        return json({ code: "invalid_credentials", message: "Sai tên đăng nhập hoặc mật khẩu." }, 401);
+        return json({ code: "invalid_credentials", message: "Wrong login name or password." }, 401);
       }
       return relay(env, `machine:${tenant}`, request, url, body);
     }
@@ -255,16 +255,16 @@ async function handle(request, env) {
     // + rate-limit chặn ngập KV nếu URL worker bị lộ.
     if (url.pathname === "/api/tenant/create" && request.method === "POST") {
       if (await rateLimited(request, "create-room", 5)) {
-        return json({ code: "rate_limited", message: "Tạo phòng quá nhiều lần — đợi khoảng 1 phút rồi thử lại." }, 429);
+        return json({ code: "rate_limited", message: "Too many rooms created - wait about 1 minute and try again." }, 429);
       }
       const body = await readJson(request);
       const user = String(body?.user ?? "").trim().toLowerCase();
       const secret = String(body?.secret ?? "");
       if (!TENANT_RE.test(user) || ["main", "admin", "root", "api", "www"].includes(user)) {
-        return json({ code: "invalid_user", message: "Tên phòng chỉ gồm 2-32 ký tự a-z, 0-9, gạch ngang." }, 400);
+        return json({ code: "invalid_user", message: "Room name must be 2-32 characters of a-z, 0-9 or dashes." }, 400);
       }
       if (secret.length < 8 || secret.length > 128 || /[\s"':&]/.test(secret)) {
-        return json({ code: "invalid_secret", message: "Mật khẩu cần 8-128 ký tự, không chứa dấu cách, nháy, ':' hoặc '&'." }, 400);
+        return json({ code: "invalid_secret", message: "Password must be 8-128 characters with no spaces, quotes, ':' or '&'." }, 400);
       }
       let name = String(body?.name ?? "").replace(/[\r\n"']/g, "").trim().slice(0, 60);
       if (!name) name = user;
@@ -273,17 +273,17 @@ async function handle(request, env) {
         if (existing.secret && (await sameSecret(secret, existing.secret))) {
           return json({ ok: true, existed: true, user, name: existing.name || name });
         }
-        return json({ code: "taken", message: "Tên phòng này đã có người dùng và mật khẩu không khớp." }, 401);
+        return json({ code: "taken", message: "That room name is already taken and the password does not match." }, 401);
       }
       let rooms;
       try {
         rooms = await env.OWM_STATE.list({ prefix: "tenant:" });
       } catch (error) {
         console.error("[worker] tenant/create: KV list failed:", error?.stack ?? String(error));
-        return json({ code: "kv_error", message: "Worker bận (KV lỗi) — thử lại sau ít phút." }, 503);
+        return json({ code: "kv_error", message: "The worker is busy (KV error) - try again in a few minutes." }, 503);
       }
       if (rooms.keys.length >= 50) {
-        return json({ code: "full", message: "Hết chỗ cho phòng mới — liên hệ chủ worker." }, 403);
+        return json({ code: "full", message: "No room slots left - contact the worker owner." }, 403);
       }
       await env.OWM_STATE.put(`tenant:${user}`, JSON.stringify({ secret, name, createdAt: Date.now() }));
       return json({ ok: true, created: true, user, name });
@@ -293,7 +293,7 @@ async function handle(request, env) {
       .trim()
       .toLowerCase();
     if (tenant && !TENANT_RE.test(tenant)) {
-      return json({ code: "bridge_offline", message: "Mã máy (phòng) không hợp lệ." }, 503);
+      return json({ code: "bridge_offline", message: "Invalid machine code (room)." }, 503);
     }
     // No room on the bootstrap routes: refuse with a clear error instead of
     // fanning a stranger's code/key out to other people's machines. Every
@@ -311,7 +311,7 @@ async function handle(request, env) {
         {
           code: "tenant_required",
           message:
-            "Thiếu phòng (tenant) — quét lại QR hoặc mở lại link ghép/master ĐẦY ĐỦ từ máy tính (link luôn kèm &m=<phòng>). Link hay khóa bị mất phòng không vào được qua worker.",
+            "Missing room (tenant) - rescan the QR or reopen the FULL pairing/master link from your computer (the link always carries &m=<room>). Links or keys that lost the room cannot get in through the worker.",
         },
         400
       );
@@ -336,7 +336,7 @@ export default {
       return await handle(request, env);
     } catch (error) {
       console.error(`[worker] ${request.method} ${path} failed:`, error?.stack ?? String(error));
-      return json({ code: "worker_error", message: "Worker gặp lỗi bất ngờ — thử lại sau ít phút." }, 500);
+      return json({ code: "worker_error", message: "The worker hit an unexpected error - try again in a few minutes." }, 500);
     }
   },
 };
