@@ -36,8 +36,28 @@ test("bảng được bọc trong hộp cuộn ngang cho màn hình hẹp", () =
 
 test("cột được canh phải giữ nguyên text-align", () => {
   const html = renderMarkdownHtml("| Tên | Tổng |\n| --- | ---: |\n| A | 12 |");
-  assert.match(html, /<th style="text-align:right">Tổng<\/th>/);
-  assert.match(html, /<td style="text-align:right">12<\/td>/);
+  assert.match(html, /text-align:right/);
+  assert.match(html, />Tổng<\/th>/);
+  assert.match(html, /<td class="md-align-right" style="text-align:right">12<\/td>/);
+});
+
+test("ô căn phải có class để CSS không phụ thuộc định dạng `style=`", () => {
+  const html = renderMarkdownHtml("| Tên | Tổng |\n| --- | ---: |");
+  assert.match(html, /<th class="md-align-right" style="text-align:right">/);
+  // Cột KHÔNG căn thì không được thêm class/style thừa.
+  assert.match(html, /<th>Tên<\/th>/);
+  assert.doesNotMatch(html, /md-align-left/);
+});
+
+test("ảnh trong workspace đi qua fileHref, không ra ảnh vỡ", () => {
+  const html = renderMarkdownHtml("![báo đồ](charts/revenue.png)", { fileHref });
+  assert.match(html, /src="\/ws\/ws_1\/files\/raw\?path=charts%2Frevenue\.png"/);
+  assert.doesNotMatch(html, /src="#"/);
+});
+
+test("ảnh ngoài vẫn giữ URL và không bị fileHref đụng vào", () => {
+  const html = renderMarkdownHtml("![logo](https://cdn.example.com/a.png)", { fileHref });
+  assert.match(html, /src="https:\/\/cdn\.example\.com\/a\.png"/);
 });
 
 test("cell của bảng vẫn parse markdown bên trong (bold, code)", () => {

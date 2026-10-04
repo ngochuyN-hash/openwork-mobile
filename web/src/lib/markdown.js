@@ -167,7 +167,18 @@ function buildMarked({ fileHref } = {}) {
       },
       image({ href, title, text }) {
         const titleAttr = title ? ` title="${escapeAttribute(title)}"` : "";
-        return `<a href="${escapeAttribute(safeHref(href))}" target="_blank" rel="noreferrer"><img src="${escapeAttribute(safeHref(href))}" alt="${escapeAttribute(escapeText(text))}"${titleAttr} loading="lazy" decoding="async"></a>`;
+        // Ảnh trong workspace phải đi qua `fileHref` y hệt link/code span,
+        // nếu không `![](screenshot.png)` sẽ ra ảnh vỡ vì safeHref("a.png")
+        // không phải URL hợp lệ.
+        let src = safeHref(href);
+        if (typeof fileHref === "function" && !isExternalHref(href)) {
+          try {
+            src = fileHref(normalizeFilePath(href)) || src;
+          } catch {
+            /* giữ src đã an toàn */
+          }
+        }
+        return `<a href="${escapeAttribute(src)}" target="_blank" rel="noreferrer"><img src="${escapeAttribute(src)}" alt="${escapeAttribute(escapeText(text))}"${titleAttr} loading="lazy" decoding="async"></a>`;
       },
       // Bọc bảng trong hộp cuộn ngang: cột số trên điện thoại phải trượt được,
       // không bị bóp về 0 và đọc lối dấu `|` chồng lên nhau.
@@ -183,8 +194,11 @@ function buildMarked({ fileHref } = {}) {
       },
       tablecell({ tokens, header, align }) {
         const tag = header ? "th" : "td";
+        // Giữ `style` cho khớp desktop, nhưng thêm class để CSS không phụ
+        // thuộc vào định dạng chuỗi `style=` — đổi renderer là rule CSS chết.
         const style = align ? ` style="text-align:${align}"` : "";
-        return `<${tag}${style}>${this.parser.parseInline(tokens)}</${tag}>`;
+        const alignClass = align ? ` class="md-align-${align}"` : "";
+        return `<${tag}${alignClass}${style}>${this.parser.parseInline(tokens)}</${tag}>`;
       },
       del({ raw, tokens }) {
         // marked v15 cho cả `~một~` thành <del>; desktop chặn lại vì `a ~ b ~ c`
