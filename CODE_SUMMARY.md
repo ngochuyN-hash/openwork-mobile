@@ -1,5 +1,43 @@
 # CODE_SUMMARY — OpenWork Mobile
 
+## Bridge route table split out of `index.js` — 2026-10-04 (bridge only)
+
+`bridge/src/index.js` went 750 → 284 lines. The ~500-line `handleRequest`
+if-chain moved to `bridge/src/app.js` as `createApp(deps)`, with the handlers
+grouped by concern under `bridge/src/routes/` and matched by the small
+`src/router.js`. The point was not line count: `index.js` exported **nothing**,
+so none of the 13 existing test files could reach `handleRequest` — the routing
+table, the auth gate and every status code were untested. A mistyped `/api/...`
+path stayed green until runtime.
+
+Pure, dependency-free pieces moved out too: `src/rate-limit.js` (sliding-window
+per-IP limiter + sweep) and `src/http-util.js` (`readJsonBody`/`sendJson`,
+replacing ~25 hand-repeated `writeHead + JSON.stringify` pairs).
+`src/openwork-state.js` now owns `openworkStateInfo()` on its own.
+
+**What did NOT change:** every route, status code and message. Verified by a
+throwaway script that extracted all 57 human-readable string literals from the
+old `index.js` and asserted each one still exists somewhere in `bridge/src` —
+one drifted (a single character in the EADDRINUSE warning) and was restored
+verbatim from `git show HEAD`. The auth-gate ORDER is preserved exactly:
+`/api/pair` and `/api/pair/tenant` still run before the gate, and an unknown
+`/api/` path still answers **401 without a token** — 404 `not_found` only once
+you hold one.
+
+**New test file `bridge/test/routes.test.js` — 23 cases** (bridge suite 57 → 80,
+all green). It drives `createApp` over real HTTP with fake deps: no bridge
+process, no config on the machine, no tunnel. `test/startup.test.js` still boots
+a REAL isolated bridge process and asserts the same `/api/state` and
+`/api/pairing-code` behaviour end to end, and still passes.
+
+> ⚠️ Trap hit while writing that test, worth remembering: `PairingService` and
+> `saveConfig` write to `bridgeDataDir()`. The first version of the test did not
+> set `OPENWORK_BRIDGE_DIR`, so it minted devices into the **real**
+> `%APPDATA%\openwork-bridge\devices.json` and one test even called `revoke()`
+> on it. `withApp()` now points `OPENWORK_BRIDGE_DIR` at a temp dir per test and
+> restores it afterwards, matching `test/pairing.test.js`. Same class of bug as
+> the CLI sandbox one. The real store was verified intact afterwards.
+
 > Last updated: 2026-10-04 — parity rounds closed: session extras (cost, rename, /compact, steer,
 > effort/variant, cross-session search, pin/archive/groups, share) and Settings maintenance
 > (pairing-code display, machine rename, tunnel restart, engine reload) — see the 2026-10-04 section.
@@ -588,7 +626,17 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 
 | File | Responsibility |
 |---|---|
-| `src/index.js` | Entry: bootstrap token → discovery loop (5s + fs.watch) → HTTP server (API + static). Prints the pairing QR (**`currentBase()` uses the unit-tested `pairingBaseUrl()` from config.js: the worker address only wins WITH a room; the QR link carries `&m=<room>`**). Route **`POST /api/pair/tenant`** (multi-tenant sign-in: compares user/pass against config; on match `mintDevice` + returns `{token, device, tenant, machineName}`; not joined → 404 `not_joined`; rate-limited together with /api/pair). `/api/state` also carries `edge: {tenant, machineName}` and **`openwork: {found, exe, version, source, running, candidates}` from `describeOpenWorkInstall()` (openwork-version.js) — the legacy `openworkExeFound` boolean stays in the contract and is now read from the SAME lookup, so version + origin cost one probe, not two**. Both `/api/state` and `POST /api/openwork/path` build that object through ONE helper `openworkStateInfo()` so the two can never drift. `candidates` are now sent **even when the exe was found** — reinstalling OpenWork elsewhere is an ordinary event and needs the same chooser, not a dead verdict; `running` comes from `isProcessAlive(engine.ownerPid)` because `engine-instances.json` survives the app closing, so "has an entry" ≠ "is open". Route **`POST /api/openwork/path`** (body `{path}` → saves `config.openworkExe`, answers `{ok, openwork}`): added AFTER the auth gate and deliberately sharing `wakeRateLimited` (5/min/IP) with `/api/openwork/wake` — no new limiter family. It only **validates + stores, never spawns** (`normalizeExePathInput()` → `existsSync` + `statSync().isFile()` + `isOpenWorkExeName()`), because the stored value IS what wake/boot launch later — hence the name check is the RCE guard. Quote-stripping must run **before** the name check: a path pasted from PowerShell is `"C:\...\OpenWork.exe"`, whose raw basename carries the quote and would be rejected as the wrong file name. `worker/src/index.js` needed NO change: `relay()` forwards every `/api/*` path. uncaughtException safety net. Single version source: `bridge/package.json` (the old VERSION file is gone). |
+| `src/index.js` | Entry: bootstrap token → discovery loop (5s + fs.watch) → hand `createApp()` its singletons → listen (with the EADDRINUSE retry) → SIGINT + uncaughtException net. Prints the pairing QR (**`currentBase()` uses the unit-tested `pairingBaseUrl()` from config.js: the worker address only wins WITH a room; the QR link carries `&m=<room>`**). Owns the mutable singletons the HTTP layer reads — `config`, `state`, `pairing`, and the `tunnel` holder whose `getState`/`restart` are swapped for the real cloudflared controller once `startQuickTunnel` resolves. Single version source: `bridge/package.json` (the old VERSION file is gone). |
+| `src/app.js` | The HTTP surface, extracted so it is testable. `createApp(deps)` builds the route table + auth gate and returns `{server, handleRequest, ctx, routes}`. Before this, `handleRequest` was a ~500-line if-chain inside `index.js` — a file exporting NOTHING, so not one of the test files could reach it: a mistyped `/api/...` path stayed green until runtime. `index.js` still boots/discovers/listens and only hands over its singletons; nothing in the route layer reads module-level state. **The gate order is preserved exactly**: `/api/pair` and `/api/pair/tenant` run BEFORE the gate (a stranger must be able to pair in), everything else needs the master `owm_` OR a device key `owd_` (header OR `?_t=` on GET), and an unknown `/api/` path still answers **401 without a token — 404 `not_found` only once you hold one**, so the phone cannot probe which endpoints exist. Route **`POST /api/pair/tenant`** (multi-tenant sign-in: compares user/pass against config; on match `mintDevice` + returns `{token, device, tenant, machineName}`; not joined → 404 `not_joined`; rate-limited together with /api/pair). `/api/state` also carries `edge: {tenant, machineName}` and **`openwork: {found, exe, version, source, running, candidates}` from `describeOpenWorkInstall()` (openwork-version.js) — the legacy `openworkExeFound` boolean stays in the contract and is now read from the SAME lookup, so version + origin cost one probe, not two**. Both `/api/state` and `POST /api/openwork/path` build that object through ONE helper `openworkStateInfo()` so the two can never drift. `candidates` are now sent **even when the exe was found** — reinstalling OpenWork elsewhere is an ordinary event and needs the same chooser, not a dead verdict; `running` comes from `isProcessAlive(engine.ownerPid)` because `engine-instances.json` survives the app closing, so "has an entry" ≠ "is open". Route **`POST /api/openwork/path`** (body `{path}` → saves `config.openworkExe`, answers `{ok, openwork}`): added AFTER the auth gate and deliberately sharing `wakeRateLimited` (5/min/IP) with `/api/openwork/wake` — no new limiter family. It only **validates + stores, never spawns** (`normalizeExePathInput()` → `existsSync` + `statSync().isFile()` + `isOpenWorkExeName()`), because the stored value IS what wake/boot launch later — hence the name check is the RCE guard. Quote-stripping must run **before** the name check: a path pasted from PowerShell is `"C:\...\OpenWork.exe"`, whose raw basename carries the quote and would be rejected as the wrong file name. |
+| `src/router.js` | Route matching over the declared table: exact string, RegExp, or `"*/prefix"`, first match wins, `method: "*"` for any verb. Order is the contract — the `/api/ow/` proxy is a prefix and therefore sits last. |
+| `src/routes/pairing.js` | `/api/pair`, `/api/pair/tenant` (the two public routes), `/api/devices`, `DELETE /api/devices/:id`, `/api/pairing-code` (ASCII QR rendered here so the desktop GUI never fetches a code that never leaves the machine). |
+| `src/routes/status.js` | `/api/state`, `/api/recheck`, `/api/tunnel/restart`, `/api/machine/name`. |
+| `src/routes/openwork.js` | `/api/openwork/wake` and `/api/openwork/path`, sharing the one 5/min/IP limiter. |
+| `src/routes/fs.js` | `/api/fs/ls`, `/api/fs/mkdir` (workspace folder picker, behind the same device lock). |
+| `src/routes/proxy.js` | `/api/ow/` → openwork-server with the owner token; 503 distinguishes `restart_required` from `upstream_unavailable`. |
+| `src/rate-limit.js` | Sliding-window per-IP limiter + the sweep that stops the maps growing with every IP ever seen. Pure, so the limits are testable without an HTTP server. |
+| `src/http-util.js` | `readJsonBody()` (1 MB cap) and `sendJson()` — replaces ~25 hand-repeated `writeHead + JSON.stringify` pairs. |
+| `src/openwork-state.js` | `openworkStateInfo()`, the ONE shape both `/api/state` and `POST /api/openwork/path` answer with, so they cannot drift. |
 | `src/config.js` | Runtime config (mobileToken `owm_`, ownerToken `owt_`, port, publicUrl, **lookupUrl + lookupSecret + lookupTenant + machineName**). Lives OUTSIDE the repo: `%APPDATA%\openwork-bridge\config.json`. Empty `lookupTenant` = the machine is NOT a room on the shared worker: the worker refuses roomless web entry (400 `tenant_required`), so **`pairingBaseUrl()`** (pure + unit-tested in `test/config.test.js`) points pairing QRs at the tunnel/public URL instead of the worker; the heartbeat still registers the tunnel under the owner's legacy `machine:main` slot (API relay only, no web login). |
 | `src/bootstrap.js` | Mints/appends the owner token into `%APPDATA%\openwork\tokens.json` (atomic + .bak). hash = plain sha256 hex, fixed id `openwork-mobile-bridge`. |
 | `src/discovery.js` | Reads `engine-instances.json` (ownerPid) → parses netstat → probes `/health` → checks `/whoami` (token active). **`isProcessAlive(pid)`** = `process.kill(pid, 0)` (no child process, unlike a `tasklist` spawn; `EPERM` still counts as alive) — needed because the registry file outlives the app, so `/api/state` can report "installed but not running" honestly. |
@@ -612,6 +660,7 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | `test/lookup.test.js` | Heartbeat: registers IMMEDIATELY at startup (body carries lowercase `tenant`), no tenant keeps the old body `{url}`, warm-up beats don't re-write, URL change re-registers at once, tunnel-down reports `tunnelDown` by phase (not by an empty getter), 401 backs off. |
 | `test/pairing.test.js` | One-time code (single use, wrong/expired), device keys + revocation, disk persistence, `mintDevice` (key without code, doesn't consume the one-time code). |
 | `test/startup.test.js` | Boots a REAL isolated bridge process (temp `OPENWORK_BRIDGE_DIR`/`OPENWORK_DIR`, tunnel off, dynamic port): authenticated vs unauthenticated HTTP, occupied-port retry, stdout carries neither credential nor one-time code. |
+| `test/routes.test.js` | The route table over real HTTP against `createApp` (23 cases, no bridge process, temp `OPENWORK_BRIDGE_DIR`): the auth gate, that unknown `/api/` paths 401 before 404, `?_t=` on GET, device mint/revoke, the 10/min `/api/pair` ceiling, `/api/ow/` 503s, and that a throwing route answers 500 JSON instead of killing the process. |
 | `test/static.test.js` | `%2e%2e`/`../` out of root blocked; real file + SPA fallback still serve; a file vanishing between stat and open → clean 500 JSON, no uncaughtException. |
 | `test/tunnel.test.js` | 429 backoff ladder (2 min doubling, 10 min cap; plain retry 5s cap 60s) + state persistence across restart via `tunnel-state.json`. |
 | `test/openwork-launch.test.js` | `isOpenWorkExeName()` — the phone-typed-path guard: `OpenWork.exe` accepted case-insensitively; `calc.exe`, `cmd.exe`, a `.txt`, `MyOpenWork.exe`, `OpenWork.exe.bak`, empty/null rejected. `normalizeExePathInput()` — quotes stripped (PowerShell single/double, two nesting layers), ordinary paths untouched, a quote in the middle of the name NOT treated as a wrapper, and the ordering invariant: a still-quoted path fails the name guard, the normalized one passes. |

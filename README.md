@@ -185,8 +185,8 @@ The OTA self-update system was removed: the updater module, the rollback watchdo
 
 ```
 bridge/          # Node.js — discovery, token bootstrap, proxy, static, QR
-  src/           # index.js (entry) · proxy.js · discovery.js · bootstrap.js · auth.js · pairing.js · fslist.js · tunnel.js · lookup.js · openwork-version.js · logwipe.js …
-  test/          # unit tests — 11 files, 47 tests (npm test)
+  src/           # index.js (entry: boot → discovery → listen) · app.js (route table + auth gate) · routes/ (pairing · status · openwork · fs · proxy) · router.js · rate-limit.js · http-util.js · proxy.js · discovery.js · bootstrap.js · auth.js · pairing.js · fslist.js · tunnel.js · lookup.js · openwork-version.js · logwipe.js …
+  test/          # unit tests — 14 files, 80 tests (npm test)
   scripts/       # e2e-live.mjs, dbg-prompt.mjs (live tests against a real OpenWork)
 worker/          # Cloudflare Worker "openpocket" — fixed URL + multi-tenant
   src/index.js   # /__register (room check-in) · /api/* (per-room relay) · serves the web app
@@ -220,7 +220,22 @@ CODE_SUMMARY.md  # code map + the "symptom → where to fix" table
 - Background stdout no longer prints pairing codes, QR payloads or the master key. Interactive terminals and the authenticated pairing-code API still support pairing.
 - Roomless pairing is refused at the worker: 400 `tenant_required` for a tenantless `POST /api/pair` / `GET /api/state` (invalid JSON included) instead of relaying a stranger's code/key to any machine.
 - `web/public/_headers` supplies the same CSP to Cloudflare's asset-first path without routing every static request through the Worker. Build output includes this file; production headers require deployment verification.
-- Local verification commands: `npm --prefix bridge test` (50 tests), `node --test worker/test/*.test.mjs` (11 tests), `npm --prefix web test` (44 tests), and `npm --prefix web run build`. These do not publish a release or restart the installed bridge.
+- Local verification commands: `npm --prefix bridge test` (80 tests), `node --test worker/test/*.test.mjs` (11 tests), `npm --prefix web test` (44 tests), and `npm --prefix web run build`. These do not publish a release or restart the installed bridge.
+
+## Bridge routing (2026-10-04)
+
+The bridge's HTTP surface is a **declared route table**, not an if-chain:
+`bridge/src/router.js` matches in order (exact path, RegExp, or `"*/prefix"`,
+with `method: "*"` for the catch-all proxy) over handlers grouped by concern in
+`bridge/src/routes/`. `bridge/src/app.js` exposes `createApp(deps)` → `{server,
+handleRequest, ctx, routes}`; `bridge/src/index.js` only boots, discovers and
+listens, and hands over its singletons. Two rules the structure depends on, so
+don't "tidy" them away:
+
+- **Auth-gate order.** `/api/pair` and `/api/pair/tenant` run *before* the gate — a stranger must be able to pair in. Everything else under `/api/` needs the master `owm_` key or a device `owd_` key (header, or `?_t=` on GET for `<img>`/EventSource). An unknown `/api/` path answers **401 without a token** and only `404 not_found` once you hold one, so the phone cannot probe which endpoints exist.
+- **`ctx.tunnel` is a holder object, not a captured function.** `index.js` swaps in the real cloudflared controller after `startQuickTunnel` resolves; routes must read through the holder or they will keep the boot-time stub.
+
+`bridge/test/routes.test.js` covers the table over real HTTP with fake deps. Tests in that file must set `OPENWORK_BRIDGE_DIR` to a temp dir — `PairingService` and `saveConfig` write to the real `%APPDATA%` store otherwise.
 
 ## Quick troubleshooting
 
@@ -236,7 +251,7 @@ CODE_SUMMARY.md  # code map + the "symptom → where to fix" table
 ## Development
 
 ```bash
-cd bridge && npm test                                   # 36 unit tests
+cd bridge && npm test                                   # 80 unit tests
 node bridge/scripts/e2e-live.mjs <wsId> <provider> <model>   # live E2E
 cd web && npm run dev                                   # dev server (proxies /api through the bridge)
 cd web && npm run build && cd ../worker && npx wrangler deploy # build + deploy the "fixed URL" worker (openpocket)

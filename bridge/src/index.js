@@ -1,20 +1,17 @@
-import http from "node:http";
-import { existsSync, readFileSync, statSync, watch, writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, watch, writeFileSync, unlinkSync } from "node:fs";
 import qrcode from "qrcode-terminal";
 import { loadConfig, saveConfig, bridgeDataDir, pairingBaseUrl } from "./config.js";
 import { ensureOwnerToken } from "./bootstrap.js";
-import { discoverServer, checkTokenActive, readEngineRegistry, probeServerUrl, isProcessAlive } from "./discovery.js";
-import { isTokenAuthorized, requestToken, deny } from "./auth.js";
-import { proxyToOpenWork } from "./proxy.js";
-import { createStaticHandler } from "./static.js";
+import { discoverServer, checkTokenActive, probeServerUrl } from "./discovery.js";
 import { openworkFilePath } from "./paths.js";
 import { startQuickTunnel } from "./tunnel.js";
 import { startLookup } from "./lookup.js";
 import { PairingService, CODE_TTL_MINUTES } from "./pairing.js";
-import { candidateExePaths, isOpenWorkExeName, normalizeExePathInput, launchOpenWork } from "./openwork-launch.js";
-import { describeOpenWorkInstall } from "./openwork-version.js";
-import { listDirs, listRoots, makeDir } from "./fslist.js";
+import { launchOpenWork } from "./openwork-launch.js";
 import { rotateStaleLogs, scheduleDailyWipe, wipeLogs } from "./logwipe.js";
+import { createApp } from "./app.js";
+import { startRateLimitSweep } from "./rate-limit.js";
+import { createStaticHandler } from "./static.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -48,12 +45,14 @@ const state = {
   lastCheckAt: 0,
   tunnelUrl: "", // URL trycloudflare.com hiện tại (đổi mỗi lần cloudflared chạy lại)
 };
-// Trạng thái đường hầm cho /api/state + heartbeat lookup đọc (được thay bằng
-// controller thật ngay khi startQuickTunnel chạy xong bên dưới).
-let tunnelGetState = () => ({ phase: "starting", url: "", streak: 0, nextRetryAt: 0 });
-// Restart thủ công — false = tunnel không chạy (OPENWORK_BRIDGE_TUNNEL=0 / chưa lên)
-let tunnelRestart = () => false;
-// Real tunnel controller — used to kill the cloudflared child on SIGINT.
+// Trạng thái đường hầm cho /api/state + heartbeat lookup đọc. `getState`/`restart`
+// là ô ghi trống: index.js thay chúng bằng controller thật ngay khi
+// startQuickTunnel chạy xong bên dưới (xem onListening).
+const tunnel = {
+  getState: () => ({ phase: "starting", url: "", streak: 0, nextRetryAt: 0 }),
+  // Restart thủ công — false = tunnel không chạy (OPENWORK_BRIDGE_TUNNEL=0 / chưa lên)
+  restart: () => false,
+};
 let tunnelController = null;
 
 // ---------------------------------------------------------------------------
@@ -75,60 +74,6 @@ pairing.onCode = () => {
   // Mã mới (thiết bị vừa ghép xong hoặc mã cũ hết hạn) -> in lại QR
   if (!printingPairing) printPairing(currentBase(), "[pairing] mã ghép MỚI:");
 };
-
-// Rate limit thô cho /api/pair: tối đa 10 lần/phút/IP - chống dò mã
-const pairAttempts = new Map();
-function pairRateLimited(ip) {
-  const now = Date.now();
-  const list = (pairAttempts.get(ip) ?? []).filter((t) => now - t < 60_000);
-  if (list.length >= 10) {
-    pairAttempts.set(ip, list);
-    return true;
-  }
-  list.push(now);
-  pairAttempts.set(ip, list);
-  return false;
-}
-
-// Rate limit cho /api/openwork/wake: 5 lần/phút/IP - chống bấm liên tục mở nhiều app
-const wakeAttempts = new Map();
-function wakeRateLimited(ip) {
-  const now = Date.now();
-  const list = (wakeAttempts.get(ip) ?? []).filter((t) => now - t < 60_000);
-  if (list.length >= 5) {
-    wakeAttempts.set(ip, list);
-    return true;
-  }
-  list.push(now);
-  wakeAttempts.set(ip, list);
-  return false;
-}
-
-// Sweep stale IPs out of the rate-limit maps: entries past the 60s window are
-// dead weight — without this both maps grow forever with every IP ever seen.
-function sweepRateMaps() {
-  const now = Date.now();
-  for (const map of [pairAttempts, wakeAttempts]) {
-    for (const [ip, list] of map) {
-      const alive = list.filter((t) => now - t < 60_000);
-      if (alive.length) map.set(ip, alive);
-      else map.delete(ip);
-    }
-  }
-}
-setInterval(sweepRateMaps, 5 * 60_000).unref();
-
-async function readJsonBody(req, limit = 1_000_000) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > limit) throw new Error("body too large");
-    chunks.push(chunk);
-  }
-  if (!chunks.length) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
 
 async function refreshDiscovery({ force = false } = {}) {
   if (force) state.server = null;
@@ -209,408 +154,24 @@ if (state.restartRequired && !state.tokenActive) {
 // ---------------------------------------------------------------------------
 // 3. HTTP server: the only surface exposed (127.0.0.1). The Cloudflare tunnel +
 //    the openpocket worker front it for remote HTTPS access from the phone.
+//    Bảng route + cổng khóa nằm ở app.js — index.js chỉ còn boot + listen.
 // ---------------------------------------------------------------------------
 const handleStatic = createStaticHandler(join(__dirname, "..", "..", "web", "dist"));
 
-/**
- * Ảnh chụp "OpenWork desktop trên máy tính" mà web vẽ: exe ở đâu, phiên bản
- * bao nhiêu, app có đang mở không, và các đường dẫn ứng viên để đổi.
- * Dùng chung cho /api/state và câu trả lời của POST /api/openwork/path, để hai
- * nơi không lệch nhau (web vẽ thẳng từ câu trả lời của route path).
- */
-function openworkStateInfo() {
-  const info = describeOpenWorkInstall({ configOpenworkExe: config.openworkExe });
-  const owner = readEngineRegistry()?.ownerPid;
-  return {
-    found: info.found,
-    exe: info.exe,
-    version: info.version,
-    source: info.source,
-    // registry nằm lại trên đĩa sau khi app đóng → phải hỏi tiến trình thật.
-    running: isProcessAlive(owner),
-    // Luôn kèm, kể cả khi đã tìm thấy: người dùng cần ĐỔI đường dẫn khi cài
-    // lại OpenWork ở chỗ khác, không chỉ lúc "chưa thấy".
-    candidates: candidateExePaths(config.openworkExe),
-  };
-}
-
-const server = http.createServer((req, res) => {
-  handleRequest(req, res).catch((error) => {
-    console.error("[bridge] request error:", error);
-    if (!res.headersSent) {
-      res.writeHead(500, { "content-type": "application/json" });
-      res.end(JSON.stringify({ code: "internal_error", message: String(error?.message ?? error) }));
-    } else {
-      res.end();
-    }
-  });
+const { server, ctx } = createApp({
+  config,
+  state,
+  pairing,
+  bridgeVersion: BRIDGE_VERSION,
+  handleStatic,
+  refreshDiscovery,
+  tunnel,
+  getBaseUrl: currentBase,
+  tenantHashSuffix,
 });
 
-async function handleRequest(req, res) {
-  const url = new URL(req.url ?? "/", `http://127.0.0.1:${config.port}`);
-  const pathname = decodeURIComponent(url.pathname);
-
-  // SSE (EventSource always sends Accept: text/event-stream): the connection
-  // is long-lived and silent gaps are normal — clear the idle timeout for
-  // THIS socket only; every other request keeps the server defaults.
-  if (String(req.headers["accept"] ?? "").includes("text/event-stream")) {
-    req.socket.setTimeout(0);
-    req.socket.setNoDelay(true);
-  }
-
-  if (pathname.startsWith("/api/")) {
-    // Ghép thiết bị mới: KHÔNG cần token, chỉ cần mã one-time từ QR/terminal
-    if (req.method === "POST" && pathname === "/api/pair") {
-      const ip = req.socket.remoteAddress ?? "?";
-      if (pairRateLimited(ip)) return deny(res);
-      try {
-        const body = await readJsonBody(req);
-        const result = pairing.pair(body?.code, body?.label);
-        if (!result) {
-          res.writeHead(401, { "content-type": "application/json" });
-          res.end(JSON.stringify({ code: "invalid_code", message: `Mã không đúng, đã dùng hoặc hết hạn (mã sống ${CODE_TTL_MINUTES} phút). Lấy mã mới trong terminal bridge.` }));
-          return;
-        }
-        console.log(`[pairing] thiết bị mới đã ghép: ${result.device.label} (${result.device.id})`);
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(result));
-      } catch {
-        res.writeHead(400, { "content-type": "application/json" });
-        res.end(JSON.stringify({ code: "invalid_body", message: "Body JSON không hợp lệ" }));
-      }
-      return;
-    }
-
-    // Đăng nhập multi-tenant từ web: user+pass do chủ worker cấp (thay cho mã
-    // one-time). Chỉ hoạt động khi máy đã tham gia phòng: `openpocket edge join`.
-    if (req.method === "POST" && pathname === "/api/pair/tenant") {
-      const ip = req.socket.remoteAddress ?? "?";
-      if (pairRateLimited(ip)) return deny(res);
-      try {
-        const body = await readJsonBody(req);
-        if (!config.lookupTenant || !config.lookupSecret) {
-          res.writeHead(404, { "content-type": "application/json" });
-          res.end(
-            JSON.stringify({
-              code: "not_joined",
-              message: "Máy này chưa tham gia phòng nào. Trên máy tính chạy: openpocket edge join",
-            })
-          );
-          return;
-        }
-        const userOk = String(body?.user ?? "").trim().toLowerCase() === config.lookupTenant;
-        const passOk = isTokenAuthorized(String(body?.secret ?? ""), config.lookupSecret);
-        if (!userOk || !passOk) {
-          res.writeHead(401, { "content-type": "application/json" });
-          res.end(JSON.stringify({ code: "invalid_credentials", message: "Sai tên đăng nhập hoặc mật khẩu." }));
-          return;
-        }
-        const result = pairing.mintDevice(body?.label);
-        console.log(`[pairing] đăng nhập phòng ${config.lookupTenant}: thiết bị mới "${result.device.label}" (${result.device.id})`);
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({
-            ...result,
-            tenant: config.lookupTenant,
-            machineName: config.machineName || config.lookupTenant,
-          })
-        );
-      } catch {
-        res.writeHead(400, { "content-type": "application/json" });
-        res.end(JSON.stringify({ code: "invalid_body", message: "Body JSON không hợp lệ" }));
-      }
-      return;
-    }
-
-    // Các route còn lại: master token (owm_) hoặc khóa thiết bị (owd_).
-    // requestToken() lấy từ header HOẶC ?_t= (GET) — cả hai đều phải được
-    // công nhận như nhau, vì <a>/<img>/EventSource không set được header.
-    const token = requestToken(req, url);
-    const device = token ? pairing.authenticate(token) : null;
-    if (!isTokenAuthorized(token, config.mobileToken) && !device) return deny(res);
-
-    if (req.method === "GET" && pathname === "/api/devices") {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ devices: pairing.list() }));
-      return;
-    }
-    if (req.method === "DELETE" && /^\/api\/devices\/[^/]+$/.test(pathname)) {
-      const id = pathname.split("/").pop();
-      const ok = pairing.revoke(id);
-      res.writeHead(ok ? 200 : 404, { "content-type": "application/json" });
-      res.end(JSON.stringify(ok ? { ok: true, devices: pairing.list() } : { code: "not_found" }));
-      return;
-    }
-
-    // Mã ghép ĐANG SỐNG cho CLI (`openpocket code`) + GUI desktop — không phải
-    // parse log nữa. Auth bắt buộc (master/device): mã ghép là thông tin quản
-    // trị, không phát cho người lạ chưa token. baseUrl = tunnel/worker hiện
-    // tại để CLI ghép QR. QR render ASCII bằng qrcode-terminal NGAY TẠI ĐÂY —
-    // GUI desktop không phải gọi API QR ngoài (mã ghép không rời máy).
-    if (req.method === "GET" && pathname === "/api/pairing-code") {
-      const code = pairing.ensureCode();
-      const pairUrl = `${currentBase()}/#p=${code}${tenantHashSuffix()}`;
-      const masterUrl = `${currentBase()}/#t=${config.mobileToken}${tenantHashSuffix()}`;
-      let qr = "";
-      let masterQr = "";
-      qrcode.generate(pairUrl, { small: true }, (s) => {
-        qr = s;
-      });
-      qrcode.generate(masterUrl, { small: true }, (s) => {
-        masterQr = s;
-      });
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          ok: true,
-          code,
-          codeFormatted: `${code.slice(0, 4)}-${code.slice(4)}`,
-          secondsLeft: pairing.codeSecondsLeft(),
-          baseUrl: currentBase(),
-          tenant: config.lookupTenant || null,
-          pairUrl,
-          qr,
-          masterUrl,
-          masterQr,
-        })
-      );
-      return;
-    }
-
-    if (req.method === "GET" && pathname === "/api/state") {
-      const engine = readEngineRegistry();
-      const openworkInfo = openworkStateInfo();
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          ok: true,
-          bridgeVersion: BRIDGE_VERSION,
-          dataDir: bridgeDataDir(),
-          server: state.server
-            ? { baseUrl: state.server.baseUrl, version: state.server.version, opencodeVersion: state.server.opencodeVersion }
-            : null,
-          tokenActive: state.tokenActive,
-          restartRequired: state.restartRequired,
-          engine: engine ? { pid: engine.ownerPid, enginePort: engine.port } : null,
-          publicUrl: state.tunnelUrl || config.publicUrl || null,
-          tunnel: tunnelGetState(),
-          edge: { tenant: config.lookupTenant || null, machineName: config.machineName || null },
-          devices: pairing.list().length,
-          pairingCodeSecondsLeft: pairing.codeSecondsLeft(),
-          openworkExeFound: openworkInfo.found, // boolean cũ: web + code khác vẫn đọc
-          openwork: openworkInfo,
-          autoLaunchOpenWork: config.autoLaunchOpenWork === true,
-          thisDevice: device ? { id: device.id, label: device.label } : { id: "master", label: "Master token (owm_)" },
-        })
-      );
-      return;
-    }
-
-    if (req.method === "POST" && pathname === "/api/recheck") {
-      await refreshDiscovery({ force: true });
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, server: state.server, tokenActive: state.tokenActive, restartRequired: state.restartRequired }));
-      return;
-    }
-
-    // Restart tunnel THỦ CÔNG (nút "Restart tunnel" GUI): chủ động xin tunnel
-    // mới thay vì đợi bộ đếm backoff 429 (đôi khi hên xui — IP đã đổi mà vẫn
-    // kẹt hẹn cũ trong tunnel-state.json). Bridge giữ nguyên, chỉ cloudflared
-    // được thay; URL mới có rồi bridge tự đăng ký lại lên worker như thường.
-    if (req.method === "POST" && pathname === "/api/tunnel/restart") {
-      if (!tunnelRestart()) {
-        res.writeHead(409, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({
-            code: "tunnel_inactive",
-            message: "Tunnel không chạy (OPENWORK_BRIDGE_TUNNEL=0 hoặc đang restart dở).",
-          })
-        );
-        return;
-      }
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, tunnel: tunnelGetState() }));
-      return;
-    }
-
-    // Đổi tên máy (ô "Tên máy" trong GUI desktop): cập nhật config trong RAM +
-    // file NGAY — đăng nhập mới trên điện thoại thấy tên mới qua /api/pair/
-    // tenant, /api/state cũng báo theo. Không cần restart bridge.
-    if (req.method === "POST" && pathname === "/api/machine/name") {
-      try {
-        const body = await readJsonBody(req);
-        const name = String(body?.name ?? "")
-          .replace(/[\r\n"']/g, "")
-          .trim()
-          .slice(0, 60);
-        if (!name) {
-          res.writeHead(400, { "content-type": "application/json" });
-          res.end(JSON.stringify({ code: "invalid_name", message: "Tên máy trống." }));
-          return;
-        }
-        config.machineName = name;
-        saveConfig(config);
-        console.log(`[bridge] tên máy mới: ${name}`);
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: true, machineName: name }));
-      } catch {
-        res.writeHead(400, { "content-type": "application/json" });
-        res.end(JSON.stringify({ code: "invalid_body", message: "Body JSON không hợp lệ" }));
-      }
-      return;
-    }
-
-    // Bật OpenWork desktop từ điện thoại (khi máy tính đang bật + bridge chạy
-    // nhưng app OpenWork chưa mở). Chống bấm liên tục: 5 lần/phút/IP.
-    if (req.method === "POST" && pathname === "/api/openwork/wake") {
-      const ip = req.socket.remoteAddress ?? "?";
-      if (wakeRateLimited(ip)) return deny(res);
-      try {
-        const result = await launchOpenWork({ configOpenworkExe: config.openworkExe });
-        if (result.alreadyRunning) {
-          await refreshDiscovery({ force: true });
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ ok: true, alreadyRunning: true, server: state.server }));
-        } else {
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ ok: true, launched: true, hint: "OpenWork đang mở — đợi ~20s rồi bấm Kiểm tra lại." }));
-        }
-      } catch (error) {
-        const code = error?.code === "openwork_exe_not_found" ? "openwork_exe_not_found" : "wake_failed";
-        res.writeHead(code === "wake_failed" ? 500 : 404, { "content-type": "application/json" });
-        res.end(JSON.stringify({ code, message: String(error?.message ?? error), candidates: error?.candidates ?? undefined }));
-      }
-      return;
-    }
-
-    // User chỉ tay file OpenWork.exe (điện thoại gõ hoặc bấm 1 trong danh
-    // sách ứng viên) → lưu vào config để "bật từ xa" không chết.
-    // TUYỆT ĐỐI KHÔNG spawn/thực thi path này: đường dẫn do điện thoại gõ tới,
-    // coi nó là lệnh chạy là lỗ hổng RCE. Kiểm tra gồm exists + isFile + tên
-    // file phải đúng là OpenWork.exe — vì path lưu vào config.openworkExe sẽ bị
-    // /api/openwork/wake và auto-launch lúc boot spawn() thật. exists+isFile
-    // một mình là không đủ: nó vẫn lọt qua mọi file thực thi trên máy.
-    // Cùng rate limit 5 lần/phút/IP với /api/openwork/wake.
-    if (req.method === "POST" && pathname === "/api/openwork/path") {
-      const ip = req.socket.remoteAddress ?? "?";
-      if (wakeRateLimited(ip)) return deny(res);
-      const bad = (code, message) => {
-        res.writeHead(400, { "content-type": "application/json" });
-        res.end(JSON.stringify({ code, message }));
-      };
-      try {
-        const body = await readJsonBody(req);
-        const raw = body?.path;
-        if (typeof raw !== "string" || !raw.trim()) {
-          bad("invalid_path", "Chưa nhận đường dẫn file OpenWork.exe.");
-          return;
-        }
-        // Bóc dấu nháy trước khi đo độ dài: "Copy as path" trong PowerShell cho ra
-        // "C:\...\OpenWork.exe" CÓ dấu nháy kép, dán nguyên xi thì không bao giờ
-        // khớp file thật.
-        const path = normalizeExePathInput(raw);
-        if (!path) {
-          bad("invalid_path", "Chưa nhận đường dẫn file OpenWork.exe.");
-          return;
-        }
-        if (path.length > 400) {
-          bad("invalid_path", "Đường dẫn quá dài (tối đa 400 ký tự).");
-          return;
-        }
-        if (!existsSync(path)) {
-          bad("not_found", "Không có file nào ở đường dẫn này — kiểm tra lại hoặc copy đường dẫn từ File Explorer.");
-          return;
-        }
-        if (!statSync(path).isFile()) {
-          bad("not_a_file", "Đường dẫn này là thư mục — cần trỏ tới file OpenWork.exe.");
-          return;
-        }
-        if (!isOpenWorkExeName(path)) {
-          bad("not_openwork_exe", "Chỉ nhận đúng file OpenWork.exe — file này tên khác, không phải OpenWork.");
-          return;
-        }
-        config.openworkExe = path;
-        saveConfig(config);
-        console.log(`[openwork] user chỉ đường dẫn OpenWork.exe: ${path}`);
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: true, openwork: openworkStateInfo() }));
-      } catch (error) {
-        // Body JSON hỏng (SyntaxError / "body too large" từ readJsonBody) khác
-        // hẳn với path không đọc được (existsSync/statSync ném lỗi fs).
-        const bodyBroken = error instanceof SyntaxError || error?.message === "body too large";
-        res.writeHead(400, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify(
-            bodyBroken
-              ? { code: "invalid_body", message: "Body JSON không hợp lệ" }
-              : { code: "fs_error", message: "Không đọc được đường dẫn này — kiểm tra lại, hoặc thử copy từ ổ đĩa local." }
-          )
-        );
-      }
-      return;
-    }
-
-    // Duyệt thư mục máy tính để tạo workspace khỏi gõ tay đường dẫn.
-    // Chỉ liệt kê THƯ MỤC (không file), nằm sau khóa thiết bị như các API khác.
-    if (req.method === "GET" && pathname === "/api/fs/ls") {
-      const target = url.searchParams.get("path")?.trim();
-      try {
-        const result = target ? await listDirs(target) : { ...(await listRoots()), ok: true };
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(result));
-      } catch (error) {
-        res.writeHead(error?.code === "ENOENT" || error?.code === "ENOTDIR" ? 404 : 403, {
-          "content-type": "application/json",
-        });
-        res.end(JSON.stringify({ code: error?.code ?? "fs_error", message: String(error?.message ?? error) }));
-      }
-      return;
-    }
-
-    // Tạo thư mục mới con cho nút "+ Thư mục mới" trong picker (cùng khu khóa thiết bị).
-    if (req.method === "POST" && pathname === "/api/fs/mkdir") {
-      try {
-        const body = await readJsonBody(req);
-        const result = await makeDir(body?.dir, body?.name);
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(result));
-      } catch (error) {
-        res.writeHead(error?.code === "EEXIST" || error?.code === "EINVAL" ? 400 : 403, {
-          "content-type": "application/json",
-        });
-        res.end(JSON.stringify({ code: error?.code ?? "fs_error", message: String(error?.message ?? error) }));
-      }
-      return;
-    }
-
-    if (pathname.startsWith("/api/ow/")) {
-      if (!state.server || !state.tokenActive) {
-        res.writeHead(503, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({
-            code: state.restartRequired ? "restart_required" : "upstream_unavailable",
-            message: state.restartRequired
-              ? "OpenWork must be restarted once to activate the bridge token."
-              : "openwork-server not reachable (is OpenWork running?).",
-          })
-        );
-        return;
-      }
-      const upstreamPath = pathname.slice("/api/ow".length) || "/";
-      await proxyToOpenWork(req, res, upstreamPath, { baseUrl: state.server.baseUrl, ownerToken: config.ownerToken });
-      return;
-    }
-
-    res.writeHead(404, { "content-type": "application/json" });
-    res.end(JSON.stringify({ code: "not_found" }));
-    return;
-  }
-
-  // Static web app
-  if (req.method === "GET" || req.method === "HEAD") return handleStatic(req, res, pathname);
-  res.writeHead(405);
-  res.end();
-}
+// Rate-limit maps phình theo mọi IP từng thấy → quét mỗi 5 phút.
+startRateLimitSweep([ctx.pairLimiter, ctx.wakeLimiter]);
 
 // requestTimeout only bounds RECEIVING a request (measured: a completed GET
 // stream survives far past requestTimeout=1s), so a finite value is safe for
@@ -678,10 +239,10 @@ const onListening = () => {
         printPairing(currentBase(), "[tunnel] URL public MỚI (dùng được từ 4G, không cần app nào trên điện thoại):");
       },
     })
-      .then((tunnel) => {
-        tunnelController = tunnel;
-        tunnelGetState = () => tunnel.getState();
-        tunnelRestart = () => tunnel.restart();
+      .then((controller) => {
+        tunnelController = controller;
+        tunnel.getState = () => controller.getState();
+        tunnel.restart = () => controller.restart();
       })
       .catch((error) => console.error(`[tunnel] lỗi: ${error.message}`));
   }
@@ -694,7 +255,7 @@ const onListening = () => {
     );
     startLookup({
       getUrl: () => state.tunnelUrl,
-      getState: () => tunnelGetState(),
+      getState: () => tunnel.getState(),
       workerUrl: config.lookupUrl,
       secret: config.lookupSecret,
       tenant: config.lookupTenant,
