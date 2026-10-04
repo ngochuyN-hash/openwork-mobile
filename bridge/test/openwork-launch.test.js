@@ -7,7 +7,7 @@ import { isOpenWorkExeName, normalizeExePathInput } from "../src/openwork-launch
 // /api/openwork/wake + auto-launch lúc boot. exists + isFile là không đủ —
 // chỉ đúng tên OpenWork.exe mới được lọt tới chỗ spawn.
 test("isOpenWorkExeName: chỉ nhận đúng tên OpenWork.exe (không phân biệt hoa thường)", () => {
-  assert.equal(isOpenWorkExeName("C:\\Users\\user\\AppData\\Local\\Programs\\@openworkdesktop\\OpenWork.exe"), true);
+  assert.equal(isOpenWorkExeName("C:\\Users\\tester\\AppData\\Local\\Programs\\@openworkdesktop\\OpenWork.exe"), true);
   assert.equal(isOpenWorkExeName("D:\\Apps\\OPENWORK.EXE"), true);
   assert.equal(isOpenWorkExeName("  C:\\Apps\\openwork.exe  "), true);
 });
@@ -15,7 +15,7 @@ test("isOpenWorkExeName: chỉ nhận đúng tên OpenWork.exe (không phân bi�
 test("isOpenWorkExeName: chặn file thực thi khác + rác, kể cả file tồn tại", () => {
   assert.equal(isOpenWorkExeName("C:\\Windows\\System32\\calc.exe"), false);
   assert.equal(isOpenWorkExeName("C:\\Windows\\System32\\cmd.exe"), false);
-  assert.equal(isOpenWorkExeName("C:\\Users\\user\\AppData\\Local\\Temp\\khong-phai-exe.txt"), false);
+  assert.equal(isOpenWorkExeName("C:\\Users\\tester\\AppData\\Local\\Temp\\khong-phai-exe.txt"), false);
   assert.equal(isOpenWorkExeName("C:\\Apps\\OpenWork.exe.bak"), false);
   assert.equal(isOpenWorkExeName("C:\\Apps\\MyOpenWork.exe"), false);
   assert.equal(isOpenWorkExeName(""), false);
@@ -26,8 +26,8 @@ test("isOpenWorkExeName: chặn file thực thi khác + rác, kể cả file t�
 // Người dùng dán "Copy as path" từ PowerShell là đường dẫn CÓ dấu nháy kép.
 // Không bóc ra thì existsSync() luôn false và họ tưởng mình gõ sai đường dẫn.
 test("normalizeExePathInput: bóc dấu nháy kép / nháy đơn do copy từ shell", () => {
-  const raw = '"C:\\Users\\user\\AppData\\Local\\Programs\\@openworkdesktop\\OpenWork.exe"';
-  assert.equal(normalizeExePathInput(raw), "C:\\Users\\user\\AppData\\Local\\Programs\\@openworkdesktop\\OpenWork.exe");
+  const raw = '"C:\\Users\\tester\\AppData\\Local\\Programs\\@openworkdesktop\\OpenWork.exe"';
+  assert.equal(normalizeExePathInput(raw), "C:\\Users\\tester\\AppData\\Local\\Programs\\@openworkdesktop\\OpenWork.exe");
   assert.equal(normalizeExePathInput("  'C:\\Apps\\OpenWork.exe'  "), "C:\\Apps\\OpenWork.exe");
   assert.equal(normalizeExePathInput('"\'C:\\Apps\\OpenWork.exe\'"'), "C:\\Apps\\OpenWork.exe");
   assert.equal(normalizeExePathInput('""C:\\Apps\\OpenWork.exe""'), "C:\\Apps\\OpenWork.exe");

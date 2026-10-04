@@ -240,7 +240,22 @@ cd worker && node scripts/tenant.mjs add <user> "Name"   # issue a multi-tenant 
 
 ## Publishing & privacy
 
-`git push` from this repo is intercepted by a repo-local pre-push hook (`.githooks/pre-push`, enabled via `core.hooksPath` — a machine-local, gitignored file that is NOT part of the published repo): it builds a sanitized mirror of the history — commit identity rewritten to `ngochuyN-hash` with a noreply email, the real worker URL replaced with `https://YOUR-WORKER.workers.dev`, personal names washed — force-pushes that mirror to origin, then cancels the raw push. The local repo keeps the originals; raw refs never leave the machine. If a name/URL still survives somewhere, the hook's safety gate blocks the push instead. Don't bypass with `--no-verify`.
+`git push` from this repo is intercepted by a repo-local pre-push hook (`.githooks/pre-push`, enabled via `core.hooksPath` — a machine-local, gitignored file that is NOT part of the published repo): it builds a sanitized mirror of the history and force-pushes that mirror to origin, then cancels the raw push. The local repo keeps the originals; raw refs never leave the machine. Don't bypass with `--no-verify`.
+
+The mirror is scrubbed of:
+
+| What | Becomes |
+| --- | --- |
+| Commit author + committer identity | `ngochuyN-hash` / noreply email (on **every** commit) |
+| The real worker URL | `https://YOUR-WORKER.workers.dev` |
+| The real name and the Cloudflare account name | `user` / `example` |
+| Real email addresses (gmail/outlook/hotmail/yahoo/icloud) | `user@example.com` |
+| The Cloudflare KV namespace id | all zeros |
+| `C:\Users\<name>` paths | `C:SERS<USER>
+
+Three properties make this hold up: the wash is **repo-wide** (every text file in every commit, not a hand-kept file list, so a new file cannot slip past); it is **case-insensitive** (a real address starts with a capital, and a lowercase-only pattern let it through); and `.wrangler` caches are deleted from every commit (they hold the Cloudflare account record). After rewriting, a safety gate greps the whole rewritten history case-insensitively and **blocks the push**, listing the offending files, if any personal string survives. Run `WASHER_DRYRUN=1 sh .githooks/pre-push origin main main` to build the mirror and check the gate without pushing.
+
+To add a new private value, add one line to `$WASH_SED` and `$WASH_GREP` in `.githooks/pre-push` — both read the same list, so the wash and the gate cannot drift apart.
 
 ## Project rules
 

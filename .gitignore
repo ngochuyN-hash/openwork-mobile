@@ -29,6 +29,15 @@ worker/ota-publish/
 .agents/
 .cluster/
 .openclaw/
+.zcodeignore
+
+# agent persona / user profile — describes the person and the agent, not the
+# product. Machine-local: never publish.
+/SOUL.md
+/USER.md
+/IDENTITY.md
+/TOOLS.md
+/HEARTBEAT.md
 
 # publishing washer hook is machine-local (never published to the remote)
 .githooks/
