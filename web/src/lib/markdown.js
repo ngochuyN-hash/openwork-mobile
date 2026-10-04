@@ -106,6 +106,11 @@ function normalizeFilePath(path) {
 /**
  * Điểm duy nhất để tạo link file: chuẩn hoá + chặn traversal + `safeHref`.
  * Mọi đường (linkify trong text, codespan, link, image) đều đi qua đây.
+ *
+ * `href` KHÔNG được mang theo chìa. Bản cũ dán `?_t=<token>` vào URL để
+ * browser tự tải — token lọt vào history và Referer. Nay caller trỏ sang
+ * trang Files của chính app (`#/ws/.../files?...&open=...`): không cần auth
+ * trên URL, và bấm link vào đúng viewer mà hàng file trong chat đang mở.
  */
 function wrapPath(display, path, fileHref) {
   const safePath = normalizeFilePath(path);
@@ -117,7 +122,7 @@ function wrapPath(display, path, fileHref) {
     return display;
   }
   if (!href || href === "#") return display;
-  return `<a class="md-file" href="${escapeAttribute(href)}" target="_blank" rel="noreferrer">${display}</a>`;
+  return `<a class="md-file" href="${escapeAttribute(href)}">${display}</a>`;
 }
 
 function buildMarked({ fileHref } = {}) {
@@ -183,7 +188,7 @@ function buildMarked({ fileHref } = {}) {
             href = "#";
           }
           if (href && href !== "#") {
-            return `<a class="md-file" href="${escapeAttribute(href)}" target="_blank" rel="noreferrer"><code>${escapeHtml(text)}</code></a>`;
+            return `<a class="md-file" href="${escapeAttribute(href)}"><code>${escapeHtml(text)}</code></a>`;
           }
         }
         return `<code>${escapeHtml(text)}</code>`;
@@ -202,28 +207,35 @@ function buildMarked({ fileHref } = {}) {
             }
           }
           if (local && local !== "#") {
-            return `<a class="md-file" href="${escapeAttribute(local)}" target="_blank" rel="noreferrer"${titleAttr}>${label}</a>`;
+            return `<a class="md-file" href="${escapeAttribute(local)}"${titleAttr}>${label}</a>`;
           }
         }
         return `<a href="${escapeAttribute(safeHref(href))}"${titleAttr} target="_blank" rel="noreferrer noopener">${label}</a>`;
       },
       image({ href, title, text }) {
         const titleAttr = title ? ` title="${escapeAttribute(title)}"` : "";
-        // Ảnh trong workspace phải đi qua `fileHref` y hệt link/code span,
-        // nếu không `![](screenshot.png)` sẽ ra ảnh vỡ vì safeHref("a.png")
-        // không phải URL hợp lệ.
-        let src = safeHref(href);
-        // `//evil.com/i.png` là URL ngoài, KHÔNG phải file trong workspace —
-        // không được đưa qua fileHref.
+        const alt = escapeAttribute(escapeText(text));
+        // Ảnh trong workspace: KHÔNG gắn `src` kiểu URL vì `<img>` không set
+        // được header — mọi cách dán token vào query đều lộ chìa ra history và
+        // Referer. Thay vào đó đánh dấu `data-owm-file`, để caller (chat.jsx)
+        // fetch bằng header rồi gắn `blob:` vào node sau khi render.
+        // `//evil.com/i.png` là URL ngoài, KHÔNG phải file trong workspace.
         if (typeof fileHref === "function" && !isExternalHref(href) && !href.startsWith("/")) {
-          try {
-            const local = safeHref(fileHref(normalizeFilePath(href)));
-            if (local && local !== "#") src = local;
-          } catch {
-            /* giữ src đã an toàn */
+          const local = normalizeFilePath(href);
+          if (local) {
+            let link = safeHref(href);
+            try {
+              const route = safeHref(fileHref(local));
+              if (route && route !== "#") link = route;
+            } catch {
+              /* giữ link đã an toàn */
+            }
+            return `<a href="${escapeAttribute(link)}"><img data-owm-file="${escapeAttribute(local)}" alt="${alt}"${titleAttr} loading="lazy" decoding="async"></a>`;
           }
         }
-        return `<a href="${escapeAttribute(src)}" target="_blank" rel="noreferrer"><img src="${escapeAttribute(src)}" alt="${escapeAttribute(escapeText(text))}"${titleAttr} loading="lazy" decoding="async"></a>`;
+        // Ảnh ngoài: giữ URL gốc, không đụng tới.
+        const src = safeHref(href);
+        return `<a href="${escapeAttribute(src)}" target="_blank" rel="noreferrer noopener"><img src="${escapeAttribute(src)}" alt="${alt}"${titleAttr} loading="lazy" decoding="async"></a>`;
       },
       // Bọc bảng trong hộp cuộn ngang: cột số trên điện thoại phải trượt được,
       // không bị bóp về 0 và đọc lối dấu `|` chồng lên nhau.

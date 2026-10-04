@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
 import {
-  ow, unwrap, sseUrl, owUploadFile, formatBytes,
+  ow, unwrap, blobUrlFor, owUploadFile, formatBytes,
   owAgents, owCommands, owQuestions, owReplyQuestion, owRejectQuestion,
   owRevert, owUnrevert, owFork, owDeleteMessage, owRunCommand, owTodo,
   owRenameSession, owPrompt, owSummarize, owShareSession, owUnshareSession,
@@ -622,8 +622,8 @@ export function ChatPage({ route }) {
         scheduleOther();
       }
     };
-    // Stream qua fetch (lib/sse.js): token đi bằng header Authorization thay
-    // vì ?_t= trên URL như EventSource cũ, đứt là tự nối lại với backoff.
+    // Stream qua fetch (lib/sse.js): token đi bằng header Authorization, không
+    // phải `?_t=` trên URL, và đứt là tự nối lại với backoff.
     const stopEvents = connectEvents(`/api/ow${base}/event`, handleEvent, {
       onOpen: () => {
         lastEventAt.current = Date.now();
@@ -2095,11 +2095,23 @@ function dirOf(p) {
   return i <= 0 ? "" : clean.slice(0, i);
 }
 
-/** Đường dẫn file trong workspace → URL mở/tải (bearer token đi qua query
- *  `_t`, nên link phải là URL thật chứ không phải handler Preact). */
+/** Đường dẫn file trong workspace → link mở trong app.
+ *
+ *  KHÔNG dựng URL có token: `<a>`/`<img>` không set được header Authorization,
+ *  bản cũ dán `?_t=<token>` vào href — chìa đó nằm trong history trình duyệt
+ *  và trong Referer của mọi request sau. Nay link trỏ thẳng trang Files (cùng
+ *  chỗ hàng file trong chat mở) nên không cần auth trên URL.
+ *
+ *  `path` giữ nguyên để engine nhận (nó nhận cả `C:\...`); bản `/` chỉ dùng
+ *  để bóc thư mục cha cho tham số `path` của hash. */
 function makeFileHref(wsId) {
   if (!wsId) return null;
-  return (path) => sseUrl(`/workspace/${encodeURIComponent(wsId)}/files/raw?path=${encodeURIComponent(path)}`);
+  return (path) => {
+    const slash = String(path).replace(/\\/g, "/");
+    const cut = slash.lastIndexOf("/");
+    const dir = cut > 0 ? slash.slice(0, cut) : "";
+    return `#/ws/${encodeURIComponent(wsId)}/files?path=${encodeURIComponent(dir)}&open=${encodeURIComponent(path)}`;
+  };
 }
 
 /** Markdown của bubble assistant, dùng chung engine `marked` + GFM với
@@ -2128,6 +2140,44 @@ function MarkdownText({ text, wsId }) {
       if (tableScroll.current[i]) node.scrollLeft = tableScroll.current[i];
     });
   }, [html]);
+
+  // Ảnh trong workspace render ra `<img data-owm-file="đường/dẫn">` CHƯA có
+  // `src` (xem markdown.js): `<img>` không set được header nên không thể gắn
+  // URL có token. Ở đây fetch bằng header rồi gắn `blob:` — token không bao
+  // giờ rời JS.
+  //
+  // innerHTML bị gán lại mỗi frame lúc stream nên node `<img>` là node MỚI:
+  // phải quét lại sau MỖI lần html đổi. Node đã có `src` (đã hydrate) thì
+  // bỏ qua — `blobCacheKey` cũng chống việc tải lại cùng một file.
+  const imgAlive = useRef(true);
+  useEffect(() => {
+    imgAlive.current = true;
+    return () => {
+      imgAlive.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!wsId || !rootRef.current) return;
+    const nodes = [...rootRef.current.querySelectorAll("img[data-owm-file]")].filter((n) => !n.getAttribute("src"));
+    if (!nodes.length) return;
+    for (const node of nodes) {
+      const path = node.getAttribute("data-owm-file");
+      blobUrlFor(wsId, path).then(
+        (url) => {
+          // Node có thể đã bị innerHTML thay mới (stream) hoặc component đã
+          // unmount — gắn src vào node chết là vô nghĩa, và vào node của
+          // message khác là hiện ảnh sai.
+          if (!url || !imgAlive.current || !node.isConnected) return;
+          node.setAttribute("src", url);
+        },
+        () => {
+          // Ảnh hỏng: để `alt` của node hiện thay vì im lặng — người dùng
+          // vẫn thấy tên/tin nhắn ảnh và có thể bấm link bọc nó để mở Files.
+          if (imgAlive.current && node.isConnected) node.setAttribute("data-owm-img-error", "1");
+        }
+      );
+    }
+  }, [html, wsId]);
 
   if (!text) return null;
   return <div class="msg-md" ref={rootRef} dangerouslySetInnerHTML={{ __html: html }} />;

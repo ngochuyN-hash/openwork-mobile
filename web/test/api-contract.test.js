@@ -148,27 +148,69 @@ test("apiPair success returns the payload and writes the keyring entry", async (
   assert.equal(JSON.parse(localStorage.getItem("owm_keys"))[0].token, "owd_tok");
 });
 
-// ---- sseUrl() ----
+// ---- blobUrlFor(): token KHONG bao gio len URL ----
+//
+// Cu dua biet: bo `sseUrl()` (dan `?_t=<token>`) khoi api.js. Token tren URL
+// lo vao history trinh duyet, vao Referer cua moi request sau, vao log cua
+// worker/cloudflared/bridge. Bay moi request deu di bang header; `<img>`/`<iframe>`
+// thi fetch bang header roi gan `blob:`.
 
-test("sseUrl appends _t and _m, joining with & when the path already has a query", () => {
+test("blobUrlFor fetch bang header Authorization, KHONG dua token len URL", async () => {
   api.setToken("tok-1");
   api.setTenant("room-1");
-  assert.equal(api.sseUrl("/x?a=1"), "/api/ow/x?a=1&_t=tok-1&_m=room-1");
+  const seen = [];
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url, headers: init?.headers ?? {} });
+    return new Response(new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }), { status: 200 });
+  };
+  globalThis.URL.createObjectURL = () => "blob:fake-1";
+  globalThis.URL.revokeObjectURL = () => {};
+
+  const url = await api.blobUrlFor("ws_1", "charts/a b.png");
+  assert.equal(url, "blob:fake-1");
+  assert.equal(seen.length, 1);
+  // URL sach: chi con duong dan file, khong co `_t`/`_m`/token.
+  assert.match(seen[0].url, /^\/api\/ow\/workspace\/ws_1\/files\/raw\?path=/);
+  assert.doesNotMatch(seen[0].url, /_t=|_m=|tok-1/);
+  // Chinh token di bang header.
+  assert.equal(seen[0].headers.authorization, "Bearer tok-1");
+  assert.equal(seen[0].headers["x-owm-tenant"], "room-1");
 });
 
-test("sseUrl uses ? on a query-less path and omits _m when no tenant is set", () => {
+test("blobUrlFor tra chuoi rong khi thieu wsId/path, khong fetch", async () => {
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response("", { status: 200 });
+  };
+  assert.equal(await api.blobUrlFor("", "a.png"), "");
+  assert.equal(await api.blobUrlFor("ws_1", ""), "");
+  assert.equal(calls, 0);
+});
+
+test("blobUrlFor nem loi co message cua engine khi raw tra loi", async () => {
   api.setToken("tok-2");
-  api.clearTenant();
-  assert.equal(api.sseUrl("/x"), "/api/ow/x?_t=tok-2");
+  globalThis.fetch = async () => respond(404, { code: "file_not_found", message: "Khong thay file" });
+  await assert.rejects(() => api.blobUrlFor("ws_1", "x.png"), /Khong thay file/);
 });
 
-test("sseUrl percent-encodes the token and the tenant", () => {
-  api.setToken("t k/?=&");
-  api.setTenant("phòng 1");
-  assert.equal(
-    api.sseUrl("/ws"),
-    `/api/ow/ws?_t=${encodeURIComponent("t k/?=&")}&_m=${encodeURIComponent("phòng 1")}`
-  );
+test("removeKey xoa cache blob — bytes cua may da go khong con y nghia", async () => {
+  api.setToken("tok-3");
+  globalThis.URL.createObjectURL = () => "blob:fake-2";
+  const revoked = [];
+  globalThis.URL.revokeObjectURL = (u) => revoked.push(u);
+  globalThis.fetch = async () => new Response(new Blob([new Uint8Array([9])]), { status: 200 });
+
+  await api.blobUrlFor("ws_1", "keep.png");
+  api.removeKey(api.getTenant() || "room-1");
+  // Cache đã bị xoá nên lần sau phải fetch lại, và URL cũ phải được thu hồi.
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(new Blob([new Uint8Array([9])]), { status: 200 });
+  };
+  await api.blobUrlFor("ws_1", "keep.png");
+  assert.equal(calls, 1, "phai tai lai sau khi cache bi xoa");
 });
 
 // ---- filenameFromDisposition() ----

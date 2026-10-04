@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { ow, unwrap, sseUrl, owDownload, owUploadFile, formatBytes, bytesToBase64 } from "../api.js";
+import { ow, unwrap, blobUrlFor, owDownload, owUploadFile, formatBytes, bytesToBase64 } from "../api.js";
 import { DownloadIcon, FileIcon, FolderIcon, ImageIcon, RefreshIcon, UploadIcon } from "../components/icons.jsx";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
 import {
@@ -88,6 +88,42 @@ export function FilesPage({ route }) {
     if (!p) return;
     const name = fileNameOf(p);
     setOpened({ name, path: p, kind: kindOf(name) });
+    // Agent thường nhắc tên TƯƠNG ĐỐI trong workspace (`README.md`) trong khi
+    // file nằm ở thư mục con (`projects/ats-cv-toolkit/README.md`) — link mở
+    // viewer thì báo "File not found" dù file có thật. Thử vài dạng đường dẫn
+    // (y hệt hàng file trong chat) và chỉ dùng dạng nào engine thật sự có.
+    //
+    // Không dùng cơ chế "mở thẳng" của hàng chat: nó dò trước rồi mới điều
+    // hướng, còn ở đây người dùng ĐÃ ở trang Files — chỉ cần thay `path` của
+    // viewer sau khi dò trúng.
+    let cancel = false;
+    const controller = new AbortController();
+    (async () => {
+      const slash = p.replace(/\\/g, "/");
+      const candidates = [p];
+      const cut = slash.indexOf("/");
+      if (cut > 0) candidates.push(slash.slice(cut + 1)); // bỏ thư mục dẢ ĐẦU
+      for (const cand of candidates) {
+        if (cand === p) continue;
+        try {
+          const info = await ow(`/workspace/${wsEnc}/files/stat?path=${encodeURIComponent(cand)}`, {
+            signal: controller.signal,
+          });
+          if (cancel) return;
+          if (info?.exists) {
+            const name2 = fileNameOf(cand);
+            setOpened({ name: name2, path: cand, kind: kindOf(name2) });
+            return;
+          }
+        } catch {
+          /* thử ứng viên tiếp theo */
+        }
+      }
+    })();
+    return () => {
+      cancel = true;
+      controller.abort();
+    };
   }, []);
 
   // Đồng bộ `path` khi hash BỊ ĐỔI TỪ NGOÀI (Back/Forward, đổi workspace, hoặc
@@ -392,6 +428,37 @@ function FileViewer({ wsEnc, file, onClose }) {
     };
   }, [file.path, wsEnc, loadNonce]);
 
+  // Xem trước ảnh/PDF: blob URL lấy bằng header Authorization. Bản cũ dán
+  // `?_t=<token>` vào src — token lọt vào history trình duyệt và Referer. Chỉ
+  // nạp khi thật sự cần (kind image/pdf); file text đã đi `ow(..., {raw:true})`.
+  //
+  // Khai báo SAU effect nạp text vì dùng `loadNonce` trong deps — đặt trước là
+  // đọc biến trước khi khai báo (temporal dead zone), giết cả trang lúc mount.
+  const [previewUrl, setPreviewUrl] = useState("");
+  const previewable = file.kind === "image" || file.kind === "pdf";
+  useEffect(() => {
+    if (!previewable) {
+      setPreviewUrl("");
+      return undefined;
+    }
+    let cancel = false;
+    setPreviewUrl("");
+    blobUrlFor(decodeURIComponent(wsEnc), file.path).then(
+      (url) => {
+        if (!cancel) setPreviewUrl(url);
+      },
+      (e) => {
+        if (cancel) return;
+        const msg = String(e?.message ?? "");
+        // UNPAIRED = app mất chìa; App tự xử, đừng báo thêm lỗi file.
+        if (msg !== "UNPAIRED") setError(`Không mở được "${file.name}": ${msg || "tải lỗi"}`);
+      }
+    );
+    return () => {
+      cancel = true;
+    };
+  }, [previewable, wsEnc, file.path, file.name, loadNonce]);
+
   async function save() {
     const text = editedRef.current;
     setSaving(true);
@@ -413,8 +480,6 @@ function FileViewer({ wsEnc, file, onClose }) {
       setSaving(false);
     }
   }
-
-  const downloadUrl = sseUrl(`/workspace/${wsEnc}/files/raw?path=${encodeURIComponent(file.path)}`);
 
   // Tải qua fetch + Blob: <a download> gốc hay bị Safari/PWA bỏ qua (mở file
   // trong tab thay vì lưu). Bản này hiện % + hủy được, xong mới kích <a download>.
@@ -564,7 +629,10 @@ function FileViewer({ wsEnc, file, onClose }) {
         <Banner
           kind="err"
           actionLabel="Thử lại"
-          onAction={() => (file.kind === "text" ? setLoadNonce((v) => v + 1) : downloadFile())}
+          onAction={() => {
+            setError(""); // nạp lại xong phải xoá lỗi cũ, không thì Banner đứng lại
+            setLoadNonce((v) => v + 1);
+          }}
         >
           {error}
         </Banner>
@@ -597,10 +665,10 @@ function FileViewer({ wsEnc, file, onClose }) {
       {/* `onError`: bản cũ không bắt lỗi ảnh — file bị xoá giữa lúc stat và
           lúc mở, hoặc chìa 401, chỉ ra một ảnh vỡ im lặng, người dùng tưởng app
           hỏng. Giờ hiện đúng lý do + nút tải lại. */}
-      {file.kind === "image" && !error && (
+      {file.kind === "image" && !error && previewUrl && (
         <div style="text-align:center">
           <img
-            src={downloadUrl}
+            src={previewUrl}
             alt={file.name}
             width="800"
             style="max-width:100%;height:auto;border-radius:12px;border:1px solid var(--border)"
@@ -609,13 +677,20 @@ function FileViewer({ wsEnc, file, onClose }) {
         </div>
       )}
 
-      {file.kind === "pdf" && (
+      {file.kind === "image" && !error && !previewUrl && <Loading />}
+
+      {/* PDF: chỉ gắn iframe khi blob URL đã sẵn — `src=""` làm trình duyệt
+          tải lại chính trang app, tốn băng thông và có thể nhúng app vào
+          chính nó. */}
+      {file.kind === "pdf" && previewUrl && (
         <iframe
           title={`Xem trước ${file.name}`}
-          src={downloadUrl}
+          src={previewUrl}
           style="width:100%;height:70vh;border-radius:12px;border:1px solid var(--border);background:var(--bg-raised)"
         />
       )}
+
+      {file.kind === "pdf" && !previewUrl && !error && <Loading />}
 
       {file.kind === "binary" && (
         <Empty title="File nhị phân" actionLabel="Tải về" onAction={downloadFile} />

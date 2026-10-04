@@ -33,7 +33,16 @@ function sameToken(presented, expected) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** Lấy Bearer token từ header, hoặc ?_t= (chỉ GET - cho EventSource/img). */
+/**
+ * Lấy Bearer token từ header, hoặc `?_t=` (chỉ GET).
+ *
+ * `?_t=` là đường CŨ: web từng dán token lên query cho `<img>`/`<iframe>` vì hai
+ * thẻ đó không set được header. Web đã bỏ hẳn (xem `blobUrlFor` ở
+ * web/src/api.js) — mọi request đi bằng header, còn `<img>/<iframe>` thì fetch
+ * bằng header rồi gắn `blob:`. Nhánh này GIỮ LẠI để PWA đã cài trên máy cũ,
+ * còn cache bundle cũ, không mất quyền ngay giữa chừng. Không code mới nào sinh
+ * ra `?_t=` nữa.
+ */
 export function requestToken(req, url) {
   const header = req.headers["authorization"] ?? "";
   const match = /^Bearer\s+(.+)$/i.exec(String(header));

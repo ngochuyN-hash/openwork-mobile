@@ -3,6 +3,7 @@ import { normalizeSessionTitle } from "./lib/session-rename.js";
 import { buildSummarizeBody, summarizePath } from "./lib/session-compact.js";
 import { buildPromptModelFields } from "./lib/model-behavior.js";
 import { parseHashParam } from "./lib/route.js";
+import { blobCacheKey, createBlobCache, parseBlobCacheKey } from "./lib/blob-cache.js";
 import { withTimeoutSignal } from "./lib/net.js";
 
 const TOKEN_KEY = "owm_token";
@@ -111,11 +112,17 @@ export function removeKey(tenant) {
   const clean = cleanTenantId(tenant);
   const keys = loadKeys().filter((k) => k.tenant !== clean);
   saveKeys(keys);
+  // Blob cache là bytes của MÁY vừa gỡ (ảnh/PDF đã tải về). Xoá KHÔNG có điều
+  // kiện "có phải máy active không": gỡ một máy khác trong chùm cũng là app quên
+  // một máy đã từng cấp chìa, blob của nó không nên sống tiếp. Xoá hết thì hơi
+  // phí (ảnh đang xem tải lại) nhưng lấy lại chỉ một nhịp; còn sót thì vừa giữ
+  // RAM điện thoại vừa giữ nội dung của máy đã gỡ.
+  clearBlobUrls();
   if (cleanTenantId(getTenant()) !== clean) return false;
   const next = keys[0];
   if (next) {
     setToken(next.token);
-    // setTenant("") cố tình KHÔNG ghi — nhưng cũng không XOÁ được phòng cũ đã
+    // setTenant("") cố ý KHÔNG ghi — nhưng cũng không XOÁ được phòng cũ đã
     // nằm trong storage. Thăng lên máy chính (phòng rỗng) mà để lại
     // owm_tenant của phòng vừa gỡ thì mọi request đi nhầm phòng → 401/503
     // liên miên dù khóa đúng. Phải dọn phòng TRƯỚC rồi mới set lại.
@@ -637,11 +644,46 @@ function guessName(path) {
   return clean.slice(cut + 1) || "download";
 }
 
-/** URL cho EventSource (không set được header nên auth qua query _t, phòng qua _m). */
-export function sseUrl(path) {
-  const tenant = getTenant();
-  const sep = path.includes("?") ? "&" : "?";
-  return `/api/ow${path}${sep}_t=${encodeURIComponent(getToken())}${tenant ? `&_m=${encodeURIComponent(tenant)}` : ""}`;
+// ---- Blob URL cho <img>/<iframe> (không dán token lên URL) ----
+//
+// `<img src>` và `<iframe src>` không set được header Authorization. Bản cũ dán
+// token vào query `?_t=` cho chúng — token đó lọt vào history trình duyệt, vào
+// Referer của mọi request sau, và vào log của worker/cloudflared/bridge. Nay mọi
+// request đi bằng header; riêng hai thẻ kia thì fetch bằng header rồi gắn
+// `blob:`. `sseUrl()` (dán `?_t=`) đã bỏ hẳn.
+const blobCache = createBlobCache({
+  create: async (key) => {
+    const { wsId, path } = parseBlobCacheKey(key);
+    const res = await ow(`/workspace/${encodeURIComponent(wsId)}/files/raw?path=${encodeURIComponent(path)}`, {
+      raw: true,
+    });
+    if (!res.ok) {
+      let detail = "";
+      try {
+        detail = (await res.json())?.message ?? "";
+      } catch {
+        /* body không phải JSON — giữ HTTP status */
+      }
+      throw new Error(detail || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    return { url: URL.createObjectURL(blob), bytes: blob.size };
+  },
+  revoke: (url) => URL.revokeObjectURL(url),
+});
+
+/**
+ * Object URL để xem trước 1 file (ảnh, PDF). Auth đi qua header nên token không
+ * bao giờ lên URL. Cache LRU theo byte nên mở lại file vừa xem là tức thì.
+ */
+export function blobUrlFor(wsId, path) {
+  if (!wsId || !path) return Promise.resolve("");
+  return blobCache.load(blobCacheKey(wsId, path));
+}
+
+/** Xoá cache blob (gỡ pairing: bytes của máy cũ không còn ý nghĩa). */
+export function clearBlobUrls() {
+  blobCache.clear();
 }
 
 // ---- Helpers chuẩn hóa shape openwork/opencode (có / không có wrapper .data)

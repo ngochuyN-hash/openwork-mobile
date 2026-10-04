@@ -194,7 +194,8 @@ worker/          # Cloudflare Worker "openpocket" — fixed URL + multi-tenant
 web/             # PWA Preact + Vite → builds to web/dist served by the bridge
   src/pages/     # pairing (two ways in: 8-char code / permanent key + room box) · workspaces · sessions · chat · files · settings (bridge status + paired devices)
   src/components/# ui.jsx (Loading/Skeleton/Empty/Banner/Confirm/SwipeRow) · icons.jsx (SVG set) · model-picker.jsx
-  test/          # real unit suites — 4 files, 44 tests (api keyring + error contract · openwork path API · chat stream reducer)
+  src/lib/       # pure, unit-tested logic — blob-cache (object-URL LRU for file previews) · markdown · sse · chat-stream · chat-scroll · file-viewer · session-* · route · net · settings-state
+  test/          # real unit suites — 24 files, 461 tests (api contract + blob cache · markdown · chat stream · session helpers · file viewer)
   .zcode/skills/ # pwa-workspace-ui: internal design skill (tokens · ui-rules · pwa-checklist)
 desktop/         # OpenPocket.exe — native WinForms GUI (built by csc.exe, zero deps): ONE page — status · bridge start/stop/autostart · self-provisioned identity · QR pairing (node_modules ships inside the Setup installer — no npm install at first run). No login/rooms (removed 13/09)
 README.md        # this file
@@ -213,6 +214,7 @@ CODE_SUMMARY.md  # code map + the "symptom → where to fix" table
 - **Security audit 2026-09-13 (Mimosa deep scan, sealed receipt)**: every flagged item triaged. The SSRF warnings on `bridge/src/proxy.js` and `worker/src/index.js` are already contained — request paths must match a whitelist against a fixed upstream base, redirects are not followed, and `/__register` only accepts `https://*.trycloudflare.com` URLs behind a per-room secret. The `spawnSync` warnings in `bin/openpocket.js` only ever carry the machine owner's own CLI arguments (array-form, no shell). Shipped fixes: the desktop GUI strips quotes/newlines from the tenant display name and requires an `https://` worker URL before building a command line; the `sharp` exposure flagged by the scan disappeared entirely when that dependency (and the other native packages) were removed from the bridge — `bridge/package.json` now carries only `qrcode-terminal`.
 - **No default room password (2026-09-13)**: pressing Enter at any room-password prompt (CLI or GUI, while those surfaces existed) auto-generates a strong random secret (`owes_` + 48 hex chars) instead of the old default `12345678` — the first password any attacker tries. Rooms created earlier with the old default should be re-keyed: revoke + add.
 - **CSP on the web app**: `withSecurityHeaders` in `worker/src/index.js` covers Worker-served assets; `web/public/_headers` covers Cloudflare asset-first delivery. Keep both policies synchronized: same-origin scripts, same-origin/inline styles, and `data:`/`blob:` images for file previews. The current local build includes `_headers`; this maintenance pass does not verify deployed headers.
+- **No credential ever rides a URL (2026-10-04)**. Every request authenticates with the `Authorization` header. Two tags cannot set a header — `<img>` and `<iframe>` — so they used to carry `?_t=<token>` in their `src`, which put the key in browser history, in the `Referer` of every later request, and in the access logs of the worker, cloudflared and bridge. Now `blobUrlFor()` (`web/src/api.js`) fetches by header and hands the tag a `blob:` object URL, cached by `web/src/lib/blob-cache.js` (LRU by bytes, so one big file can't quietly eat the phone's RAM). File links in chat markdown point at the app's own Files page instead of a raw URL. The room id still rides `?_m=` — a routing label, not a secret. `grep -n '_t=' web/src` should return comments only; a new surface that needs a URL the browser loads by itself should use `blobUrlFor`, never a query token. The bridge still *accepts* `?_t=` on GET so an installed PWA running an older cached bundle isn't stranded mid-session.
 
 ## Reliability checks (2026-09-18, local changes)
 
@@ -220,7 +222,7 @@ CODE_SUMMARY.md  # code map + the "symptom → where to fix" table
 - Background stdout no longer prints pairing codes, QR payloads or the master key. Interactive terminals and the authenticated pairing-code API still support pairing.
 - Roomless pairing is refused at the worker: 400 `tenant_required` for a tenantless `POST /api/pair` / `GET /api/state` (invalid JSON included) instead of relaying a stranger's code/key to any machine.
 - `web/public/_headers` supplies the same CSP to Cloudflare's asset-first path without routing every static request through the Worker. Build output includes this file; production headers require deployment verification.
-- Local verification commands: `npm --prefix bridge test` (80 tests), `node --test worker/test/*.test.mjs` (11 tests), `npm --prefix web test` (44 tests), and `npm --prefix web run build`. These do not publish a release or restart the installed bridge.
+- Local verification commands: `npm --prefix bridge test` (80 tests), `node --test worker/test/*.test.mjs` (11 tests), `npm --prefix web test` (461 tests), and `npm --prefix web run build`. These do not publish a release or restart the installed bridge.
 
 ## Bridge routing (2026-10-04)
 
@@ -232,7 +234,7 @@ handleRequest, ctx, routes}`; `bridge/src/index.js` only boots, discovers and
 listens, and hands over its singletons. Two rules the structure depends on, so
 don't "tidy" them away:
 
-- **Auth-gate order.** `/api/pair` and `/api/pair/tenant` run *before* the gate — a stranger must be able to pair in. Everything else under `/api/` needs the master `owm_` key or a device `owd_` key (header, or `?_t=` on GET for `<img>`/EventSource). An unknown `/api/` path answers **401 without a token** and only `404 not_found` once you hold one, so the phone cannot probe which endpoints exist.
+- **Auth-gate order.** `/api/pair` and `/api/pair/tenant` run *before* the gate — a stranger must be able to pair in. Everything else under `/api/` needs the master `owm_` key or a device `owd_` key (the `Authorization` header; `?_t=` on GET is still accepted for older cached PWA bundles only). An unknown `/api/` path answers **401 without a token** and only `404 not_found` once you hold one, so the phone cannot probe which endpoints exist.
 - **`ctx.tunnel` is a holder object, not a captured function.** `index.js` swaps in the real cloudflared controller after `startQuickTunnel` resolves; routes must read through the holder or they will keep the boot-time stub.
 
 `bridge/test/routes.test.js` covers the table over real HTTP with fake deps. Tests in that file must set `OPENWORK_BRIDGE_DIR` to a temp dir — `PairingService` and `saveConfig` write to the real `%APPDATA%` store otherwise.

@@ -49,10 +49,21 @@ test("ô căn phải có class để CSS không phụ thuộc định dạng `st
   assert.doesNotMatch(html, /md-align-left/);
 });
 
-test("ảnh trong workspace đi qua fileHref, không ra ảnh vỡ", () => {
+test("ảnh trong workspace KHÔNG gắn src có token — đánh dấu để caller gắn blob", () => {
   const html = renderMarkdownHtml("![báo đồ](charts/revenue.png)", { fileHref });
-  assert.match(html, /src="\/ws\/ws_1\/files\/raw\?path=charts%2Frevenue\.png"/);
-  assert.doesNotMatch(html, /src="#"/);
+  // `<img>` không set được header Authorization nên không thể có URL tự tải
+  // được mà không dán chìa. Nay nó mang `data-owm-file`, chat.jsx fetch bằng
+  // header rồi gắn `blob:`.
+  assert.match(html, /<img data-owm-file="charts\/revenue\.png"/);
+  assert.doesNotMatch(html, /<img[^>]*\ssrc=/);
+  assert.doesNotMatch(html, /_t=|token/);
+});
+
+test("ảnh trong workspace vẫn bọc link mở được (href qua fileHref)", () => {
+  const html = renderMarkdownHtml("![báo đồ](charts/revenue.png)", { fileHref });
+  assert.match(html, /<a href="\/ws\/ws_1\/files\/raw\?path=charts%2Frevenue\.png">/);
+  // Không target=_blank: link file giờ trỏ vào chính app.
+  assert.doesNotMatch(html, /target="_blank"/);
 });
 
 test("ảnh ngoài vẫn giữ URL và không bị fileHref đụng vào", () => {
@@ -226,6 +237,27 @@ test("inline code là đường dẫn file thì bấm được", () => {
 test("markdown link tới file nội bộ đi qua fileHref, không thành #", () => {
   const html = renderMarkdownHtml("[báo cáo](docs/report.md)", { fileHref });
   assert.match(html, /href="\/ws\/ws_1\/files\/raw\?path=docs%2Freport\.md"/);
+});
+
+test("md-file bấm được trong chính app — không còn target=_blank", () => {
+  const html = renderMarkdownHtml("[báo cáo](docs/report.md)", { fileHref });
+  assert.doesNotMatch(html, /target="_blank"/);
+  // Link file mở bằng hash route nên `noreferrer` không còn ý nghĩa ở đây.
+  assert.doesNotMatch(html, /class="md-file"[^>]*rel="noreferrer"/);
+});
+
+test("KHÔNG renderer nào của markdown đưa chìa lên URL", () => {
+  // `?_t=` là dấu hiệu token bị dán vào href/src. Bản cũ có nó ở wrapPath,
+  // codespan, link và image — tức là mọi đường mở file của agent.
+  const src = [
+    "xem [báo cáo](docs/report.md) và `docs/notes.md`",
+    "![ảnh](charts/a.png)",
+    String.raw`chạy C:\work\out\a.csv nhé`,
+    "mở docs/guide.md",
+  ].join("\n\n");
+  const html = renderMarkdownHtml(src, { fileHref: (p) => `/ws/ws_1/files/raw?path=${encodeURIComponent(p)}` });
+  assert.doesNotMatch(html, /_t=/);
+  assert.doesNotMatch(html, /owm_|Bearer /);
 });
 
 test("bỏ trống hoặc toàn khoảng trắng thì trả chuỗi rỗng", () => {
