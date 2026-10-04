@@ -30,7 +30,7 @@ import {
   keepsAutoScroll, leftBottomBy, newMessagesSince, scrollPlan, shouldShowJump,
 } from "../lib/chat-scroll.js";
 import {
-  composerHintVi, createQueue, isRetryableSendError, pendingStatusVi,
+  createQueue, isRetryableSendError, pendingStatusVi,
   planSteerBatches, queueAdd, queueFor, queueRestore, queueSet, sendDecision,
   sessionBusyFromMap, shouldRestoreComposer, statusLineIsBusy, permissionReplyBody,
 } from "../lib/session-steer.js";
@@ -1484,7 +1484,6 @@ export function ChatPage({ route }) {
             <textarea
               aria-label="Nhập prompt cho agent"
               rows="1"
-              placeholder={composerHintVi({ running, sending })}
               value={draft}
               onInput={(e) => setDraft(e.currentTarget.value)}
               onKeyDown={(e) => {

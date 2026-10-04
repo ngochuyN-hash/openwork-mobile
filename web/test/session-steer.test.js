@@ -20,7 +20,6 @@ import {
   permissionReplyBody,
   isRetryableSendError,
   pendingStatusVi,
-  composerHintVi,
   STEER_MAX_PER_PROMPT,
 } from "../src/lib/session-steer.js";
 
@@ -141,13 +140,6 @@ test("dòng trạng thái: đang chạy + có tin chờ thì nói cả hai, rỗ
     pendingStatusVi({ running: true, sending: true }),
     "agent đang chạy, đang tải file…"
   );
-});
-
-test("ô gõ nói rõ tin sẽ chèn vào lượt đang chạy", () => {
-  assert.equal(composerHintVi({}), "Nhập prompt cho agent…");
-  assert.equal(composerHintVi({ running: false }), "Nhập prompt cho agent…");
-  assert.match(composerHintVi({ running: true }), /chèn vào lượt này/);
-  assert.equal(composerHintVi({ running: true, sending: true }), "Đang tải file lên máy…");
 });
 
 // ---- Hàng đợi offline: thuộc đúng phiên ----

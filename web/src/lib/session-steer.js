@@ -4,8 +4,7 @@
 //
 // TÌNH TRẠNG CONSUMER (2026-10-04): ĐÃ NỐI. `send()` ở chat.jsx gọi
 // `sendDecision()` để quyết định send/steer/wait, và `mergeSteerTexts()` khi
-// flush hàng đợi offline. `pendingStatusVi()`/`composerHintVi()` cho dòng
-// trạng thái và placeholder ô gõ.
+// flush hàng đợi offline. `pendingStatusVi()` cho dòng trạng thái.
 //
 // ---- HAI QUYẾT ĐỊNH, đọc trước khi đổi ----
 //
@@ -283,11 +282,4 @@ export function pendingStatusVi({ running, sending, pendingCount } = {}) {
  */
 export function statusLineIsBusy({ running, sending, pendingCount } = {}) {
   return Boolean(running) || Boolean(sending);
-}
-
-/** Gợi ý trong ô gõ. Khi busy phải nói rõ tin sẽ CHÈN vào lượt chạy hiện tại. */
-export function composerHintVi({ running, sending } = {}) {
-  if (sending) return "Đang tải file lên máy…";
-  if (running) return "Agent đang chạy — gõ tiếp rồi bấm Gửi, tin sẽ chèn vào lượt này.";
-  return "Nhập prompt cho agent…";
 }
