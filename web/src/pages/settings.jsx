@@ -10,7 +10,18 @@ import {
   apiRevokeDevice,
   apiWakeOpenWork,
   apiOpenWorkPath,
+  apiPairingCode,
+  apiRestartTunnel,
+  apiSetMachineName,
+  ow,
+  unwrap,
+  owEngineReloadAll,
 } from "../api.js";
+import {
+  formatPairingCountdown,
+  pairingDeadline,
+  pairingSecondsLeft,
+} from "../lib/pairing-code.js";
 import { useConfirm, Banner } from "../components/ui.jsx";
 import { PcsIcon } from "../components/icons.jsx";
 import { OpenWorkFix } from "../components/openwork-fix.jsx";
@@ -44,6 +55,23 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
   // Bridge trả `candidates` khi wake không tìm thấy exe — đổ vào chung bộ chọn.
   const [wakeCandidates, setWakeCandidates] = useState([]);
 
+  // --- Nhóm 2: ghép thiết bị khác · tên máy · restart tunnel · nạp lại engine ---
+  // Mã ghép: bridge trả `secondsLeft` TẠI THỜI ĐIỂM fetch nên phải quy về mốc
+  // tuyệt đối (deadline) rồi đếm lùi mỗi giây — tin secondsLeft nguyên si là
+  // đồng hồ đứng yên.
+  const [pairing, setPairing] = useState(null); // {codeFormatted, pairUrl, deadline}
+  const [pairingLeft, setPairingLeft] = useState(0);
+  const [pairingBusy, setPairingBusy] = useState(false);
+  const [pairingErr, setPairingErr] = useState("");
+  const [tunnelBusy, setTunnelBusy] = useState(false);
+  const [tunnelMsg, setTunnelMsg] = useState("");
+  const [machineEditing, setMachineEditing] = useState(false);
+  const [machineName, setMachineName] = useState("");
+  const [machineBusy, setMachineBusy] = useState(false);
+  const [machineErr, setMachineErr] = useState("");
+  const [reloading, setReloading] = useState(false);
+  const [reloadMsg, setReloadMsg] = useState("");
+
   useEffect(() => {
     apiDevices().then(setDevices).catch(() => setDevices([]));
     if (state?.thisDevice?.label) setThisDeviceLabel(state.thisDevice.label);
@@ -55,6 +83,14 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
   useEffect(() => {
     setOpenworkOverride(null);
   }, [state?.openwork]);
+
+  // Đếm lùi mỗi giây khi mã ghép đang hiện. Interval vẫn chạy khi đã về 0 —
+  // vô hại (giữ 0), đỡ thêm nhánh xoá/lập lại khi hết hạn.
+  useEffect(() => {
+    if (!pairing) return undefined;
+    const timer = setInterval(() => setPairingLeft(pairingSecondsLeft(pairing.deadline)), 1000);
+    return () => clearInterval(timer);
+  }, [pairing?.deadline]);
 
   async function revoke(device) {
     askConfirm({
@@ -181,6 +217,106 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     }
   }
 
+  // Tên máy hiện tại từ /api/state (bridge cũ không có edge.machineName → "—").
+  // Khác "máy đang kết nối" phía trên: đó là tên PHÒNG (tenant), đây là tên
+  // bridge tự mô tả — thiết bị ghép SAU sẽ thấy ở màn đăng nhập.
+  const currentMachineName = state?.edge?.machineName ?? "";
+
+  function startEditMachine() {
+    setMachineName(currentMachineName);
+    setMachineErr("");
+    setMachineEditing(true);
+  }
+
+  async function saveMachineName() {
+    if (!machineName.trim()) {
+      setMachineErr("Tên máy trống.");
+      return;
+    }
+    setMachineBusy(true);
+    setMachineErr("");
+    try {
+      await apiSetMachineName(machineName);
+      setMachineEditing(false);
+      // /api/state về là dòng tên máy tự đổi — không cần banner xác nhận thêm.
+      onRecheck();
+    } catch (e) {
+      setMachineErr(e.message === "UNPAIRED" ? "Chìa hết hiệu lực (401) — ghép lại để tiếp tục." : String(e.message || e));
+    } finally {
+      setMachineBusy(false);
+    }
+  }
+
+  async function restartTunnel() {
+    setTunnelBusy(true);
+    setTunnelMsg("");
+    try {
+      await apiRestartTunnel();
+      setTunnelMsg("Đã xin tunnel mới — chờ ~30 giây rồi bấm Kiểm tra lại để thấy URL mới.");
+    } catch (e) {
+      setTunnelMsg(e.message === "UNPAIRED" ? "Chìa hết hiệu lực (401) — ghép lại để tiếp tục." : String(e.message || e));
+    } finally {
+      setTunnelBusy(false);
+    }
+  }
+
+  async function loadPairingCode() {
+    setPairingBusy(true);
+    setPairingErr("");
+    try {
+      const p = await apiPairingCode();
+      setPairing({
+        codeFormatted: p.codeFormatted || `${String(p.code ?? "").slice(0, 4)}-${String(p.code ?? "").slice(4)}`,
+        pairUrl: p.pairUrl ?? "",
+        deadline: pairingDeadline(p.secondsLeft, Date.now()),
+      });
+      setPairingLeft(p.secondsLeft ?? 0);
+    } catch (e) {
+      setPairingErr(e.message === "UNPAIRED" ? "Chìa hết hiệu lực (401) — ghép lại để tiếp tục." : String(e.message || e));
+    } finally {
+      setPairingBusy(false);
+    }
+  }
+
+  async function copyPairUrl() {
+    try {
+      await navigator?.clipboard?.writeText(pairing?.pairUrl ?? "");
+      setPairingErr("");
+    } catch {
+      // Trình duyệt chặn clipboard (không https/chưa cấp quyền): lộ link ra
+      // banner để bôi đen tự chép — vẫn hơn chết im.
+      setPairingErr(`Trình duyệt chặn chép tự động — chép tay: ${pairing?.pairUrl ?? ""}`);
+    }
+  }
+
+  /** Nạp lại engine mọi workspace (POST /workspace/:id/engine/reload). Desktop
+   * có action tương đương trong Settings với fallback restart app — web không
+   * tự restart app được, lỗi thì người dùng dùng nút "Mở OpenWork" phía trên. */
+  async function reloadEngine() {
+    setReloading(true);
+    setReloadMsg("");
+    try {
+      const payload = await ow("/workspaces");
+      const wss = unwrap(payload)?.workspaces ?? payload?.workspaces ?? [];
+      if (!wss.length) {
+        setReloadMsg("Không có workspace nào để nạp.");
+        return;
+      }
+      const results = await owEngineReloadAll(wss.map((w) => w?.id));
+      const okCount = results.filter((r) => r.ok).length;
+      const failed = results.filter((r) => !r.ok);
+      setReloadMsg(
+        failed.length
+          ? `Nạp lại được ${okCount}/${results.length} workspace — lỗi: ${failed.map((f) => `${f.wsId}: ${f.error}`).join("; ")}.`
+          : `Đã nạp lại engine ${okCount} workspace.`
+      );
+    } catch (e) {
+      setReloadMsg(String(e.message || e));
+    } finally {
+      setReloading(false);
+    }
+  }
+
   // "Gỡ pairing" = quên máy đang kết nối trên điện thoại này (khóa vẫn nằm
   // trên máy; vào lại = quét/lấy mã ghép mới trong OpenPocket).
   function unpair() {
@@ -254,6 +390,44 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
           <span class={`badge ${openworkRunning ? "ok" : "busy"}`}>{statusText}</span>
         </div>
 
+        {/* Tên máy (config bridge) khác tên phòng phía trên: thiết bị ghép SAU
+            sẽ thấy tên này ở màn đăng nhập. Sửa inline — 1 giá trị, không đáng
+            cả một sheet. */}
+        <div class="row-between" style="margin-bottom:var(--sp-2)">
+          {machineEditing ? (
+            <>
+              <input
+                type="text"
+                style="flex:1;min-width:0;margin-right:8px"
+                value={machineName}
+                maxLength={60}
+                autocomplete="off"
+                spellcheck={false}
+                aria-label="Tên máy"
+                onInput={(e) => setMachineName(e.currentTarget.value)}
+              />
+              <span class="page-actions" style="margin:0;flex-shrink:0">
+                <button class="btn small" disabled={machineBusy || !machineName.trim()} onClick={saveMachineName}>
+                  {machineBusy ? "Đang lưu…" : "Lưu"}
+                </button>
+                <button class="btn small ghost" onClick={() => setMachineEditing(false)}>
+                  Đóng
+                </button>
+              </span>
+            </>
+          ) : (
+            <>
+              <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                Tên máy: <b>{currentMachineName || "—"}</b>
+              </span>
+              <button class="btn small ghost" style="flex-shrink:0" onClick={startEditMachine}>
+                Sửa
+              </button>
+            </>
+          )}
+        </div>
+        {machineErr && <p class="field-error" style="margin-top:6px" role="alert">{machineErr}</p>}
+
         {/* Một hàng nút, một nút chính. "Kiểm tra lại" và "Quét lại máy tính"
             trước đây là HAI tên cho cùng một lệnh apiRecheck — gộp lại một. */}
         <div class="page-actions">
@@ -265,9 +439,21 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
               {waking ? "Đang bật…" : "Mở OpenWork"}
             </button>
           )}
+          {/* Restart tunnel = thay cloudflared, GIỮ bridge — khác restart bridge
+              (không đụng bộ đếm 429). Tunnel chết HẲN thì lệnh này không tới được
+              máy: điện thoại phải bấm nút ↻ trên GUI máy tính, ghi rõ ở title. */}
+          <button
+            class="btn small ghost"
+            disabled={tunnelBusy}
+            onClick={restartTunnel}
+            title="Xin tunnel mới khi đường về máy kẹt. Nếu tunnel đã chết hẳn (máy mất nối hoàn toàn) thì lệnh không tới được máy — phải bấm nút ↻ trên GUI máy tính."
+          >
+            {tunnelBusy ? "Đang khởi động lại…" : "Khởi động lại tunnel"}
+          </button>
         </div>
         {checkMsg && <p class="field-error" style="margin-top:10px" role="alert">{checkMsg}</p>}
         {wakeMsg && <p class="sheet-body" style="margin:10px 0 0">{wakeMsg}</p>}
+        {tunnelMsg && <p class="sheet-body" style="margin:10px 0 0">{tunnelMsg}</p>}
         {pathErr && <Banner kind="err">{pathErr}</Banner>}
         {pathMsg && <Banner kind="ok">{pathMsg}</Banner>}
 
@@ -323,6 +509,21 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
               )}
             </tbody>
           </table>
+
+          {/* Bảo trì hiếm khi cần, nên chôn trong details: nạp lại engine sau
+              khi đổi MCP/plugin trên máy hoặc engine dựng dở (desktop có action
+              tương đương trong Settings, kèm fallback restart app). */}
+          <div class="page-actions" style="margin-top:var(--sp-3)">
+            <button
+              class="btn small ghost"
+              disabled={reloading}
+              onClick={reloadEngine}
+              title="Nạp lại engine của các workspace — dùng sau khi đổi MCP/plugin trên máy hoặc khi engine dựng dở"
+            >
+              {reloading ? "Đang nạp lại…" : "Nạp lại engine"}
+            </button>
+          </div>
+          {reloadMsg && <p class="sheet-body" style="margin:8px 0 0">{reloadMsg}</p>}
         </details>
 
         {/* Nút phá hủy tách riêng khỏi cụm nút thường, không đứng cạnh nút chính
@@ -337,6 +538,49 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       <div class="card">
         <h3>Thiết bị đã ghép</h3>
         <p class="sheet-body">Thiết bị này: <b>{thisDeviceLabel || "—"}</b></p>
+
+        {/* Ghép thiết bị KHÁC ngay từ điện thoại: hiện mã one-time đang sống
+            trên bridge cho máy mới nhập ở màn Đăng nhập (hoặc mở link mời).
+            Điện thoại này chỉ "đứng cạnh" hiển thị mã — mã thật nằm trên bridge,
+            dùng đúng 1 lần, 30 phút tự hết hạn, sai giới hạn 10 lần/phút/IP.
+            Cố ý KHÔNG vẽ masterUrl/masterQr: token vĩnh viễn chỉ nên nằm trong
+            terminal/GUI trên máy tính, không vẽ lên màn hình điện thoại. */}
+        <div style="margin-top:var(--sp-2);padding-top:var(--sp-3);border-top:1px solid var(--border)">
+          {!pairing ? (
+            <button class="btn small" disabled={pairingBusy} onClick={loadPairingCode}>
+              {pairingBusy ? "Đang lấy mã…" : "Ghép thiết bị khác"}
+            </button>
+          ) : (
+            <div>
+              <div class="row-between" style="margin-bottom:4px">
+                <span class="mono pair-code">{pairing.codeFormatted}</span>
+                <span class={`badge ${pairingLeft > 0 ? "busy" : "err"}`}>
+                  {pairingLeft > 0 ? `còn ${formatPairingCountdown(pairingLeft)}` : "hết hạn"}
+                </span>
+              </div>
+              <p class="sheet-body">
+                Trên thiết bị mới: mở app → màn Đăng nhập → nhập mã trên, hoặc mở link mời. Mã dùng đúng 1 lần.
+              </p>
+              <div class="page-actions">
+                <button class="btn small ghost" onClick={copyPairUrl}>
+                  Sao chép link mời
+                </button>
+                {/* Khi mã còn sống bridge trả đúng mã cũ (ensureCode) — nút
+                    "lấy mã khác" lúc này là nút vô nghĩa, chỉ hiện khi hết hạn. */}
+                {pairingLeft <= 0 && (
+                  <button class="btn small" disabled={pairingBusy} onClick={loadPairingCode}>
+                    Lấy mã mới
+                  </button>
+                )}
+                <button class="btn small ghost" onClick={() => setPairing(null)}>
+                  Đóng
+                </button>
+              </div>
+            </div>
+          )}
+          {pairingErr && <Banner kind="err">{pairingErr}</Banner>}
+        </div>
+
         {devices === null ? (
           <p class="sheet-body">Đang tải…</p>
         ) : devices.length === 0 ? (

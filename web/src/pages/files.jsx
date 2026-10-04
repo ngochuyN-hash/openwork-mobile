@@ -438,12 +438,7 @@ function FileViewer({ wsEnc, file, onClose }) {
       )}
 
       {file.kind === "binary" && (
-        <Empty
-          title="File nhị phân"
-          hint={`Bấm "Tải về" để tải ${file.name} về điện thoại.`}
-          actionLabel="Tải về"
-          onAction={downloadFile}
-        />
+        <Empty title="File nhị phân" actionLabel="Tải về" onAction={downloadFile} />
       )}
     </>
   );

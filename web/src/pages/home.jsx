@@ -2,6 +2,18 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { ow, owDeleteSession, unwrap, timeAgo } from "../api.js";
 import { navigate } from "../app.jsx";
 import { Banner, Empty, SkeletonList, SwipeRow } from "../components/ui.jsx";
+import { SearchIcon } from "../components/icons.jsx";
+import {
+  // Ghim / lưu trữ: cờ cục bộ của máy đang cầm (xem lib/session-organize.js).
+  // Home là danh sách GỘP mọi workspace nên không có nhóm phiên ở đây — nhóm là
+  // dữ liệu của từng workspace, chỉ màn trong workspace mới quản lý được.
+  loadFlags,
+  saveFlags,
+  toggleFlag,
+  flagOn,
+} from "../lib/session-organize.js";
+import { sessionTitleOf } from "../lib/session-rename.js";
+import { PinIcon } from "./sessions.jsx";
 
 /** Màu chấm nhận diện workspace — hash id, đúng kiểu desktop (mỗi ws 1 màu). */
 const WS_COLORS = ["#d6409f", "#30a46c", "#f76b15", "#0090ff", "#6e56cf", "#e2a336", "#12a594", "#e54666"];
@@ -16,6 +28,7 @@ export function wsColor(id = "") {
 export function HomePage() {
   const [items, setItems] = useState(null); // [{ws, session}]
   const [statuses, setStatuses] = useState({}); // key `${wsId}:${sid}` -> type
+  const [flagMap, setFlagMap] = useState({}); // wsId -> {pinned, archived} (localStorage)
   const [error, setError] = useState("");
   const [openId, setOpenId] = useState(null); // key `${wsId}:${sid}` — 1 dòng vuốt mở / lúc
   const timerRef = useRef(null);
@@ -45,6 +58,11 @@ export function HomePage() {
       const merged = groups.flat().sort(
         (a, b) => (b.session.time?.updated ?? 0) - (a.session.time?.updated ?? 0)
       );
+      // Cờ ghim/lưu trữ nằm ở localStorage, đọc mỗi lần nạp để không phải
+      // bắt sự kiện giữa các màn. Rẻ hơn một request.
+      const flags = {};
+      for (const ws of slice) flags[ws.id] = loadFlags(ws.id);
+      setFlagMap(flags);
       setItems(merged.slice(0, 30));
       setError("");
       if (statRes.status === "fulfilled") {
@@ -71,6 +89,26 @@ export function HomePage() {
 
   const busyCount = items?.filter((it) => statuses[`${it.ws.id}:${it.session.id}`] === "busy").length ?? 0;
 
+  /** Cờ ghim/lưu trữ của workspace chứa phiên này. */
+  const flagsOf = (wsId) => flagMap[wsId] ?? { pinned: [], archived: [] };
+  const isPinned = (wsId, sid) => flagOn(flagsOf(wsId), "pinned", sid);
+  const isHidden = (wsId, sid) => flagOn(flagsOf(wsId), "archived", sid);
+
+  // Ghim lên đầu, còn lại giữ nguyên thứ tự thời gian; phiên đã lưu trữ thì
+  // ẩm hẳn (xem lại được trong màn Sessions, mục "Lưu trữ").
+  const shown = items
+    ? [...items.filter((it) => isPinned(it.ws.id, it.session.id)), ...items.filter((it) => !isPinned(it.ws.id, it.session.id))].filter(
+        (it) => !isHidden(it.ws.id, it.session.id)
+      )
+    : null;
+  const pinnedCount = items?.filter((it) => isPinned(it.ws.id, it.session.id)).length ?? 0;
+
+  /** Bật/tắt ghim cho một phiên — cờ lưu theo workspace của phiên đó. */
+  function togglePin(ws, session) {
+    const next = saveFlags(ws.id, toggleFlag(flagsOf(ws.id), "pinned", session.id));
+    setFlagMap((prev) => ({ ...prev, [ws.id]: next }));
+  }
+
   async function remove(ws, session) {
     setOpenId(null);
     try {
@@ -85,8 +123,13 @@ export function HomePage() {
     <>
       <div class="page-head">
         <span class="hint">
-          {items ? `${items.length} session${busyCount ? ` · ${busyCount} đang chạy` : ""}` : "…"}
+          {items
+            ? `${shown.length} session${pinnedCount ? ` · ${pinnedCount} ghim` : ""}${busyCount ? ` · ${busyCount} đang chạy` : ""}`
+            : "…"}
         </span>
+        <button type="button" class="btn small ghost" onClick={() => navigate("#/search")}>
+          <SearchIcon size={16} /> Tìm phiên
+        </button>
       </div>
 
       {error && <Banner kind="err" actionLabel="Thử lại" onAction={load}>{error}</Banner>}
@@ -101,8 +144,17 @@ export function HomePage() {
         />
       )}
 
-      {items?.map(({ ws, session }) => {
+      {items?.length > 0 && shown.length === 0 && (
+        <Empty
+          icon
+          title="Không còn phiên nào ở đây"
+          hint="Bạn đã lưu trữ hết session rồi. Vào một workspace để lấy lại."
+        />
+      )}
+
+      {shown?.map(({ ws, session }) => {
         const status = statuses[`${ws.id}:${session.id}`];
+        const pinned = isPinned(ws.id, session.id);
         const key = `${ws.id}:${session.id}`;
         return (
           <SwipeRow
@@ -124,8 +176,22 @@ export function HomePage() {
               }}
             >
               <div class="row-between">
-                <h3>{session.title || "Không tiêu đề"}</h3>
-                <span class={`dot ${status === "busy" ? "busy" : "ok"}`} aria-label={status ?? "idle"} />
+                <h3>{sessionTitleOf(session)}</h3>
+                <div class="page-actions">
+                  <button
+                    type="button"
+                    class="btn small ghost btn-icon"
+                    aria-pressed={pinned}
+                    aria-label={pinned ? "Bỏ ghim phiên này" : "Ghim phiên lên đầu danh sách"}
+                    onClick={(e) => {
+                      e.stopPropagation(); // nếu không, SwipeRow coi là tap -> mở phiên
+                      togglePin(ws, session);
+                    }}
+                  >
+                    <PinIcon size={16} filled={pinned} />
+                  </button>
+                  <span class={`dot ${status === "busy" ? "busy" : "ok"}`} aria-label={status ?? "idle"} />
+                </div>
               </div>
               <div class="row-between" style="margin-top:6px">
                 <span class="ws-chip" style={`--ws-c:${wsColor(ws.id)}`}>

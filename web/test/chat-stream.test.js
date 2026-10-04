@@ -131,3 +131,62 @@ test("refetch lần đầu (chưa có gì cục bộ) — fetched không đổi"
   assert.equal(kept.length, 1);
   assert.equal(kept[0].id, "m1");
 });
+
+// ---- Hồi quy do thêm tính năng steer (04/10) ----
+// Trước steer, send() chặn khi agent đang chạy (`|| running) return`), nên nhánh
+// refetch-giữ-tin-cục-bộ không bao giờ gặp tin client tự sinh. Sau steer thì có:
+// tin vừa gửi hiện optimistically với id `local-<timestamp>`, rồi loadMessages()
+// chạy lại lúc agent đang chạy. Hai lỗi dưới đây chỉ xuất hiện từ đó.
+
+test("tin client tự sinh bị bỏ khi server đã trả bản thật — không hiện trùng", () => {
+  const created = 1750000000000;
+  const prev = [
+    { info: { id: "msg_1", role: "user" }, parts: [] },
+    { info: { id: `local-${created}`, role: "user", time: { created } }, parts: [] },
+  ];
+  // Server đã ghi tin đó và trả về bản thật (id msg_*, cùng thời điểm).
+  const fetched = [
+    { info: { id: "msg_1", role: "user" }, parts: [] },
+    { info: { id: "msg_9abc", role: "user", time: { created } }, parts: [] },
+  ];
+  const merged = mergeRefetchKeepInflight(fetched, prev);
+  assert.equal(merged.length, 2, "không được dồn thêm bản local");
+  assert.deepEqual(
+    merged.map((m) => m.info.id),
+    ["msg_1", "msg_9abc"],
+  );
+});
+
+test("tin client tự sinh VẪN được giữ khi server chưa trả bản thật", () => {
+  // Vừa gửi xong, engine chưa kịp ghi → phải giữ để người dùng thấy tin mình
+  // vừa gửi, không được làm trống rồi nhảy.
+  const created = 1750000000000;
+  const local = { info: { id: `local-${created}`, role: "user", time: { created } }, parts: [] };
+  const fetched = [{ info: { id: "msg_1", role: "user" }, parts: [] }];
+  const merged = mergeRefetchKeepInflight(fetched, [fetched[0], local]);
+  assert.equal(merged.length, 2);
+  assert.equal(merged[1].info.id, `local-${created}`);
+});
+
+test("tin đang stream (id thật) vẫn giữ như cũ — không bị coi là tin local", () => {
+  const done = { info: { id: "msg_1", role: "user" }, parts: [] };
+  const streaming = { info: { id: "msg_2", role: "assistant" }, parts: [] };
+  const merged = mergeRefetchKeepInflight([done], [done, streaming]);
+  assert.equal(merged.length, 2);
+  assert.equal(merged[1], streaming);
+});
+
+test("nhiều tin local cùng lúc — bỏ đúng số đã được server xác nhận", () => {
+  const t1 = 1750000000000;
+  const t2 = 1750000000001;
+  const prev = [
+    { info: { id: `local-${t1}`, role: "user", time: { created: t1 } }, parts: [] },
+    { info: { id: `local-${t2}`, role: "user", time: { created: t2 } }, parts: [] },
+  ];
+  // Server mới nhận được tin đầu, tin sau chưa.
+  const fetched = [{ info: { id: "msg_a", role: "user", time: { created: t1 } }, parts: [] }];
+  const merged = mergeRefetchKeepInflight(fetched, prev);
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].info.id, "msg_a");
+  assert.equal(merged[1].info.id, `local-${t2}`);
+});

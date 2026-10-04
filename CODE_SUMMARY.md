@@ -1,6 +1,9 @@
 # CODE_SUMMARY — OpenWork Mobile
 
-> Last updated: 2026-10-03 — chat now streams through a fetch-based SSE client (`web/src/lib/sse.js`:
+> Last updated: 2026-10-04 — parity rounds closed: session extras (cost, rename, /compact, steer,
+> effort/variant, cross-session search, pin/archive/groups, share) and Settings maintenance
+> (pairing-code display, machine rename, tunnel restart, engine reload) — see the 2026-10-04 section.
+> Also since 2026-10-03: chat streams through a fetch-based SSE client (`web/src/lib/sse.js`:
 > Authorization header instead of the old `?_t=` token-on-URL, backoff reconnect 1s→16s, event `type`
 > parsed from the JSON body because the engine emits UNNAMED SSE events) and a pure reducer
 > (`web/src/lib/chat-stream.js`, unit-tested in `web/test/chat-stream.test.js`) that applies the
@@ -19,7 +22,251 @@
 > 📌 **Rules (project owner's requirements):** every time code/structure/behavior changes,
 > BOTH this file AND `README.md` MUST be updated in the same commit — **in English**.
 
-## This maintenance round — 2026-10-03 (commits + working tree)
+## Chat markdown: real GFM rendering (tables at last) — 2026-10-04 (web only)
+
+Symptom: every markdown table in an assistant reply showed up as raw text rows with `|`
+characters glued together, and `**bold**`, `## headings` and links printed their markers.
+Cause: `MarkdownText` in `chat.jsx` had **no markdown parser at all** — it split the text on
+```` ``` ```` and then rendered every remaining line as its own `<span>` + `<br>`. A GFM table is
+a *block* construct (`| a | b |` plus the `| --- | --- |` delimiter row), so splitting per line can
+never produce a `<table>` element for CSS to style. OpenWork desktop renders the same content with
+`marked` + `gfm: true` (`apps/app/src/components/markdown/markdown-primitive.ts`, its `table`
+renderer), which is where the parity gap came from.
+
+Fix — new pure module `web/src/lib/markdown.js` (unit-tested in `web/test/markdown.test.js`),
+wired in `chat.jsx`'s `MarkdownText`, styles in `styles.css`:
+
+- Same engine as the desktop: `marked` with `gfm: true`, so tables, `**bold**`, `_italic_`,
+  `~~del~~`, headings, links, blockquotes, ordered/unordered lists and fenced code all render.
+- **Column alignment survives**: the `---:` / `:---:` delimiter becomes
+  `style="text-align:right"`, so numeric columns line up like they do on the desktop.
+- `.md-table-wrap` scrolls horizontally instead of squeezing columns — without it a wide table on
+  a 390px phone collapses to one character per cell.
+- **Security without a new dependency**: raw HTML in markdown is *escaped* (desktop passes it
+  through), and every href goes through `safeHref` (`http`/`https`/`mailto` + relative only), so
+  `javascript:` and `data:` become `#` and `DOMPurify` is not needed. Covered by tests.
+- Internal file paths still become clickable Open/Download links — `fileHref` is injected by the
+  caller, keeping the module free of Preact, tokens and `localStorage`.
+- `createMarkdownStream()` reuses the HTML of finished top-level blocks and only re-renders the
+  last two (a growing block can reshape the one before it — a table's `---` row only becomes a
+  table once data rows follow). The chat flushes per `requestAnimationFrame`, so re-parsing the
+  whole message each frame was O(n²).
+
+Desktop-only for now: `.xlsx` still opens as a plain download here, while the desktop opens it in a
+sheet artifact editor (`isSheetPreviewSupported` covers `csv`/`tsv`/`xlsx`). CSV/TSV in the Files
+viewer still open in a `<textarea>`. Math/KaTeX is likewise absent — `$O(n \log n)$` shows as raw
+text. That gap is deliberate for now (a KaTeX bundle is a real weight decision on mobile), not an
+oversight.
+
+### QA round on the markdown renderer (4 independent review agents)
+
+Four reviewers attacked it from different angles (security, desktop parity, Preact runtime, mobile
+UI). Every fix below was **reproduced locally before being fixed**, not taken on trust.
+
+| Severity | Bug | Fix |
+| --- | --- | --- |
+| CRITICAL | `AT&amp;T` rendered as `AT&amp;amp;T` — `escapeHtml` escaped `&` unconditionally | `escapeText()` mirroring marked's internal escape, keeping valid entities. Code spans keep the full escape (GFM treats entities in code as literal) |
+| CRITICAL | Every bare URL in prose produced **nested `<a>`** — the Windows path regex matched the `s:/` inside `https://`, and `renderer.text` also ran inside link labels | Link labels render through `parser.textRenderer`; negative lookbehind so a scheme letter can't start a drive path |
+| HIGH | `- [ ] todo` lost its checkbox entirely — marked v15 keeps task state on the item instead of emitting a `checkbox` token, so the overridden `listitem` dropped it | Insert the checkbox in `listitem` |
+| HIGH | A reference-style link **never appeared, even after streaming finished**: the first block rendered before its `[ref]:` definition existed, and the cache kept that HTML because `raw` was unchanged | `REFERENCE_DEF` guard. Note marked v15 **swallows** `def` tokens (v17 emits them), so desktop's `tokens.some(t => t.type === "def")` cannot be copied — and any definition present now forces a full re-render, not just a re-lex |
+| HIGH | `.md-table-wrap` lost its horizontal scroll position on **every frame** while a table was streaming, because assigning `innerHTML` destroys and recreates all child nodes | Snapshot `scrollLeft` during render (the `getSnapshotBeforeUpdate` equivalent Preact lacks) and restore in `useLayoutEffect`. Verified in a real browser: node identity changes, scroll survives |
+| HIGH | `collectFileRefs` rescanned every message each frame — **7.4 ms/frame at 200 messages**, ~8× the whole markdown cost | `useMemo` on `[role, parts]` |
+| MEDIUM | `~single~` became `<del>` | Desktop's single-tilde guard copied verbatim |
+| MEDIUM | Streaming a 56 KB message cost **754 ms** total, because `marked.lexer` re-lexed the whole text each frame (it is ~90% of render cost, so caching HTML alone barely helped) | Lex only the appended tail: **754 ms → 48 ms**, byte-identical output |
+| MEDIUM | User messages ran the lexer and threw the result away | `MessageBubble` renders plain text directly for `role === "user"` |
+| **CRITICAL** | **`escapeText` regex had no `g` flag**, so `String.replace` swapped only the FIRST match. Any reply with two tags left the second live: `<p>x</p><img src=x onerror=…>` was a working script sink. My own test passed because the sample happened to need exactly one replacement | Added `g` |
+| **CRITICAL** | To stop nested `<a>`, `link()`/`del()` were rendered through marked's `parser.textRenderer` — a token-to-text shortcut that **escapes nothing**. `[<img src=x onerror=…>](https://e.com)` executed | A label-depth flag that skips linkification but keeps escaping. Bonus: `<strong>`/`<code>` inside link labels render again |
+| MEDIUM | `safeHref` let `//evil.com` and `/\evil.com` through — the browser rewrites `\` to `/`, so both resolved off-site and leaked the Referer | Normalise backslashes first, then reject protocol-relative |
+| MEDIUM | LLM-invented paths could contain `../`; `encodeURIComponent` URL-encodes but does not stop traversal | `normalizeFilePath` rejects `..` segments and control chars. **Defence in depth only — the engine must still resolve and confine the path itself** |
+| LOW | `//host/path` was mistaken for a workspace file | Treated as external |
+| LOW | `fileHref` output skipped `safeHref` | Normalised at a single choke point |
+
+The two CRITICALs were both *introduced by the fixes in the row above them* — worth
+remembering that "this function is on the escaping path" is not evidence that it escapes.
+
+### Mobile UI review
+
+Measured, not eyeballed: table overflow, `word-break`, `nowrap`, `max-width: 86%`,
+`prefers-reduced-motion` and `prefers-color-scheme` all checked out. Note the app has
+**no dark mode by design** (`color-scheme: light`, owner's decision) — the reviewer had
+to inject dark tokens to test, and every rule passed 100% on tokens with no hardcoded
+colours.
+
+- `.md-table-wrap` gained `overscroll-behavior-x: contain`. Without it a horizontal
+  swipe at the edge can be claimed by the browser and become a swipe-back that leaves
+  the PWA. **Only the `-x` axis** — the `contain` shorthand would eat vertical chat
+  scrolling.
+- Added a pure-CSS scroll shadow (two `local` gradients that travel with the content +
+  two `scroll` radials pinned to the edges), so the right edge only shows when columns
+  are actually hidden. A table clipped at the bubble edge gave no hint it could be
+  swiped.
+- `blockquote` was `--text-faint` = **3.30:1** on white, under the 4.5:1 that this very
+  file sets as its own rule for `.banner.warn`. Now `--text-dim` at 5.93:1.
+- `h4/h5/h6` were all the same size, and `h6` came out *smaller* than body text. Now a
+  real scale.
+- Alignment is selected by `.md-align-*` class, not `[style*="right"]`, which would die
+  silently if the renderer changed how it writes the attribute.
+
+**Do not add `overflow-wrap: anywhere` to table cells.** It lowers min-content to one
+character, so the browser squeezes text columns to zero width — a "Tháng" header renders
+as `T h à n g`. `overflow-wrap: break-word` does nothing at all. A long token making a
+column wider is the correct trade: the table already scrolls, and it still cannot
+overflow the bubble.
+
+### A layout bug only a screenshot caught
+
+`.md-table { width: 100% }` forced the table into the bubble's width, squeezing the
+last column to ~60px so ordinary text wrapped to three lines and every row measured
+**65px**. Changed to `width: max-content; min-width: 100%` — narrow tables still fill
+the bubble, wide ones scroll without squeezing. Rows are now **29px**. No unit test
+would have found this; it came from measuring a rendered page.
+
+### Confirmed sound, so nobody re-investigates
+
+No hook-order violation; no cross-session cache leak; Preact compares the `__html`
+*string*, so a new object per render does not force a rewrite; `reset()` is never
+called but memory stays bounded per message (28–158× the text, not a leak); no regex
+`lastIndex` bugs; `safeHref` neutralises `javascript:`/`data:`/`vbscript:`/`file:`; the
+two-pass `linkifyPaths` cannot be abused even though the second pass runs over the
+first pass's output (80k fuzz cases, zero live tags).
+
+### Known upstream limitation, deliberately not patched
+
+`marked` is O(n²) on long runs of repeated punctuation: 50k `!` costs ~1.9s for a single
+parse, and ~640ms **per frame** while streaming. Marked v17 was benchmarked and has the
+same curve, so upgrading is not a fix. The prefix-tail lexing does not help either — a
+single 50k-character block has no block boundary to cache against. A realistic 56KB
+message streams in 48ms total, so the practical impact is nil; reaching it needs
+deliberately crafted content, and every available "fix" truncates legitimate messages.
+Tracked rather than papered over.
+
+Two of my own test assertions were also wrong: one rejected cells that legally contain `|` (escaped
+pipes), and one was near-vacuous. Both rewritten as structural assertions.
+
+Confirmed **not** broken, so nobody re-investigates: no hook-order violation, no cross-session cache
+leak, Preact compares the `__html` *string* so a new object does not force a rewrite, `reset()` is
+never called (memory is bounded per message, not a leak), no regex `lastIndex` bugs, `safeHref`
+neutralises `javascript:`/`data:`, and the Files/`.xlsx` behaviour above is a known gap rather than a
+regression.
+
+## Chat: always open at the newest message + a "jump to latest" button — 2026-10-04 (web only)
+
+Symptom: opening a long session showed the **oldest** message, and scrolling up through history
+left no way back to the live tail. Cause: `chat.jsx` only auto-scrolled when
+`scrollHeight - innerHeight - scrollY <= 260`, and it measured that **after** the new transcript had
+rendered — with `scrollY` still 0 and a tall document the gap was thousands of pixels, so the
+scroll was skipped every time. The same late measurement also killed auto-follow whenever a single
+streamed text/tool block grew taller than 260 px (the view would silently stop mid-screen).
+
+Fix — pure logic in the new `web/src/lib/chat-scroll.js` (unit-tested in
+`web/test/chat-scroll.test.js`), DOM wiring in `chat.jsx`, styles in `styles.css`:
+
+- `scrollPlan({forced, atBottom, changed}) → "instant" | "smooth" | "hold"`. `forced` (first render
+  of a session) always wins, so **entering a session always lands on the newest message**, instantly
+  rather than smooth-scrolling through thousands of pixels.
+- "At bottom" is now tracked by a passive `scroll` listener (rAF-throttled, state only set on a
+  flag flip), i.e. the user's real position measured **before** the next render — so a long streamed
+  block no longer stops the follow.
+- New **"jump to latest" pill** (`.jump-latest`, ≥44px, `--shadow-float`, reduced-motion honoured):
+  it appears whenever the reader is up in history, reads "Tin mới nhất" or "N tin mới", and is
+  anchored `position: absolute` to `.composer` (already `sticky`, hence a containing block) so it
+  always sits right above the composer without measuring its variable height and without shifting
+  layout.
+- Programmatic scrolls are flagged (`autoScrollRef`) so the button doesn't flicker mid-animation, and
+  the flag is dropped the moment the reader scrolls **up** — the app never fights the user.
+- Navigating chat→chat (e.g. after `fork`) now clears the transcript via `commitMessages(null)` on
+  session change, so the previous session's messages can't flash before the new fetch lands.
+- `settleToBottom()` re-pins for up to ~0.7 s after a load/jump, because content can still grow
+  (streaming, opened folds, images). It's cancelled on unmount so it can't scroll another page.
+
+Verified 2026-10-04: `node --test web/test/*.test.js` → **280 pass / 0 fail**; `vite build` → OK.
+Working tree only — **not committed**, and **not deployed** to the worker.
+
+## Parity rounds closed — 2026-10-04 (web only, working tree)
+
+Two rounds bring the phone app level with the OpenWork desktop app (source-of-truth:
+`github.com/different-ai/openwork`, branch `dev`), all through the existing proxy whitelist — zero
+bridge/worker changes.
+
+**Round 1 (session features, 8 items).** Per-session **cost** display, **rename**, **/compact**
+(summarize), **effort/variant** fields in prompt bodies, **steer** (send while the agent runs),
+**cross-session search** (name + content), **pin/archive/groups**, **share link**. Implementation is
+file-partitioned pure libs (`web/src/lib/session-*.js`) + wiring in `chat.jsx` / `sessions.jsx` /
+`home.jsx` / `model-picker.jsx`. Regression-hardened in the same pass: `shouldClearRevertCursor`
+(edit+send no longer hides the new message behind the revert cursor), `mergeRefetchKeepInflight` drops
+`local-*` optimistic messages once the server transcript confirms them (no duplicates),
+`deleteMessage` routes through `commitMessages` (refs stay honest), the agent picker validates the
+stored agent against the live list, `parseModelValue` reuse keeps mid-slash model ids intact
+(`openrouter/anthropic/…`). UI pass: ≥44px touch targets, banner contrast recomputed (WCAG ≥4.5:1 via
+`color-mix`), dedicated safe-area rule for the search screen.
+
+**Round 2 (machine maintenance in Settings).** Four existing routes the web never called:
+- `GET /api/pairing-code` → **"Ghép thiết bị khác"** card: the live one-time code (`codeFormatted`
+  XXXX-XXXX + mm:ss countdown from the new pure lib `web/src/lib/pairing-code.js`) and a copyable
+  invite link for the new device's login screen. The response's `masterUrl`/`masterQr` are
+  deliberately NOT rendered — the permanent master token stays terminal/GUI-only; only the
+  self-neutralizing one-time code appears on the phone. Countdown math is lib-tested
+  (`web/test/pairing-code.test.js`).
+- `POST /api/tunnel/restart` → **"Khởi động lại tunnel"** (replaces cloudflared, keeps the bridge —
+  no 429-counter impact; 409 `tunnel_inactive` surfaces the bridge's Vietnamese message verbatim).
+- `POST /api/machine/name` → inline **machine rename** (client-side empty guard; bridge strips
+  quotes/newlines and caps at 60 chars) — the next paired device sees the new name.
+- `POST /workspace/:id/engine/reload` → **"Nạp lại engine"** inside *Chi tiết kỹ thuật* —
+  `owEngineReloadAll` reloads every workspace sequentially and never fails the whole batch; desktop
+  parity for its Settings action (minus the restart-desktop fallback → web hints at "Mở OpenWork").
+
+**Pairing-code security (checked before building — user asked "8 số thì dính lỗi chứ?").** The code is
+not 8 decimal digits: it is **8 chars from a 32-char unambiguous alphabet (no 0/O/1/I) = 32⁸ ≈
+1.1×10¹² (40 bits)**, one-time, 30-min TTL, timing-safe compare, and `POST /api/pair` is capped at
+10 attempts/min/IP (`pairRateLimited`); through the tunnel every request shares one loopback bucket,
+so the practical ceiling is even lower. Brute force is dead on arrival — no change needed.
+
+New tests: `web/test/pairing-code.test.js`, `web/test/api-machine.test.js`. Verified 2026-10-04:
+`node --test web/test/*.test.js` → **249 pass / 0 fail**; `node --test bridge/test/*.test.js` →
+**53 pass / 0 fail**; `vite build` → OK (JS 143.08 kB → 46.65 kB gzipped, CSS 23.68 kB → 5.23 kB
+gzipped). Working tree only — **not committed yet**.
+
+## This maintenance round — 2026-10-03 (session parity: what one session was missing)
+
+**The question:** "an OpenWork session has all these features — why are we missing them, can we do the whole thing on one session?"
+**The answer, and what was built.** The OpenWork desktop app is open source (`github.com/different-ai/openwork`,
+branch `dev`), so the reference is the real source, not guesswork — `apps/app/src/components/chat/message-list.tsx`
+(message menu), `.../domains/session/surface/composer/` (slash commands, @-mentions, agent picker),
+`.../sync/transcript-reconcile.ts` (the revert + fork rules). Before writing anything, `GET /workspace/:id/opencode/doc`
+(the engine's own OpenAPI, 162 paths) was read live and the risky routes were exercised on a throwaway session created
+with `noReply: true` prompts, then deleted. **Every route used here already existed on engine v1 and already passes
+`bridge/src/proxy.js`'s whitelist — no backend change was needed** (the earlier guess that fork/revert needed a new
+`/opencode2` proxy entry was wrong; v1 serves them under `/opencode`).
+
+Added to ONE session (the chat screen), verified in a real browser against the running engine:
+
+1. **Tap any message → action sheet**: Copy · Edit & resend · Branch into a new chat · Undo from here · Delete.
+2. **Undo / redo**: `session.revert.messageID` is a cursor; the transcript endpoint still returns every message, so
+   `applyRevertCursor` cuts client-side and a "N tin nhắn phía sau đang ẩn · Hiện lại" bar offers the way back.
+3. **Edit & resend** reverts to the edited message *before* prompting — otherwise the old turn survives and the new one
+   is appended after it.
+4. **Branch into a new chat** — `resolveForkBoundaryId` passes the **next** message id because the engine copies
+   messages *strictly before* the given one.
+5. **Agent picker** (`GET /agent`) next to the model pill; the chosen agent rides the prompt body.
+6. **Slash commands** — type `/` for the real command + skill list, tap to run (`POST /session/:id/command`).
+7. **Agent questions** (`GET /question`) — this was the worst gap: the agent could ask something and the phone showed
+   nothing, so the run just sat there. Now a card with multi-select options, an optional free-text answer, and a
+   "Bỏ qua" (reject) path.
+8. **Todo progress** row (`GET /session/:id/todo`): "3/7 · <task in progress>".
+9. **Tool rows read like the desktop**: Vietnamese label + a one-line title from the tool's own input
+   (`toolRowView`) instead of a wall of raw JSON; `metadata.preview` is used when `output` is empty.
+10. **Bug fixed on the way**: every prompt used to start with a stray newline (`fileBlock + "\n" + text`, even with no
+    files attached).
+
+`web/src/lib/session-ops.js` holds all the pure logic (revert cursor, fork boundary, question shaping, tool view-model)
+with 15 regression tests in `web/test/session-ops.test.js`; suite is 112 passing.
+
+**Left out, on purpose** (desktop-only or absent upstream): terminal dock, browser panel, file-tree rail, effort/Fast-mode
+profiles, per-session share link, drag-to-reorder, and voice input (OpenWork has no voice input either).
+
+---
+
+## Earlier maintenance round — 2026-10-03 (commits + working tree)
 
 What this round changed, in order:
 
@@ -199,11 +446,11 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | `test/tunnel.test.js` | 429 backoff ladder (2 min doubling, 10 min cap; plain retry 5s cap 60s) + state persistence across restart via `tunnel-state.json`. |
 | `test/openwork-launch.test.js` | `isOpenWorkExeName()` — the phone-typed-path guard: `OpenWork.exe` accepted case-insensitively; `calc.exe`, `cmd.exe`, a `.txt`, `MyOpenWork.exe`, `OpenWork.exe.bak`, empty/null rejected. `normalizeExePathInput()` — quotes stripped (PowerShell single/double, two nesting layers), ordinary paths untouched, a quote in the middle of the name NOT treated as a wrapper, and the ordering invariant: a still-quoted path fails the name guard, the normalized one passes. |
 | `test/openwork-version.test.js` | Fake asar in a temp dir (16-byte header + padded JSON + payload): version parsed, nested `package.json` found, unaligned JSON length still lands on the right payload offset, missing/tiny/truncated/corrupt-header/wrong-magic/over-`HEADER_MAX_BYTES` all → `null` without throwing, `describeOpenWorkInstall` source = config/env/not-found (`LOCALAPPDATA`/`PROGRAMFILES`/`OPENWORK_EXE` redirected to temp dirs — the dev machine really does have OpenWork installed). |
-| `test/openwork-routes.test.js` | **End-to-end HTTP over a REAL spawned bridge** (same isolation recipe as `startup.test.js`: temp `OPENWORK_BRIDGE_DIR`/`OPENWORK_DIR`, tunnel off, dynamic port) for the two OpenWork routes, which had no HTTP-level coverage at all because `handleRequest` is not exported and `index.js` listens on import. Asserts: `POST /api/openwork/path` 401 without a token, and 400 for empty / non-existent / directory input; **`not_openwork_exe` for a temp `calc.exe`** — the RCE guard, verified through the wire rather than by calling the helper; a PowerShell-quoted path is accepted; `POST /api/openwork/wake` returns `openwork_exe_not_found` **with** a `candidates` array. Two bridge instances are spawned on purpose so the shared 5/min/IP rate limit can actually be crossed (`assertNotRateLimited` catches a test that accidentally became its own victim); `LOCALAPPDATA`/`PROGRAMFILES` are neutralised for every spawned bridge and the found exe is asserted to come from the sandbox, so a dev machine with OpenWork really installed can never make these pass or fail by accident. Every child is killed in teardown — an earlier round left orphans holding ports. |
+| `test/openwork-routes.test.js` | **End-to-end HTTP over a REAL spawned bridge** (same isolation recipe as `startup.test.js`: temp `OPENWORK_BRIDGE_DIR`/`OPENWORK_DIR`, tunnel off, dynamic port) for the two OpenWork routes, which had no HTTP-level coverage at all because `handleRequest` isn't exported and `index.js` listens on import. Asserts: `POST /api/openwork/path` 401 without a token, and 400 for empty / non-existent / directory input; **`not_openwork_exe` for a temp `calc.exe`** — the RCE guard, verified through the wire rather than by calling the helper; a PowerShell-quoted path is accepted; `POST /api/openwork/wake` returns `openwork_exe_not_found` **with** a `candidates` array. Two bridge instances are spawned on purpose so the shared 5/min/IP rate limit can actually be crossed (`assertNotRateLimited` catches a test that accidentally became the victim of it); `LOCALAPPDATA`/`PROGRAMFILES` are neutralised for every spawned bridge and the found exe is asserted to come from the sandbox, so a dev machine with OpenWork really installed can never make these pass/fail by accident. Every child is killed in teardown — an earlier round left orphans holding ports. |
 | `scripts/e2e-live.mjs` | E2E: create session → prompt_async → poll reply → delete. `node scripts/e2e-live.mjs <wsId> <providerId> <modelId>` |
 | `scripts/dbg-prompt.mjs` | Prompt debug: dumps status + parts every 5s. |
 
-**Total: 53 bridge tests,**Total: 36 bridge tests, all green (`cmd /c npm --prefix bridge test`, 2026-10-03).**
+**Total: 53 bridge tests, all green (`cmd /c npm --prefix bridge test`, 2026-10-03).**
 
 ### worker/ (Cloudflare Worker `openpocket` — "fixed address" + multi-tenant)
 
@@ -222,16 +469,18 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | `src/components/logo.jsx` | OpenWorkMark (official SVG img, auto-switches `-dark` via prefers-color-scheme). |
 | `src/components/icons.jsx` | In-house SVG stroke set, 17 exports: Folder/File/Image/Upload/Download/Refresh/Back/Plus/Ws/Gear/Message/Clip/Stop/Pcs/Search/Check/ChevronDown — no emoji as icons. (9 unused icons were removed 2026-10-03; `ExpandIcon` followed the same day once the chat file rows stopped using it.) |
 | `src/components/model-picker.jsx` | Bottom-sheet model picker: search box, "Gần đây" group (last 4 picks in `owm_model_recent`), provider groups sorted by name, check mark on the current model, 44px rows, 16px input (no iOS zoom). Replaced the flat `<select>`. |
-| `src/api.js` | Token localStorage + auto-pair from `#t=`; **multi-tenant: the room (`owm_tenant`/`owm_tenant_name`) is stored alongside, `tenantHeaders()` attaches `x-owm-tenant` to every request, `sseUrl()` appends `?_m=` + `?_t=`, new hashes `#p=CODE&m=ROOM` / `#t=TOKEN&m=ROOM` store the room too**; `ow()` fetches via `/api/ow`, unwraps `.data`, and maps 401 → `Error("UNPAIRED")`; non-OK throws with `error.status` + `payload.message` + `error.code` (machine-readable, e.g. `tenant_required` — set by `apiPair` so the pairing page can react to the error KIND). **`owDeleteSession(wsId, sid)`** = `DELETE /workspace/:wsId/opencode/session/:sid` — the swipe-to-delete action on both session lists. **Keyring (internal plumbing, NOT a UI anymore)**: `owm_keys` = `[{tenant, token, name, addedAt}]` — `addKey()` dedupes by tenant (re-pairing the same room replaces its entry), `removeKey()` promotes the next key / clears `owm_token`+`owm_tenant` when empty, `migrateKeys()` (exported, idempotent, lazy) pulls the legacy single token in on first read, `notifyKeysChanged()` fires `owm:keys`; `apiPair()` writes the keyring itself. Two-way files: `owUploadFile()` (40MB limit, FileReader base64), `bytesToBase64()` (chunked, no stack overflow), `formatBytes()` (Intl vi-VN); `owDownload()` (fetch + Blob + % + AbortController + content-disposition fallback via the exported pure `filenameFromDisposition()`); `fileToBase64`/`MAX_UPLOAD_BYTES` are module-internal. **2026-10-03**: the orphaned helpers (`listKeys`, `renameKey`, `ensureActiveKeyEntry`, `inviteFromHash`, `apiPairTenant`, `apiMachineStatus`, `apiRevokeMachineKey`) were DELETED (grep-verified zero importers); the module is import-safe in bare Node (no storage side effects) and covered by 44 real tests in `web/test/` (4 files). **OpenWork desktop (same round)**: `apiWakeOpenWork()` used to throw away the bridge's `candidates` — it now keeps them on `error.candidates` (always an array, `[]` when the bridge omits it) so Settings can offer the same chooser on both paths. **`apiOpenWorkPath(path)`** POSTs `{path}` to **`/api/openwork/path`** — a BRIDGE route, so it calls `fetch()` **directly** and must never be wrapped in `ow()` (that prefixes `/api/ow`, the openwork-server proxy). It trims the path, sends `authHeaders({"content-type":"application/json"})`, maps 401 → `Error("UNPAIRED")` like its siblings, throws the bridge's own Vietnamese `message` verbatim (fallback ``path {status}`` for a non-JSON body) and returns the full payload so the caller can re-render from `openwork` without a second `/api/state` round trip. |
+| `src/api.js` | Token localStorage + auto-pair from `#t=`; **multi-tenant: the room (`owm_tenant`/`owm_tenant_name`) is stored alongside, `tenantHeaders()` attaches `x-owm-tenant` to every request, `sseUrl()` appends `?_m=` + `?_t=`, new hashes `#p=CODE&m=ROOM` / `#t=TOKEN&m=ROOM` store the room too**; `ow()` fetches via `/api/ow`, unwraps `.data`, and maps 401 → `Error("UNPAIRED")`; non-OK throws with `error.status` + `payload.message` + `error.code` (machine-readable, e.g. `tenant_required` — set by `apiPair` so the pairing page can react to the error KIND). **`owDeleteSession(wsId, sid)`** = `DELETE /workspace/:wsId/opencode/session/:sid` — the swipe-to-delete action on both session lists. **Keyring (internal plumbing, NOT a UI anymore)**: `owm_keys` = `[{tenant, token, name, addedAt}]` — `addKey()` dedupes by tenant (re-pairing the same room replaces its entry), `removeKey()` promotes the next key / clears `owm_token`+`owm_tenant` when empty, `migrateKeys()` (exported, idempotent, lazy) pulls the legacy single token in on first read, `notifyKeysChanged()` fires `owm:keys`; `apiPair()` writes the keyring itself. Two-way files: `owUploadFile()` (40MB limit, FileReader base64), `bytesToBase64()` (chunked, no stack overflow), `formatBytes()` (Intl vi-VN); `owDownload()` (fetch + Blob + % + AbortController + content-disposition fallback via the exported pure `filenameFromDisposition()`); `fileToBase64`/`MAX_UPLOAD_BYTES` are module-internal. **2026-10-03**: the orphaned helpers (`listKeys`, `renameKey`, `ensureActiveKeyEntry`, `inviteFromHash`, `apiPairTenant`, `apiMachineStatus`, `apiRevokeMachineKey`) were DELETED (grep-verified zero importers); the module is import-safe in bare Node (no storage side effects) and covered by 44 real tests in `web/test/` (4 files). **OpenWork desktop (same round)**: `apiWakeOpenWork()` used to throw away the bridge's `candidates` — it now keeps them on `error.candidates` (always an array, `[]` when the bridge omits it) so Settings can offer the same chooser on both paths. **`apiOpenWorkPath(path)`** POSTs `{path}` to **`/api/openwork/path`** — a BRIDGE route, so it calls `fetch()` **directly** and must never be wrapped in `ow()` (that prefixes `/api/ow`, the openwork-server proxy). It trims the path, sends `authHeaders({"content-type":"application/json"})`, maps 401 → `Error("UNPAIRED")` like its siblings, throws the bridge's own Vietnamese `message` verbatim (fallback ``path {status}`` for a non-JSON body) and returns the full payload so the caller can re-render from `openwork` without a second `/api/state` round trip. **2026-10-03 session block**: one private `oc(wsId, path)` builds `/workspace/:wsId/opencode…` and ten thin wrappers sit on top — `owAgents`, `owCommands`, `owQuestions`, `owReplyQuestion`, `owRejectQuestion`, `owRevert`, `owUnrevert`, `owFork`, `owDeleteMessage`, `owRunCommand`, `owTodo`. All were read out of the engine's live OpenAPI (`GET …/opencode/doc`) before being written; **every one already passes `bridge/src/proxy.js`'s whitelist**, which is why the whole feature set needed no backend change. |
 | `src/app.jsx` | Hash router: `#/` (home — recent sessions across workspaces) · `#/workspaces` · `#/ws/:id` (sessions) · `#/ws/:id/chat/:sid` · `#/ws/:id/files` · `#/settings`. Topbar logo + version + **pinned Back button** per route (sessions → #/workspaces, chat/files → #/ws/:id; listens for `owm:topback` from FileViewer), StatusBanners (global OpenWork notices; **checks `state.error` FIRST and prints the actual network error instead of mislabeling it "Không tìm thấy openwork-server"**), floating BottomNav **3 tabs (Sessions · Workspace · Settings — English labels per the owner's call)** + FAB. Listens for the `owm:keys` event: re-checks `paired` (all keys gone → pairing page) and re-polls state. |
 | `src/pages/home.jsx` | Home = recent sessions ACROSS workspaces (Happy/Omnara pattern), 15s poll, ws color dots (`wsColor`), FAB creates a session in the newest workspace. Creating a session sends NO title — the server names it from content, like desktop. **Swipe-to-delete**: same `SwipeRow` + `owDeleteSession(ws.id, session.id)` as the Sessions page (openId keyed `${ws.id}:${session.id}`). Tappable cards carry `role="button"`, `tabIndex={0}` and Enter/Space handlers. |
 | `src/pages/pairing.jsx` | Connection page **9remote-style, two ways in (owner call 13/09 evening — "2 hàng: 1 mã tạm, 1 mã vĩnh viễn")**: row 1 = the 8-char pairing code (the hero, `.pair-code-input` 22px tabular-nums letterspaced uppercase, full-width 48px `.pair-btn`) typed from OpenPocket → `apiPair` → in; row 2 = the **permanent key** (`.pair-key-input` 16px mono, "hoặc" divider) — paste the master link `…#t=<key>&m=<room>` (the exe's "Sao chép link master" button) and it logs straight in, or paste a bare `owm_`/`owd_` key — a roomless key is REFUSED by the worker (400 `tenant_required`, no probing other people's machines), so the row has a **Phòng (room) box**: typing the room backfills the tenant for a bare key (normalized `[a-z0-9-]`), a full `#t=…&m=…` link still wins; roomless and box empty → the page shows the tenant_required hint naming the paths that still exist (the web detects the error KIND via `error.code` carried by `apiPair`). **`#p=CODE` links still pair by themselves** (the QR the GUI shows points here); the `#t=` master-token link auto-runs from `api.js`. Labels trimmed to one short line each (owner call). REMOVED earlier: the user/pass sign-in form and the `#i=` invite auto-login. |
 | `src/pages/workspaces.jsx` | Card list with tile + add-workspace FAB; the create sheet (POST /workspaces/local) has a path field **+ a "Browse…" button opening `FolderPickerSheet`**: browse the computer's folders via `/api/fs/ls` (quick chips with real folder names (user/Desktop/Documents/Downloads/drives), go up a level, tap a folder to enter, **"+ New folder"** (POST `/api/fs/mkdir` then dive straight in), "Choose this folder" fills the path field). **create() sends `folderPath`** (it used to send `path` → the server rejected with "folderPath is required" — creating a workspace from the phone had never worked; the server mkdirs a missing folder itself). |
 | `src/pages/sessions.jsx` | Session cards with busy/idle dot + new-session FAB (NO title sent — the server names it); back button moved up to the topbar; SSE live. **Swipe-to-delete**: each card is a `SwipeRow` — swipe left reveals the red "Xoá" button; tapping it calls `owDeleteSession(wsId, s.id)` (immediate, no confirm dialog), then `load()` drops the card (`session.deleted` SSE re-renders too). The hidden "Xoá" button is `tabindex="-1"` + `aria-hidden` while the row is closed. |
-| `src/pages/chat.jsx` | Transcript (text/tool/reasoning; minimal markdown: code block/inline code/list — `MarkdownText`; reasoning is a collapsible `<details>`), composer with gradient send icon + **model picker (mandatory, bottom-sheet)** + **paperclip button to attach files** (uploads into `mobile-uploads/` then sends the prompt with the path), offline queue, permission cards (Allow/Deny), SSE events. Back button moved to the topbar. **Send morphs into Stop** (`busy = running && !sending`, `StopIcon`, red `.btn-send.stop`, double-tap guarded by `aborting`, draft kept, Ctrl+Enter while busy = abort). **Streaming keyed on `part.id`** (protocol learned from desktop `apps/app session-sync.ts`): `message.part.updated` = cumulative snapshot upserted per part, `message.part.delta` = append-only deltas buffered per partId and flushed once per animation frame (rAF, 50ms fallback), `message.updated` = whole-message upsert (empty parts never clobber an in-flight stream), `message.removed` prunes the bubble, `session.idle/errored/status` settle run status immediately; events arrive on the UNNAMED SSE line too — both paths funnel into one `handleEvent`; refetch only on mount/reconnect/visibility/watchdog(30s). **Files the agent mentions**: `findFileRefsInText()` scans text + tool input/output → `FileRefCard` renders a slim text row (icon + name + chevron, 28px) — tapping it verifies the file via `/files/stat` (**the engine answers 200 `{exists:false}` for a missing file, so read the `exists` flag instead of trusting "no throw"**; three candidate forms are tried because agent paths may carry a drive letter or a workspace-parent prefix) then deep-links into the Files viewer (`#/ws/:id/files?path=<dir>&open=<verified path>` — `FilesPage` auto-opens the viewer, and its text fetch checks `res.ok` so error JSON never renders as file content) + `linkifyFiles()` turns paths in text into links. **Queue honesty**: `modelBody()` reads a `modelRef` mirror (switching model mid-queue no longer sends the STALE model) and a persistent `.chat-status` line (single `aria-live="polite"`, `:empty` hidden) announces running + "Đang gửi lại n tin nhắn khi có mạng…". |
+| `src/pages/chat.jsx` | Transcript (text/tool/reasoning; minimal markdown: code block/inline code/list — `MarkdownText`; reasoning is a collapsible `<details>`), composer with gradient send icon + **model picker (mandatory, bottom-sheet)** + **paperclip button to attach files** (uploads into `mobile-uploads/` then sends the prompt with the path), offline queue, permission cards (Allow/Deny), SSE events. Back button moved to the topbar. **Send morphs into Stop** (`busy = running && !sending`, `StopIcon`, red `.btn-send.stop`, double-tap guarded by `aborting`, draft kept, Ctrl+Enter while busy = abort). **Streaming keyed on `part.id`** (protocol learned from desktop `apps/app session-sync.ts`): `message.part.updated` = cumulative snapshot upserted per part, `message.part.delta` = append-only deltas buffered per partId and flushed once per animation frame (rAF, 50ms fallback), `message.updated` = whole-message upsert (empty parts never clobber an in-flight stream), `message.removed` prunes the bubble, `session.idle/errored/status` settle run status immediately; events arrive on the UNNAMED SSE line too — both paths funnel into one `handleEvent`; refetch only on mount/reconnect/visibility/watchdog(30s). **Files the agent mentions**: `findFileRefsInText()` scans text + tool input/output → `FileRefCard` renders a slim text row (icon + name + chevron, 28px) — tapping it verifies the file via `/files/stat` (**the engine answers 200 `{exists:false}` for a missing file, so read the `exists` flag instead of trusting "no throw"**; three candidate forms are tried because agent paths may carry a drive letter or a workspace-parent prefix) then deep-links into the Files viewer (`#/ws/:id/files?path=<dir>&open=<verified path>` — `FilesPage` auto-opens the viewer, and its text fetch checks `res.ok` so error JSON never renders as file content) + `linkifyFiles()` turns paths in text into links. **Queue honesty**: `modelBody()` reads a `modelRef` mirror (switching model mid-queue no longer sends the STALE model) and a persistent `.chat-status` line (single `aria-live="polite"`, `:empty` hidden) announces running + "Đang gửi lại n tin nhắn khi có mạng…". **2026-10-03 session parity** (everything below runs through the existing proxy whitelist — no bridge change): `MessageBubble` opens a `MessageActionSheet` on tap (Copy / Sửa & gửi lại / Tạo nhánh mới / Hoàn tác / Xoá; the first two only when the message has text, the last three only for real `msg_` ids — a message still being sent has no server id yet); all mutating actions funnel through one `run(action, label, fn)` guard (single-flight, clears the sheet, reloads session+transcript+todo, Vietnamese error banner). `send()` reverts to the edited message BEFORE prompting. `AgentPicker` + `.cmd-pop` (type `/`), `QuestionCard` (multi-select + free text + reject), `.todo-row`, `.revert-bar` + `.editing-bar`. New state `revertId`/`cost`/`agents`/`agent`/`commands`/`questions`/`todos`/`editing`/`menu`/`busyAction`; `agentRef` mirrors `agent` for the offline queue exactly like `modelRef`. |
 | `src/pages/files.jsx` | Browses `/opencode/file` (icon tiles, sizes via `Intl.NumberFormat` vi-VN); view/edit+save + upload via `/files/raw` (chunked base64 through the shared helper, per-file progress); image viewer (png/jpg/gif/webp/bmp/ico/svg/avif) + **inline PDF (iframe)**; downloads via `owDownload()` (fetch + Blob + % bar + Cancel + a Share button for iOS "Save to Files"). **2026-10-03 races/leaks**: the viewer's unmount cleanup mirrors the download state through `dlRef` (the old closure over first-render state never revoked finished blob URLs — a few large files and iOS Safari kills the tab) and a new download revokes the previous blob URL up front; `FilesPage.load()` bumps a `seq` counter + `AbortController` so a slower folder response can no longer overwrite the NEW breadcrumb with the OLD listing. File rows got `role="button"` + keyboard activation. |
-| `src/lib/openwork-fix.js` | **Pure logic for the OpenWork path fixer** (added 2026-10-03), framework-free so `node --test` can reach it, same pattern as `lib/chat-stream.js`. Four exports: `mergeCandidates(...sources)` (empty / whitespace / non-string dropped, deduped, **first-seen order kept** — the bridge best guess stays on top, and the old `new Set(...).filter(Boolean)` let a truthy object through and painted a "Dùng" row that would have posted `[object Object]` to the bridge), `openworkFoundOf(info, legacyFlag)` / `openworkRunningOf(info, legacyFlag)` (both accept the bridge boolean OR the legacy field, and **return a boolean only when the signal really is one** — a missing field must never read as "running"), and `openworkStatusLabel(info, opts)` → "đang chạy" / "đã cài, chưa mở" / empty (empty when not found, so the caller decides what "not found" reads as). `web/test/openwork-fix.test.js`, 11 tests. |
-| `src/components/openwork-fix.jsx` | **The one OpenWork path chooser, rendered in two places** (2026-10-03): the global red banner in `app.jsx` and the Settings card. Before this, the complete fix lived 2 taps away in Settings while the banner people actually hit — with its own wake button — **threw the `candidates` away on failure**, so the screen where the error appears had no way out and the screen with the way out was invisible. Contract: `onChoose` **must reject** when saving fails, or the component wipes the typed path after the bridge already refused it. |
+| `src/lib/session-ops.js` | **Pure logic for ONE session** (added 2026-10-03) — deliberately framework-free so it is unit-testable, same pattern as `lib/chat-stream.js`. Holds the two rules that are easy to get backwards and were ported from OpenWork's `transcript-reconcile.ts`: `applyRevertCursor` / `hiddenCountByRevert` (the revert cursor is INCLUSIVE — the message you undo to and everything after it are hidden) and `resolveForkBoundaryId` (the engine copies messages *strictly before* `messageID`, so branching at a message means passing the NEXT one; synthetic client-side ids are skipped, `null` = fork everything). Plus `todoProgress`, `questionsForSession` / `questionView` / `buildQuestionAnswers` (the engine's `answers` contract: one array of labels per question, in order), `toolRowView` / `toolTitle` / `toolLabel` / `toolStatusVi`, `filterCommands`, `formatCost`. 15 tests in `web/test/session-ops.test.js`. |
+| `src/lib/chat-scroll.js` | **Pure logic for CHAT SCROLLING** (added 2026-10-04), framework-free like every other lib. Holds the one decision the old inline code got wrong: `scrollPlan({forced, atBottom, changed})` → `"instant" \| "smooth" \| "hold"`. `forced` (the first render of a session) always returns `"instant"` **no matter how far the reader is from the bottom** — the old code measured the gap *after* the transcript rendered, so on entry (`scrollY` 0, tall document) it concluded the user was reading history and skipped the scroll entirely: a long session opened on its OLDEST message. It also stopped following a stream as soon as one block grew past the 260px threshold. Now "at bottom" is a passive `scroll` measurement taken *before* the next render. Also `distanceFromBottom` (clamped ≥0), `isAtBottom`, `newMessagesSince` (counts only messages appended by id — never part deltas, or the badge would flicker during streaming), `jumpLabelVi`, `shouldShowJump`. 14 tests in `web/test/chat-scroll.test.js`. |
+| `src/lib/openwork-fix.js` | **Pure logic for the OpenWork path fixer** (added 2026-10-03), framework-free so `node --test` can reach it, same pattern as `lib/chat-stream.js`. Four exports: `mergeCandidates(...sources)` (empty/whitespace/non-string dropped, deduped, **first-seen order kept** — the bridge's best guess stays on top, and the old `new Set(...).filter(Boolean)` let a truthy object through and painted a "Dùng" row that would have posted `[object Object]` to the bridge), `openworkFoundOf(info, legacyFlag)` / `openworkRunningOf(info, legacyFlag)` (both accept the bridge's boolean OR the legacy field, and **return a boolean only when the signal really is one** — a missing field must never read as "running"), and `openworkStatusLabel(info, opts)` → `"đang chạy"` / `"đã cài, chưa mở"` / `""` (empty when not found, so the caller decides what "not found" reads as). `web/test/openwork-fix.test.js`, 11 tests. |
+| `src/components/openwork-fix.jsx` | **The one OpenWork path chooser, rendered in two places** (2026-10-03): the global red banner in `app.jsx` and the Settings card. Before this, the complete fix lived 2 taps away in Settings while the banner that people actually hit — with its own wake button — **threw the `candidates` away on failure**, so the screen where the error appears had no way out and the screen with the way out was invisible. Contract: `onChoose` **must reject** when saving fails, or the component wipes the typed path after the bridge already refused it. |
 | `src/pages/settings.jsx` | Bridge status table (connected machine, openwork-server, token, engine, public URL, bridge version), **Kiểm tra lại** (recheck — failures now surface in a `role="alert"` line instead of silently restoring the button), **Bật OpenWork trên máy tính** (remote wake), paired-devices card (list + revoke a phone's key), and **Gỡ pairing** = this phone forgets the machine (`removeKey()`; last key gone → back to the pairing page). **Removed 13/09 (one-PC simplification)**: the multi-machine keychain card and the Re-link card — one machine per phone now (the `api.js` keyring functions stay as internal plumbing used by `apiPair`/`removeKey`). **2026-10-03 — card "OpenWork trên máy tính" replaces the dead "OpenWork .exe" row** (that row was a verdict with no way out): `state.openwork` found → a 4-row table (**Tình trạng** "đang chạy" / "đã cài, chưa mở", Phiên bản `v0.18.54` / "không đọc được", Đường dẫn, Tìm ở đâu via `openworkSourceLabel()` = config / env / wellknown) + the hint pointing at the wake button; **not found → the fix**: the `candidates` list as one-tap "Dùng" rows + a `label.field` text input + "Chỉ đường dẫn", all funnelled through one `choosePath()` → `apiOpenWorkPath()`. Candidate sources are merged (state candidates + `error.candidates` from a failed wake, deduped) so the wake path and the state path agree. Success re-renders from `payload.openwork` (local `openworkOverride`, no refetch) and calls `onRecheck()`; failure shows the bridge's Vietnamese `message` **verbatim** in a `Banner`. Reuses only existing classes (`.card`, `.file-row`, `.name`, `.mono`, `.btn small`, `label.field`, `.sheet-body`) + inline `style` — **no `styles.css` change was needed**. **Same day, usability pass** (the first version was correct but fiddly): the chooser is no longer a one-way door — **"Đổi đường dẫn"** re-opens it while found (`editing` state, `showChooser = !found || editing`), because reinstalling OpenWork is ordinary and the old card was stuck at the first answer; **Enter submits** the field; a **"Quét lại máy tính"** button forces `/api/state` so "just installed it" doesn't mean staring at "chưa tìm thấy" for 15s; **"Chép đường dẫn"** (`navigator.clipboard`, plain text fallback); the chooser shows the File Explorer → right-click → Copy as path recipe, since that is the actual moment of confusion; success says the NEXT step ("bấm Bật OpenWork trên máy tính") instead of just "Đã chỉ xong"; a missing version explains itself (portable install, no `app.asar`, still fully usable). `openworkOverride` is **dropped on every `/api/state` tick** (`useEffect` on `state.openwork`) — without that it pinned the screen to a stale answer forever after any reinstall; `running` falls back to `state.server` when talking to a bridge that predates the field. |
 | `public/sw.js` | App-shell precache (`CACHE = "owm-shell-v48"` — bumped in fe3830f because the removed tab's precached index kept serving the old shell to installed PWAs) + navigate fallback; **precaches `/` (index.html) with `cache: "reload"` at install so the offline fallback truly serves the shell** (hashed Vite assets are runtime-cached on first load); never caches `/api/*`. Bump the version on every UI change so the PWA purges the old cache. |
 | `public/_headers` | Same CSP as the worker for Cloudflare's asset-first path (Vite copies it to `web/dist`). |
@@ -255,9 +504,14 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | Owner token 401 despite the restart | `bridge/src/bootstrap.js` + check the `openwork-mobile-bridge` entry is still in `%APPDATA%\openwork\tokens.json` |
 | Every write returns `policy_unavailable` "Sign in to verify..." | NOT a bridge bug — open OpenWork desktop and sign in/verify (cloud session expires after a restart) |
 | Prompt sent, message hangs, no reply | Missing `model: {providerID, modelID}` in the body — see `web/src/pages/chat.jsx` (`modelBody()`); the engine demands an explicit model |
+| The agent asked a question and the phone shows nothing / the run just stops | `GET /workspace/:id/opencode/question` was never polled. `web/src/pages/chat.jsx` (`loadQuestions` + `QuestionCard`) and `web/src/lib/session-ops.js` (`questionsForSession`, `questionView`, `buildQuestionAnswers`) |
+| "Hoàn tác" hides the wrong messages / fork loses the message you tapped | `web/src/lib/session-ops.js` — `applyRevertCursor` cuts from the cursor **inclusive**, `resolveForkBoundaryId` must pass the **next** message id because the engine copies strictly *before* `messageID`. Both ported from `apps/app/src/react-app/domains/session/sync/transcript-reconcile.ts` and regression-tested in `web/test/session-ops.test.js` |
+| Editing a sent message appends a second copy instead of replacing it | `web/src/pages/chat.jsx` `send()` — the edit path must `revert` to the edited message BEFORE prompting, otherwise the old turn stays and the new one is appended after it |
+| A tool row shows a wall of raw JSON / a title too long to fit | `web/src/lib/session-ops.js` (`toolRowView`, `toolTitle`) — engine `state.title` for `bash` is the full command; prefer the tool-specific input field |
 | Web API call 403 "Path not allowed" | `bridge/src/proxy.js` — the `ALLOWED` array (add the new openwork-server path prefix) |
 | POST with a body hangs through the bridge | `bridge/src/proxy.js` (the body must be buffered, not streamed; abort only when `res` closes + `!writableEnded` — `req` 'close' also fires for normally finished requests) |
 | SSE doesn't stream / keeps dropping | `bridge/src/proxy.js` (isSSE + keepalive) + `index.js` (`server.requestTimeout = 0`) |
+| Opening a long session shows the OLDEST message, and scrolling up through history has no way back | `web/src/lib/chat-scroll.js` + `web/src/pages/chat.jsx` — the old auto-scroll measured "distance to bottom" *after* the transcript rendered, so on entry (`scrollY` 0, tall document) it always decided the user was reading history and skipped the scroll; it also stopped following a stream whenever one block exceeded the 260px threshold. `scrollPlan()` now forces the first render of a session to the bottom, a passive `scroll` listener supplies the user's real position, and a `.jump-latest` pill ("Tin mới nhất" / "N tin mới") appears whenever the reader is up in history |
 | Chat view jumps back up while scrolling during a run | `web/src/pages/chat.jsx` (`loadMessages`) + `web/src/lib/chat-stream.js` (`mergeRefetchKeepInflight`) — the transcript API only flushes FINISHED messages, so a mid-run full refetch (SSE reconnect, tab return, 30 s watchdog) used to drop the still-streaming message: the page shrank and the browser clamped the scroll position (felt like being thrown back up, then the text grew back). Mid-run refetches now merge, keeping local messages the machine hasn't persisted yet. Regression: `mergeRefetchKeepInflight` tests in `web/test/chat-stream.test.js` |
 | Phone can't pair | `bridge/src/auth.js` + the token in `%APPDATA%\openwork-bridge\config.json`; the QR prints at bridge startup |
 | Wrong workspace list | openwork-server's side; check `%APPDATA%\openwork\server.json` |
@@ -299,8 +553,8 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | Phone doesn't show which OpenWork version the computer runs | `GET /api/state` carries `openwork: {found, exe, version, source, running, candidates}` (version parsed from the installed app's `resources/app.asar`; `""` = "không đọc được", which is the honest answer when the asar is missing/corrupt — there is no PowerShell fallback by design, see `src/openwork-version.js`). `running` = the desktop process actually alive, not just an entry in `engine-instances.json` |
 | Pasted exe path is rejected with "not_found" even though the file is right | You copied it from PowerShell / CMD, which wraps it in quotes. `normalizeExePathInput()` strips them now; historically nothing did, so `"C:\...\OpenWork.exe"` pasted verbatim never matched a real file (and its basename `"OpenWork.exe"` failed the name guard too) |
 | Settings says "chưa tìm thấy" right after installing OpenWork | The card polls with `/api/state` (15s) — tap **"Quét lại máy tính"** in the card to force it instead of waiting |
-| The red banner says OpenWork is missing and there is nothing to do about it | It used to be a dead end: the banner own "Bật OpenWork trên máy tính" button received `candidates` from the bridge on failure and **discarded them**, while the working chooser sat two taps away in Settings. Both now render the same `<OpenWorkFix>` (`web/src/components/openwork-fix.jsx`), and the chooser appears inline under the banner as soon as the bridge suggests paths and no exe is found — no navigation needed. Both call sites must go through `mergeCandidates()` so a second failed wake can never erase the candidates the first one produced |
-| OpenWork chooser clears what you typed after a rejected path | `onChoose` has to **rethrow**: `choosePath()` / `chooseExePath()` re-throw on HTTP failure *and* on HTTP 200 with `openwork.found === false` (the bridge stores the path but still cannot see the file — real, it happens when reading the version throws). Swallowing either case resolves the promise, the component treats it as success and wipes the field the user must retype |
+| The red banner says OpenWork is missing and there is nothing to do about it | It used to be a dead end: the banner's own "Bật OpenWork trên máy tính" button received `candidates` from the bridge on failure and **discarded them**, while the working chooser sat two taps away in Settings. Both now render the same `<OpenWorkFix>` (`web/src/components/openwork-fix.jsx`), and the chooser appears inline under the banner as soon as the bridge suggests paths and no exe is found — no navigation needed. Both call sites must go through `mergeCandidates()` so a second failed wake can never erase the candidates the first one produced |
+| OpenWork chooser clears what you typed after a rejected path | `onChoose` has to **rethrow**: `choosePath()`/`chooseExePath()` re-throw on HTTP failure *and* on HTTP 200 with `openwork.found === false` (the bridge stores the path but still can't see the file — real, it happens when reading the version throws). Swallowing either case resolves the promise and the component treats it as success, wiping the field the user must retype |
 | Want the Send button to interrupt the agent like ChatGPT/Gemini | `chat.jsx` — Send morphs into a red Stop button (`busy = running && !sending`) while the agent runs; tapping again calls `abort()`, the draft is kept |
 | Chat sits frozen; must leave and re-enter to see new messages | Old behavior: exact `data.sessionID === sessionId` SSE filter, no fallback. Fixed: stream-patch per `part.id` (`applyStreamingPatch` + rAF delta flush), 30s watchdog + refetch on SSE error/app reopen/network back — see the `chat.jsx` row |
 | A file mentioned in chat renders as a boxed card with buttons, and tapping it kept landing on "file not found" (or the error JSON showed up AS the file content) | `web/src/pages/chat.jsx` `FileRefCard` + `web/src/pages/files.jsx`. The card is now a text-only `.file-row` (ZCode style, 28px) — tapping it tries three path candidates against `/files/stat` (the engine answers 200 `{exists:false}` when the file is missing, so the `exists` flag must be read) and deep-links `#/ws/:id/files?path=<dir>&open=<verified path>`; `FilesPage` auto-opens the viewer for `?open=`, and the viewer's text fetch checks `res.ok` so error JSON never renders as content |
@@ -317,7 +571,7 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | Task says "Running" but the bridge never boots; cscript/wscript on `bridge-task.vbs` errors "Not enough memory resources are available" | The .vbs carried a **UTF-8 BOM** (EF BB BF) — the VBScript host dies instantly on it and `schtasks /run` still reports SUCCESS, so every logon/restart attempt silently did nothing (caught 13/09 after a tool rewrite of the vbs). Fix: write the vbs BOM-less (ASCII bytes). **`desktop/src/OpenPocket.cs` `EnsureAutostartTaskEnabled` must keep `new UTF8Encoding(false)`** — plain `Encoding.UTF8` in .NET `WriteAllText` re-adds the BOM |
 | The machine silently leaves its room: bridge runs, log shows no "[lookup] reporting tới" after a boot, phone says the room has no machine | `%APPDATA%\openwork-bridge\config.json` was rewritten with EMPTY `lookupUrl/lookupTenant/lookupSecret` (parallel sessions testing CLI/config — documented footgun, happened twice on 13/09). Repair: read the room secret back from KV (`npx wrangler kv key get tenant:<user> --remote` — owner machine), re-patch those keys in config.json, then restart the task. The GUI's status card exposes exactly this state (room line + tunnel line go quiet) |
 | `git push` ends with "failed to push some refs" right after a 🔒 washer message | INTENTIONAL — the pre-push hook (machine-local `.githooks/pre-push`) already published the sanitized mirror; the raw push is always cancelled so originals never leave the machine (see README "Publishing & privacy"). Gate blocked with 🛑 = a personal string survived the wash; the hook prints the offending file list (fix the file, or add the pattern to `$WASH_SED` + `$WASH_GREP` in the hook). Verify without pushing: `WASHER_DRYRUN=1 sh .githooks/pre-push origin main main` |
-| Personal data reaches GitHub even though the washer "passed" | Three ways this used to happen, all now closed in `.githooks/pre-push` (2026-10-04): (1) the tree-filter washed a hand-listed set of 8 files, so any personal string in a 9th file went out untouched — it now washes **every** text file in every commit (`grep -rIl` selects them); (2) the wash and the safety gate were **case-sensitive**, so a real Gmail address written with a capital first letter passed a gate that only looked for the lowercase account name — both are now `sed -E …/gI` + `grep -iE`; (3) the Cloudflare KV namespace id was never in any pattern list, so it is published in all 149 commits that touch it — a 32-hex id → all zeros. Two more traps: an `s\|…(a\|b)…\|` sed expression breaks because `\|` is the delimiter (use `#`), and `$VAR` inside a `case` pattern is NOT field-split, so the extension list matched nothing and silently washed zero files. Note `.wrangler` caches (which hold the Cloudflare account record) are deleted from every commit |
+| Personal data reaches GitHub even though the washer "passed" | Three ways this used to happen, all now closed in `.githooks/pre-push` (2026-10-04): (1) the tree-filter washed a hand-listed set of 8 files, so any personal string in a 9th file went out untouched — it now washes **every** text file in every commit (`grep -rIl` selects them); (2) the wash and the safety gate were **case-sensitive**, so a real Gmail address written with a capital first letter passed a gate that only looked for the lowercase account name — both are now `sed -E …/gI` + `grep -iE`; (3) the Cloudflare KV namespace id was never in any pattern list, so it is published in all 149 commits that touch it — a 32-hex id → all zeros. Two more traps: an `s|…(a|b)…|` sed expression breaks because `|` is the delimiter (use `#`), and `$VAR` inside a `case` pattern is NOT field-split, so the extension list matched nothing and silently washed zero files. Note `.wrangler` caches (which hold the Cloudflare account record) are deleted from every commit |
 | A test fixture or log path leaks `C:\Users\<your name>` | Wash patterns only cover what was listed. Keep fixtures generic (`C:SERS<USER>\…`) instead of the real account name — it is not worth a history rewrite later. Current rule lives in `$WASH_SED` in `.githooks/pre-push` |
 | Deployed web suddenly refuses to run scripts / console says "Refused to … Content Security Policy" | The worker's CSP (`withSecurityHeaders` in `worker/src/index.js`): scripts must be same-origin files (NO inline `<script>`), styles may be inline, `img-src` allows `data:`/`blob:` (file previews are object URLs). Loosen the directives there if the web ever gains a CDN script or an iframe |
 | Phone can't find the PC after bridge restarts (worker says machine offline), bridge log repeats `đăng ký lỗi HTTP 401` | Tunnel registration secret mismatch: worker env `BRIDGE_SECRET` ≠ home bridge config `lookupSecret`. Fix: `wrangler secret put BRIDGE_SECRET` with the config value (worker path: `cd worker`, value from the bridge's config.json). The tunnel URL itself changes on every bridge restart — registration is what repoints `machine:main` |
@@ -351,8 +605,20 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | `GET /workspace/:id/opencode/session` | Sessions | `{data:[{id,title,time:{updated}}]}`, sort by updated |
 | `GET .../opencode/session/status` | Busy/idle map | `{ses_id:{type}}` (may be wrapped in .data) |
 | `GET .../opencode/session/:sid/message` | Transcript | `{data:[{info:{id,role,time}, parts:[{type,text|tool|reasoning}]}]}` — **role lives inside `.info`** |
-| `POST .../opencode/session/:sid/prompt_async` | Send a prompt | body `{parts:[{type:"text",text}], model:{providerID,modelID}}` → 204. **Model is an object, mandatory** |
+| `POST .../opencode/session/:sid/prompt_async` | Send a prompt | body `{parts:[{type:"text",text}], model:{providerID,modelID}, agent?}` → 204. **Model is an object, mandatory.** The body also accepts `noReply`, `tools`, `system`, `variant`, `reasoning_effort` — the app now sends `variant`/`reasoning_effort` (model picker) and `agent`; `noReply`/`tools`/`system` stay unused |
 | `POST .../opencode/session/:sid/abort` | Cancel | |
+| `POST .../opencode/session/:sid/revert` | Undo back to a message | body `{messageID}` → sets `session.revert.messageID`; **the transcript endpoint still returns every message — the client has to cut them** |
+| `POST .../opencode/session/:sid/unrevert` | Clear that cursor | |
+| `POST .../opencode/session/:sid/fork` | Branch a session | body `{messageID?}` — the engine copies messages **strictly before** `messageID`, so to branch *at* a message you must pass the NEXT one; empty = whole session |
+| `POST .../opencode/session/:sid/command` | Run a slash command | body `{command, arguments?, model?}` |
+| `DELETE .../opencode/session/:sid/message/:mid` | Delete a single message | |
+| `GET .../opencode/session/:sid/todo` | The agent's task list | `[{content,status,priority}]` |
+| `GET .../opencode/agent` | Agents to choose from | `[{name,description,mode,hidden,...}]` |
+| `GET .../opencode/command` | Slash commands + skills | `[{name,description,source,template,hints}]` |
+| `GET .../opencode/question` | Questions the agent is waiting on | `[{id,sessionID,questions:[{question,options,multiple,custom}]}]` |
+| `POST .../opencode/question/:qid/reply` | Answer | body `{answers:[["label",...], ...]}` — one array per question, in order |
+| `POST .../opencode/question/:qid/reject` | Skip (the agent proceeds on its own) | |
+| `GET .../opencode/doc` | Full OpenAPI of the engine | **ground truth for what the engine supports — check here before assuming a feature needs backend work** |
 | `DELETE .../opencode/session/:sid` | Delete a session | |
 | `GET .../opencode/config/providers` | Available models | `{providers:[{id,name,models:{id:{name}}}]}` |
 | `GET .../opencode/file?path=` | List a folder | `{data:[{name,path,type,size}]}` |

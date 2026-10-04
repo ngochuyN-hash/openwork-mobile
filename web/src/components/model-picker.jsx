@@ -4,9 +4,20 @@
 // .sheet-backdrop/.sheet của dự án; item ≥44px, input 16px (pwa-workspace-ui).
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { CheckIcon, ChevronDownIcon, SearchIcon } from "./icons.jsx";
+import {
+  EFFORT_NONE,
+  effortLabelVi,
+  effortOptionsFor,
+  fastModeEffort,
+  normalizeEffort,
+  parseModelValue,
+  resolveEffort,
+} from "../lib/model-behavior.js";
 
 const RECENT_KEY = "owm_model_recent";
 const RECENT_MAX = 4;
+// Mức suy luận nhớ theo máy (đọc/ghi ở đây, logic thuần nằm lib/model-behavior).
+const EFFORT_KEY = "owm_effort";
 
 /** Lưu model vừa chọn vào danh sách Gần đây (mỗi lần đổi model mới lưu). */
 export function pushRecentModel(value) {
@@ -139,6 +150,115 @@ export function ModelPicker({ models, value, onChange, loading }) {
                     );
                   })}
                 </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ---- Mức suy luận + chế độ nhanh ----
+// Toàn bộ quy tắc (variant vs reasoning_effort, chế nào hợp lệ) nằm ở
+// lib/model-behavior.js — ở đây chỉ dựng nút và lưu lựa chọn. Model nào không
+// có variant nào thì ẩn hẳn: có nút mà bấm xong chẳng đổi gì thì hỏng trải nghiệm.
+
+/** Đọc mức suy luận đã nhớ (mặc định = để engine tự quyết). */
+export function loadEffort() {
+  try {
+    return normalizeEffort(localStorage.getItem(EFFORT_KEY) ?? "");
+  } catch {
+    return EFFORT_NONE;
+  }
+}
+
+export function saveEffort(effort) {
+  try {
+    localStorage.setItem(EFFORT_KEY, normalizeEffort(effort));
+  } catch {}
+}
+
+/**
+ * Pill "Suy luận: …" đứng cạnh pill model. Bấm ra sheet chọn mức + một nút
+ * "Chế độ nhanh" (nhảy thẳng mức nhẹ nhất mà model có).
+ * `variants` là `variants` của model ĐANG chọn trong catalog, lấy từ
+ * lib/model-behavior effortOptionsFor — không tự chế danh sách ở đây.
+ */
+export function EffortPicker({ modelValue, variants, effort, onChange }) {
+  const [open, setOpen] = useState(false);
+  const model = parseModelValue(modelValue);
+  const options = useMemo(() => effortOptionsFor(model, variants), [modelValue, variants]);
+  const inputRef = useRef(null);
+  // Đổi sang model không có mức đã chọn -> tự về Mặc định, không giữ mức ma.
+  const current = resolveEffort(effort, model, variants);
+  const currentLabel = effortLabelVi(current);
+
+  useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => inputRef.current?.focus(), 90);
+    const onKey = (e) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  // Model không có mức nào ngoài "Mặc định" -> không hiện gì cả.
+  if (options.length <= 1) return null;
+
+  const pick = (id) => {
+    onChange(id);
+    saveEffort(id);
+    setOpen(false);
+  };
+
+  // Mức nhẹ nhất của model này — "Chế độ nhanh" chỉ hiện khi thực sự có.
+  const fast = fastModeEffort(model, variants);
+
+  const goFast = () => {
+    if (fast === EFFORT_NONE) return;
+    pick(fast);
+  };
+
+  return (
+    <>
+      <button
+        class="model-pill"
+        type="button"
+        aria-haspopup="dialog"
+        aria-label={`Mức suy luận: ${currentLabel}. Bấm để đổi`}
+        onClick={() => setOpen(true)}
+      >
+        <span class="model-pill-label">Suy luận: {currentLabel}</span>
+        <ChevronDownIcon size={14} />
+      </button>
+
+      {open && (
+        <div class="sheet-backdrop" onClick={() => setOpen(false)}>
+          <div class="card sheet model-sheet" role="dialog" aria-modal="true" aria-label="Chọn mức suy luận" onClick={(e) => e.stopPropagation()}>
+            <div class="sheet-grabber" />
+            <div class="model-group">Mức suy luận</div>
+            <div class="model-list" role="listbox" aria-label="Mức suy luận">
+              {fast !== EFFORT_NONE && (
+                <button type="button" class="model-option" onClick={goFast}>
+                  <span class="model-option-text">
+                    <span class="model-option-name">Chế độ nhanh</span>
+                    <span class="model-option-sub">Mức nhẹ nhất model này có</span>
+                  </span>
+                </button>
+              )}
+              {options.map((o) => (
+                <button key={o.id} ref={o.id === EFFORT_NONE ? inputRef : undefined} type="button" role="option" aria-selected={current === o.id} class={`model-option${current === o.id ? " selected" : ""}`} onClick={() => pick(o.id)}>
+                  <span class="model-option-text">
+                    <span class="model-option-name">{o.vi}</span>
+                    {o.id === EFFORT_NONE && <span class="model-option-sub">Để model tự chọn</span>}
+                  </span>
+                  {current === o.id && <CheckIcon size={18} />}
+                </button>
               ))}
             </div>
           </div>

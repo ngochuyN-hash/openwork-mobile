@@ -186,14 +186,35 @@ export function createChatStream() {
   };
 }
 
-/** Refetch full transcript giữa chừng run: API chỉ ghi nhận message ĐÃ xong
+/** Id tin tự sinh phía client (đang hiện optimistically, chưa có id thật). */
+export function isLocalMessageId(id) {
+  return typeof id === "string" && id.startsWith("local-");
+}
+
+/**
+ * Refetch full transcript giữa chừng run: API chỉ ghi nhận message ĐÃ xong
  * nên `fetched` thiếu message đang stream — thay nguyên list là trang co cụm,
  * scroll bị trình duyệt kẹp ngược lên (bug "cuộn xuống tự cuộn lên"). Giữ lại
- * message cục bộ mà fetched chưa có, đè lên vị trí cuối (message mới nhất). */
+ * message cục bộ mà fetched chưa có, đè lên vị trí cuối (message mới nhất).
+ *
+ * Riêng tin client tự sinh (`local-*`) thì phải BỎ khi server đã trả về bản
+ * thật: id `local-<timestamp>` không bao giờ trùng `msg_*`, nên nếu giữ lại như
+ * cũ thì mỗi lần refetch sẽ dồn thêm một bản — cùng nội dung hiện hai lần.
+ * Dấu hiệu server đã nhận: trong `fetched` đã có tin user cùng `time.created`.
+ */
 export function mergeRefetchKeepInflight(fetched, prev) {
   const list = Array.isArray(fetched) ? fetched : [];
   if (!Array.isArray(prev) || !prev.length) return list;
   const ids = new Set(list.map((m) => m.info?.id ?? m.id));
-  const inflight = prev.filter((m) => !ids.has(m.info?.id ?? m.id));
+  const inflight = prev.filter((m) => {
+    const id = m.info?.id ?? m.id;
+    if (ids.has(id)) return false; // server đã có bản thật
+    if (!isLocalMessageId(id)) return true; // đang stream: phải giữ
+    // Tin tự sinh: coi như đã xong nếu server đã trả tin user cùng thời điểm.
+    const created = m.info?.time?.created;
+    return !list.some(
+      (f) => (f.info?.role ?? f.role) === "user" && f.info?.time?.created === created,
+    );
+  });
   return inflight.length ? [...list, ...inflight] : list;
 }

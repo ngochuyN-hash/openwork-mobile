@@ -11,12 +11,15 @@ import { WorkspacesPage } from "./pages/workspaces.jsx";
 import { SessionsPage } from "./pages/sessions.jsx";
 import { ChatPage } from "./pages/chat.jsx";
 import { FilesPage } from "./pages/files.jsx";
+import { SearchPage } from "./pages/search.jsx";
 import { SettingsPage } from "./pages/settings.jsx";
 
 // Hash router:
 //   #/                     -> home (session gần đây gộp mọi workspace)
 //   #/workspaces           -> danh sách workspace
+//   #/search               -> tìm phiên trên MỌI workspace
 //   #/ws/:id               -> sessions (workspace)
+//   #/ws/:id/search        -> tìm phiên trong workspace này
 //   #/ws/:id/chat/:sid     -> chat
 //   #/ws/:id/files         -> files
 //   #/settings             -> settings (gồm mục "Máy của tôi" — chùm chìa nhiều máy)
@@ -27,7 +30,9 @@ function parseHash() {
   const params = new URLSearchParams(query ?? "");
   if (parts[0] === "settings") return { view: "settings" };
   if (parts[0] === "workspaces") return { view: "workspaces" };
+  if (parts[0] === "search") return { view: "search", wsId: "" };
   if (parts[0] === "ws" && parts[1]) {
+    if (parts[2] === "search") return { view: "search", wsId: parts[1] };
     if (parts[2] === "chat" && parts[3]) return { view: "chat", wsId: parts[1], sessionId: parts[3] };
     if (parts[2] === "files") return { view: "files", wsId: parts[1], path: params.get("path") ?? "" };
     return { view: "sessions", wsId: parts[1] };
@@ -119,6 +124,16 @@ export function App() {
       showNav = false;
       back = { label: "Sessions", href: `#/ws/${encodeURIComponent(route.wsId)}` };
       break;
+    case "search":
+      // wsId rỗng = tìm trên mọi workspace -> quay lại Home; có wsId = tìm
+      // trong workspace đó -> quay lại danh sách phiên của workspace.
+      view = <SearchPage route={route} />;
+      title = "Tìm phiên";
+      showNav = false;
+      back = route.wsId
+        ? { label: "Sessions", href: `#/ws/${encodeURIComponent(route.wsId)}` }
+        : { label: "Sessions", href: "#/" };
+      break;
     case "workspaces":
       view = <WorkspacesPage />;
       title = "Workspace";
@@ -153,7 +168,7 @@ export function App() {
         <span class="title">{title}</span>
         {state?.server ? <span class="sub">v{state.server.version}</span> : null}
       </div>
-      <div class={`view ${showNav ? "" : "no-nav"}`}>
+      <div class={`view ${showNav ? "" : "no-nav"}${route.view === "search" ? " search-view" : ""}`}>
         {banners}
         {view}
       </div>
@@ -346,6 +361,7 @@ function BottomNav({ current }) {
     home: "home",
     sessions: "home",
     chat: "home",
+    search: "home",
     files: "workspaces",
     workspaces: "workspaces",
     settings: "settings",

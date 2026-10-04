@@ -1,4 +1,8 @@
 // API client: same-origin với bridge. Token pairing lưu ở localStorage.
+import { normalizeSessionTitle } from "./lib/session-rename.js";
+import { buildSummarizeBody, summarizePath } from "./lib/session-compact.js";
+import { buildPromptModelFields } from "./lib/model-behavior.js";
+
 const TOKEN_KEY = "owm_token";
 // Multi-tenant: "phòng" = máy đang kết nối. Lưu kèm token; mọi request kèm
 // header x-owm-tenant (worker dùng để chọn đúng bridge), SSE dùng ?_m=.
@@ -250,6 +254,47 @@ export async function apiOpenWorkPath(path) {
   return payload; // { ok: true, openwork: { found, exe, version, source, candidates } }
 }
 
+/** Mã ghép one-time đang sống trên bridge (GET /api/pairing-code, cần khóa máy).
+ * Trả {code, codeFormatted, secondsLeft, pairUrl, qr, masterUrl, masterQr, ...}.
+ * UI chủ đích KHÔNG vẽ masterUrl/masterQr: token master vĩnh viễn chỉ nên nằm
+ * trong terminal/GUI trên máy tính, còn mã one-time tự vô hiệu sau 1 lần dùng. */
+export async function apiPairingCode() {
+  const res = await fetch("/api/pairing-code", { headers: authHeaders() });
+  if (res.status === 401) throw new Error("UNPAIRED");
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(payload?.message ?? `pairing-code ${res.status}`);
+  return payload;
+}
+
+/** Restart tunnel thủ công (POST /api/tunnel/restart): thay cloudflared, giữ
+ * nguyên bridge — dùng khi tunnel kẹt backoff 429 mà chưa tự nhả. 409 = tunnel
+ * không chạy (hoặc đang restart dở). Lưu ý: tunnel chết HẲN thì điện thoại
+ * không gọi tới được máy — lúc đó phải bấm nút ↻ trên GUI máy tính. */
+export async function apiRestartTunnel() {
+  const res = await fetch("/api/tunnel/restart", { method: "POST", headers: authHeaders() });
+  if (res.status === 401) throw new Error("UNPAIRED");
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(payload?.message ?? `tunnel ${res.status}`);
+  return payload; // { ok: true, tunnel: {...} }
+}
+
+/** Đổi tên máy (POST /api/machine/name) — thiết bị ghép SAU sẽ thấy tên mới ở
+ * màn đăng nhập. Bridge tự dẹp ký tự lạ và cắt 60 ký tự; tên rỗng chặn ngay ở
+ * client cho khỏi tốn một round-trip về máy. */
+export async function apiSetMachineName(name) {
+  const clean = String(name ?? "").trim();
+  if (!clean) throw new Error("Tên máy trống.");
+  const res = await fetch("/api/machine/name", {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ name: clean }),
+  });
+  if (res.status === 401) throw new Error("UNPAIRED");
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(payload?.message ?? `machine ${res.status}`);
+  return payload; // { ok: true, machineName }
+}
+
 /** Duyệt thư mục máy tính để chọn path khi tạo workspace.
  * Không truyền path → trả {roots, quick, home}; truyền path → {path, parent, dirs}. */
 export async function apiFsList(path) {
@@ -302,6 +347,163 @@ export async function owDeleteSession(wsId, sid) {
   await ow(`/workspace/${encodeURIComponent(wsId)}/opencode/session/${encodeURIComponent(sid)}`, {
     method: "DELETE",
   });
+}
+
+// ---- Thao tác trên MỘT session (kiểm chứng live với engine /doc 03/10) ----
+// Tất cả đều đi qua whitelist proxy sẵn có (`/workspace/:id/opencode/...`) nên
+// KHÔNG cần mở thêm backend. `messageID` bắt buộc bỏ trừ khi ghi chú.
+
+function oc(wsId, path) {
+  return `/workspace/${encodeURIComponent(wsId)}/opencode${path}`;
+}
+
+/** Danh sách agent của workspace (chọn agent khi gửi prompt). */
+export async function owAgents(wsId) {
+  return unwrap(await ow(oc(wsId, "/agent"))) ?? [];
+}
+
+/** Slash command + skill của workspace (gõ "/" trong ô gõ). */
+export async function owCommands(wsId) {
+  return unwrap(await ow(oc(wsId, "/command"))) ?? [];
+}
+
+/** Câu hỏi agent đang chờ trả lời (danh sách chung, lọc theo session ở UI). */
+export async function owQuestions(wsId) {
+  return unwrap(await ow(oc(wsId, "/question"))) ?? [];
+}
+
+/** Trả lời: answers = mỗi câu một mảng nhãn đã chọn, đúng thứ tự câu hỏi. */
+export async function owReplyQuestion(wsId, requestId, answers) {
+  await ow(oc(wsId, `/question/${encodeURIComponent(requestId)}/reply`), {
+    method: "POST",
+    body: { answers },
+  });
+}
+
+/** Từ chối trả lời — agent nhận kết quả "không có câu trả lời" và tự đi tiếp. */
+export async function owRejectQuestion(wsId, requestId) {
+  await ow(oc(wsId, `/question/${encodeURIComponent(requestId)}/reject`), { method: "POST" });
+}
+
+/**
+ * Hoàn tác tới messageID: engine đặt con trỏ session.revert, transcript API vẫn
+ * trả đủ — UI tự cắt (lib/session-ops applyRevertCursor).
+ */
+export async function owRevert(wsId, sid, messageId) {
+  return unwrap(await ow(oc(wsId, `/session/${encodeURIComponent(sid)}/revert`), {
+    method: "POST",
+    body: { messageID: messageId },
+  }));
+}
+
+/** Bỏ con trỏ revert, hiện lại các tin đã ẩn. */
+export async function owUnrevert(wsId, sid) {
+  return unwrap(await ow(oc(wsId, `/session/${encodeURIComponent(sid)}/unrevert`), { method: "POST" }));
+}
+
+/**
+ * Tạo nhánh session mới. Engine chép tin CHẶT TRƯỚC `messageID` — muốn nhánh
+ * từ tin M (bao gồm M) thì truyền id tin kế tiếp (resolveForkBoundaryId), hoặc
+ * bỏ trống để fork toàn bộ. Trả session mới.
+ */
+export async function owFork(wsId, sid, messageId = "") {
+  const body = messageId ? { messageID: messageId } : {};
+  return unwrap(await ow(oc(wsId, `/session/${encodeURIComponent(sid)}/fork`), { method: "POST", body }));
+}
+
+/** Xoá một tin nhắn trong session. */
+export async function owDeleteMessage(wsId, sid, messageId) {
+  return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/message/${encodeURIComponent(messageId)}`), {
+    method: "DELETE",
+  });
+}
+
+/**
+ * Đổi tên phiên (PATCH /session/:id, body { title }). Tên rác tới đây đã bị
+ * lib/session-rename chặn sẵn — rỗng, quá 120 ký tự hay nhiều dòng đều ném
+ * lỗi tiếng Việt NGAY Ở CLIENT, không tốn một vòng mạng để máy từ chối.
+ */
+export async function owRenameSession(wsId, sid, title) {
+  const clean = normalizeSessionTitle(title);
+  if (!clean.ok) throw new Error(clean.error);
+  return unwrap(await ow(oc(wsId, `/session/${encodeURIComponent(sid)}`), {
+    method: "PATCH",
+    body: { title: clean.title },
+  }));
+}
+
+/**
+ * Gửi prompt cho session (POST /session/:id/prompt_async).
+ *
+ * Cùng một đường cho cả hai việc: lượt chạy MỚI (session rảnh) và tin XEN
+ * GIỮA lúc agent đang chạy — ở engine v1 không có endpoint steer riêng,
+ * engine tự chèn tin vào lượt đang dở ở step kế tiếp. Payload model/effort
+ * do lib/model-behavior dựng (variant HOẶC reasoning_effort, không bao giờ
+ * cả hai), nên chỗ gọi không phải tự cắt chuỗi "provider/model" nữa.
+ */
+export async function owPrompt(wsId, sid, { text, model = "", agent = "", effort, variants } = {}) {
+  const fields = buildPromptModelFields({ modelValue: model, effort, variants });
+  const name = String(agent ?? "").trim();
+  return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/prompt_async`), {
+    method: "POST",
+    body: {
+      parts: [{ type: "text", text: String(text ?? "") }],
+      ...fields,
+      ...(name ? { agent: name } : {}),
+    },
+  });
+}
+
+/**
+ * Nén hội thoại (POST /session/:id/summarize, body { providerID, modelID }).
+ * `model` là giá trị "provider/model" của ModelPicker; chưa chọn model thì
+ * engine không có gì để tóm tắt bằng — chặn ngay, nói rõ cần chọn model.
+ */
+export async function owSummarize(wsId, sid, model) {
+  const body = buildSummarizeBody(model);
+  if (!body) throw new Error("Chọn model trước khi nén hội thoại.");
+  return ow(summarizePath(wsId, sid), { method: "POST", body });
+}
+
+/** Bật link chia sẻ (POST /session/:id/share, body rỗng). Link ở Session.share.url. */
+export async function owShareSession(wsId, sid) {
+  return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/share`), { method: "POST" });
+}
+
+/** Tắt link chia sẻ (DELETE /session/:id/share, body rỗng). */
+export async function owUnshareSession(wsId, sid) {
+  return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/share`), { method: "DELETE" });
+}
+
+/** Chạy slash command trong session (POST /session/:id/command). */
+export async function owRunCommand(wsId, sid, { command, args = "", model } = {}) {
+  return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/command`), {
+    method: "POST",
+    body: { command, arguments: args, ...(model ? { model } : {}) },
+  });
+}
+
+/** Danh sách việc agent đang theo (GET /session/:id/todo). */
+export async function owTodo(wsId, sid) {
+  return unwrap(await ow(oc(wsId, `/session/${encodeURIComponent(sid)}/todo`))) ?? [];
+}
+
+/** Nạp lại engine từng workspace (POST /workspace/:id/engine/reload — whitelist
+ * arm `engine/reload`, cùng action "Reload engine" trong Settings desktop).
+ * Dùng sau khi đổi MCP/plugin trên máy hoặc khi engine dựng dở. Chạy TUẦN TỰ và
+ * không hỏng cả lô khi 1 workspace lỗi — trả [{wsId, ok, error?}] theo thứ tự. */
+export async function owEngineReloadAll(wsIds) {
+  const ids = (Array.isArray(wsIds) ? wsIds : []).map((id) => String(id ?? "").trim()).filter(Boolean);
+  const results = [];
+  for (const id of ids) {
+    try {
+      await ow(`/workspace/${encodeURIComponent(id)}/engine/reload`, { method: "POST" });
+      results.push({ wsId: id, ok: true });
+    } catch (e) {
+      results.push({ wsId: id, ok: false, error: String(e?.message || e) });
+    }
+  }
+  return results;
 }
 
 /** Tải 1 file workspace về máy, có tiến trình + hủy được.
