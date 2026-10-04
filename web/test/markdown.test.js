@@ -16,8 +16,17 @@ test("bảng markdown ra thẻ table thật, không phải text có dấu gạch
   assert.match(html, /<tbody>/);
   assert.match(html, /<td>A<\/td>/);
   assert.match(html, /<td>2<\/td>/);
-  // Không còn dấu `|` sót lại trong ô nào.
-  assert.doesNotMatch(html, /<t[dh][^>]*>[^<]*\|/);
+  // Cột phải tách đúng: mỗi dòng dữ liệu ra đúng 2 ô, không phải "ô" chứa
+  // cả hàng. (Không được khẳng định "không có |" — ô CÓ THỂ chứa | hợp lệ.)
+  assert.equal((html.match(/<tr>/g) ?? []).length, 3);
+  assert.equal((html.match(/<td>/g) ?? []).length, 4);
+});
+
+test("ô bảng được chứa dấu `|` khi agent escape bằng `\\|`", () => {
+  const html = renderMarkdownHtml("| A | B |\n| --- | --- |\n| a \\| b | 2 |");
+  assert.match(html, /<td>a \| b<\/td>/);
+  assert.match(html, /<td>2<\/td>/);
+  assert.equal((html.match(/<td>/g) ?? []).length, 2);
 });
 
 test("bảng được bọc trong hộp cuộn ngang cho màn hình hẹp", () => {
@@ -83,8 +92,47 @@ test("đường dẫn file trong text thường thành link tải/mở", () => {
 
 test("đường dẫn Windows cũng thành link", () => {
   const html = renderMarkdownHtml("xem C:\\work\\out\\a.csv nhé", { fileHref });
-  assert.match(html, /md-file/);
-  assert.match(html, /out%5Ca\.csv|a\.csv/);
+  assert.match(html, /<a class="md-file" href="\/ws\/ws_1\/files\/raw\?path=C%3A%5Cwork%5Cout%5Ca\.csv"/);
+});
+
+test("entity hợp lệ được giữ nguyên, không escape thành hai lần", () => {
+  // Agent hay viết tên công ty theo kiểu entity — hiển thị `&amp;` là lỗi.
+  assert.match(renderMarkdownHtml("AT&amp;T"), /<p>AT&amp;T<\/p>/);
+  assert.match(renderMarkdownHtml("R&amp;D"), /<p>R&amp;D<\/p>/);
+  assert.match(renderMarkdownHtml("a &lt; b"), /<p>a &lt; b<\/p>/);
+  assert.match(renderMarkdownHtml("&#65;"), /<p>&#65;<\/p>/);
+  assert.match(renderMarkdownHtml("&copy;"), /<p>&copy;<\/p>/);
+  // Entity hỏng (`&nope;`) đi qua như marked mặc định — vô hại, vì
+  // `&` + từ + `;` không thể tạo ra thẻ HTML. Dấu & TRẦN thì phải escape.
+  assert.match(renderMarkdownHtml("Tom & Jerry"), /<p>Tom &amp; Jerry<\/p>/);
+  // Nhưng trong code span thì entity là chữ nghĩa đ literally (đúng GFM).
+  assert.match(renderMarkdownHtml("`a &amp; b`"), /<code>a &amp;amp; b<\/code>/);
+});
+
+test("URL trần trong câu không sinh <a> lồng <a>", () => {
+  // `s:/` trong `https://` từng khớp nhầm regex đường dẫn Windows.
+  const html = renderMarkdownHtml("see https://example.com/a.html now", { fileHref });
+  assert.equal((html.match(/<a /g) ?? []).length, 1);
+  assert.match(html, />https:\/\/example\.com\/a\.html<\/a>/);
+  assert.doesNotMatch(html, /path=s%3A/);
+  assert.doesNotMatch(html, /md-file/);
+});
+
+test("URL trần trong ô bảng cũng không sinh <a> lồng", () => {
+  const html = renderMarkdownHtml("| Nguồn |\n| --- |\n| https://example.com/a.html |", { fileHref });
+  assert.equal((html.match(/<a /g) ?? []).length, 1);
+});
+
+test("task list giữ ô tick", () => {
+  const html = renderMarkdownHtml("- [ ] todo\n- [x] done\n- plain");
+  assert.match(html, /<input disabled="" type="checkbox">todo/);
+  assert.match(html, /<input checked="" disabled="" type="checkbox">done/);
+  assert.match(html, /<li>plain<\/li>/);
+});
+
+test("`~một~` không bị biến thành gạch ngang, `~~hai~~` thì có", () => {
+  const html = renderMarkdownHtml("~single~ and ~~gone~~");
+  assert.match(html, /<p>~single~ and <del>gone<\/del><\/p>/);
 });
 
 test("inline code là đường dẫn file thì bấm được", () => {
@@ -129,4 +177,39 @@ test("stream rỗng rồi có text lại thì vẫn render đúng", () => {
   assert.match(stream.render("**ok**"), /<strong>ok<\/strong>/);
   stream.reset();
   assert.match(stream.render("| A |\n| --- |\n| 1 |"), /<table/);
+});
+
+test("reference-style link vẫn hiện sau khi stream xong", () => {
+  // Bug thật: block đầu được render lúc CHƯA có dòng định nghĩa nên ra text
+  // thuần; cache giữ HTML đó vì `raw` không đổi → link không bao giờ hiện.
+  const source = [
+    "Xem [báo cáo][r] nhé.",
+    "",
+    "Thêm chi tiết.",
+    "",
+    "Và code:",
+    "",
+    "```js",
+    "const a=1;",
+    "```",
+    "",
+    "[r]: docs/report.md",
+  ].join("\n");
+  const stream = createMarkdownStream({ fileHref });
+  let lastMismatch = 0;
+  for (let i = 1; i <= source.length; i += 1) {
+    const prefix = source.slice(0, i);
+    if (stream.render(prefix) !== renderMarkdownHtml(prefix, { fileHref })) lastMismatch = i;
+  }
+  assert.equal(lastMismatch, 0, `stream lệch parse-một-lần ở tiền tố dài ${lastMismatch}`);
+  assert.match(stream.render(source), /class="md-file"[^>]*>báo cáo</);
+});
+
+test("stream vẫn khớp parse-một-lần khi bị cắt rồi nối lại", () => {
+  const full = "# Báo cáo\n\n| Tên | Số |\n| --- | ---: |\n| A | 1 |\n\n- việc một\n- việc hai\n\n```\ncode\n```";
+  const stream = createMarkdownStream();
+  const cut = full.slice(0, 40);
+  stream.render(cut);
+  assert.equal(stream.render(cut), renderMarkdownHtml(cut));
+  assert.equal(stream.render(full), renderMarkdownHtml(full));
 });
