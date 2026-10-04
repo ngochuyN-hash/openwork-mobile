@@ -184,6 +184,12 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
 // localStorage. blob: cho img vì khung hình stream + preview file là object
 // URL; 'unsafe-inline' chỉ cho style — UI xài style attribute dày đặc.
 // Thêm script CDN/iframe vào web thì phải nới ở đây.
+//
+// Cùng bộ áo giáp này còn được gắn ở 2 cửa nữa: bridge tự phục vụ static qua
+// tunnel (bridge/src/static.js) và Cloudflare Pages (web/public/_headers).
+// Ba bản phải GIỐNG NHAU — web có 2 cửa vào, thiếu header ở cửa nào thì tấm
+// chhiến "lọt XSS cũng không chạy được" chỉ còn ở cửa kia. Đổi CSP ở đây thì
+// sửa luôn cả hai nơi kia trong cùng một lần.
 const CSP = [
   "default-src 'self'",
   "script-src 'self'",
@@ -200,6 +206,13 @@ const CSP = [
 function withSecurityHeaders(page) {
   const headers = new Headers(page.headers);
   headers.set("content-security-policy", CSP);
+  // nosniff: cấm trình duyệt tự đoán kiểu nội dung — chặn kiểu tấn công "file
+  // tĩnh thật ra là HTML/JS", tức làm script chạy được dù CSP có chặt.
+  // no-referrer: app không cần referrer ở đâu cả (link ngoài đã rel=noreferrer,
+  // link nội bộ là hash-route cùng origin), nên không lộ đường dẫn/token cho
+  // bên thứ ba. Giữ nguyên hai dòng này khớp bridge/src/static.js.
+  headers.set("x-content-type-options", "nosniff");
+  headers.set("referrer-policy", "no-referrer");
   return new Response(page.body, { status: page.status, statusText: page.statusText, headers });
 }
 
@@ -254,6 +267,13 @@ async function handle(request, env) {
     // tenant:main thì bridge lạ đăng ký đè luôn địa chỉ máy nhà. Trần 50 phòng
     // + rate-limit chặn ngập KV nếu URL worker bị lộ.
     if (url.pathname === "/api/tenant/create" && request.method === "POST") {
+      // Cửa tạo phòng có thể khóa lại bằng var môi trường ALLOW_ROOM_CREATE.
+      // KHÔNG đặt var (hoặc đặt "1") = mở, y như cũ — không đổi hành vi ai cả.
+      // Chỉ khi đặt "0" thì đóng: phòng đã có vẫn đăng nhập/gõ lại mật khẩu bình
+      // thường, chỉ chặn người lạ tự mở phòng mới lấp đầy 50 slot KV.
+      if (env.ALLOW_ROOM_CREATE === "0") {
+        return json({ code: "room_create_disabled", message: "Creating new rooms is turned off on this worker - ask the owner for an invite." }, 403);
+      }
       if (await rateLimited(request, "create-room", 5)) {
         return json({ code: "rate_limited", message: "Too many rooms created - wait about 1 minute and try again." }, 429);
       }
@@ -286,6 +306,19 @@ async function handle(request, env) {
         return json({ code: "full", message: "No room slots left - contact the worker owner." }, 403);
       }
       await env.OWM_STATE.put(`tenant:${user}`, JSON.stringify({ secret, name, createdAt: Date.now() }));
+      // KV không có CAS nên hai lần tạo cùng tên có thể cùng thấy `existing =
+      // null` rồi cùng put — ai ghi sau thắng. Đọc lại sau khi ghi: nếu secret
+      // trên KV khác secret mình vừa ghi thì có người đã chen vào giữa lúc,
+      // phòng KHÔNG còn của mình. Báo 409 "taken" ngay tại đây thay vì im lặng
+      // rồi để bridge của mình đăng ký 401 vô nghĩa về sau. Đây là phát hiện
+      // chứ không phải chặn (chốt thật thì cần Durable Object); và vì KV nhất
+      // quán theo colo nên cũng có thể chưa thấy bản vừa ghi — nên chỉ kêu
+      // "taken" khi đã ĐỌC ĐƯỢC bản ghi và secret nó lệch, không kêu khi đọc
+      // hụt (`null`).
+      const saved = await env.OWM_STATE.get(`tenant:${user}`, "json").catch(() => null);
+      if (saved && !(await sameSecret(secret, saved.secret))) {
+        return json({ code: "taken", message: "Another room just took that name - try a different one." }, 409);
+      }
       return json({ ok: true, created: true, user, name });
     }
 
@@ -295,6 +328,22 @@ async function handle(request, env) {
     if (tenant && !TENANT_RE.test(tenant)) {
       return json({ code: "bridge_offline", message: "Invalid machine code (room)." }, 503);
     }
+    // Ghép thiết bị qua /api/pair: chặn theo IP thật Ở ĐÂY chứ không ở bridge.
+    // Mọi request đi qua cloudflared về bridge đều mang 127.0.0.1 nên pairLimiter
+    // của bridge chỉ là bucket CHUNG cả tòa nhà — kẻ lạ biết tên phòng (nằm trong
+    // mọi link QR) nhét đầy bucket là chủ máy không ghép được máy mới. Ở bridge
+    // cũng không sửa được: relay forward header client gửi nguyên vẹn (trừ host)
+    // nên `x-forwarded-for` bịa ra là vượt; IP đáng tin duy nhất là
+    // `cf-connecting-ip` mà worker thấy. Trần 10/phút/IP — cùng mức pair-tenant,
+    // bridge giữ pairLimiter làm mũ sắt thứ hai cho direct-tunnel.
+    // Đứng SAU khi đã tách tenant: request không tenant vẫn phải rơi xuống
+    // nhánh tenant_required dưới đây, không bị nuốt vào rate limit.
+    if (url.pathname === "/api/pair" && request.method === "POST" && tenant) {
+      if (await rateLimited(request, "pair", 10)) {
+        return json({ code: "rate_limited", message: "Too many pairing attempts - wait about 1 minute and try again." }, 429);
+      }
+    }
+
     // No room on the bootstrap routes: refuse with a clear error instead of
     // fanning a stranger's code/key out to other people's machines. Every
     // real pairing entry point (QR, master link) carries the room and room

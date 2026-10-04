@@ -69,6 +69,44 @@ function mockFetch(handler) {
   return { calls, restore: () => (globalThis.fetch = real) };
 }
 
+/**
+ * Cache API giả CÓ BỘ ĐẾM THẬT. Stub ở đầu file luôn miss nên rateLimited()
+ * không bao giờ trả true — muốn test 429 thì phải đếm thật theo key.
+ * `count(kind, ip)` cộng dồn mọi bucket phút của một cặp kind/IP.
+ */
+function countingCache() {
+  const store = new Map();
+  return {
+    default: {
+      async match(key) {
+        const hit = store.get(key.url);
+        return hit === undefined ? undefined : new Response(hit);
+      },
+      async put(key, value) {
+        store.set(key.url, await value.text());
+      },
+    },
+    count(kind, ip) {
+      const prefix = `https://owm-ratelimit/${kind}/${encodeURIComponent(ip)}/`;
+      let sum = 0;
+      for (const [url, value] of store) if (url.startsWith(prefix)) sum += Number(value);
+      return sum;
+    },
+  };
+}
+
+/**
+ * Cài caches.default có trạng thái trong phạm vi đúng một test rồi trả về y hệt
+ * — caches là global nên bắt buộc khôi phục, không ôm bẩn các test khác.
+ */
+function useCountingCache(t) {
+  const cache = countingCache();
+  const real = globalThis.caches;
+  globalThis.caches = { ...real, default: cache.default };
+  t.after(() => (globalThis.caches = real));
+  return cache;
+}
+
 const jsonRes = (status, payload) =>
   new Response(JSON.stringify(payload), {
     status,
@@ -288,4 +326,206 @@ test("lỗi bất ngờ trong handle() → JSON worker_error thay vì trang 1101
   const payload = await res.json();
   assert.equal(payload.code, "worker_error");
   assert.equal(typeof payload.message, "string");
+});
+
+// ---------- FIX-3: rate limit /api/pair theo IP thật (cf-connecting-ip) ----------
+
+test("FIX-3: POST /api/pair có tenant → 10 lượt/phút/IP, lượt 11 trả 429 rate_limited, IP khác vẫn vào", async (t) => {
+  // Khoá thời gian cho cả test: bucket của rateLimited là
+  // Math.floor(Date.now()/60_000), chạy qua ranh giới phút sẽ tự reset giữa
+  // chừng và làm lượt 11 trả 200 — đỏ giả. Date.now là global, khôi phục sau.
+  const frozen = Date.now();
+  const realNow = Date.now;
+  Date.now = () => frozen;
+  t.after(() => (Date.now = realNow));
+
+  const cache = useCountingCache(t);
+  const kv = mockKV({ "machine:alpha": slot("https://alpha.trycloudflare.com") });
+  const { calls, restore } = mockFetch(() => jsonRes(200, { ok: true }));
+  t.after(restore);
+
+  const pairFrom = (ip) =>
+    worker.fetch(
+      apiRequest("/api/pair", {
+        body: '{"code":"owd_x"}',
+        headers: { "x-owm-tenant": "alpha", "cf-connecting-ip": ip },
+      }),
+      { OWM_STATE: kv }
+    );
+
+  for (let i = 1; i <= 10; i += 1) {
+    const res = await pairFrom("203.0.113.7");
+    assert.equal(res.status, 200, `lượt ${i}/10 phải còn được relay, không phải 429`);
+  }
+  // Lượt 11 cùng IP, cùng phút → chặn, KHÔNG relay đi đâu
+  const blocked = await pairFrom("203.0.113.7");
+  assert.equal(blocked.status, 429);
+  const payload = await blocked.json();
+  assert.equal(payload.code, "rate_limited");
+  assert.ok(payload.message.length > 10);
+  assert.equal(calls.length, 10);
+  // Lượt bị chặn không tăng bộ đếm (rateLimited chỉ put khi còn dưới trần)
+  assert.equal(cache.count("pair", "203.0.113.7"), 10);
+
+  // IP khác = bucket riêng, không dính của IP trên
+  const other = await pairFrom("198.51.100.9");
+  assert.equal(other.status, 200);
+  assert.equal(cache.count("pair", "198.51.100.9"), 1);
+});
+
+test("FIX-3: POST /api/pair không tenant → vẫn 400 tenant_required, không đốt lượt rate limit", async (t) => {
+  // Cache có bộ đếm thật để chứng minh cổng rate limit đứng SAU khi tách tenant:
+  // request không tenant phải rơi xuống nhánh tenant_required mà không ghi
+  // vào bucket "pair" — nếu ai đó gãn nhánh này lên trên thì lượt này sẽ
+  // ghi bộ đếm (và thành 429) thay vì 400.
+  const cache = useCountingCache(t);
+  const kv = mockKV({ "machine:alpha": slot("https://alpha.trycloudflare.com") });
+  const { calls, restore } = mockFetch(() => jsonRes(200, { unexpected: true }));
+  t.after(restore);
+
+  const res = await worker.fetch(
+    apiRequest("/api/pair", {
+      body: '{"code":"owd_x"}',
+      headers: { "cf-connecting-ip": "203.0.113.20" },
+    }),
+    { OWM_STATE: kv }
+  );
+
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).code, "tenant_required");
+  assert.equal(calls.length, 0);
+  assert.equal(kv.reads.length, 0);
+  assert.equal(cache.count("pair", "203.0.113.20"), 0);
+});
+
+// ---------- FIX-4: cờ môi trường ALLOW_ROOM_CREATE khóa cửa tạo phòng ----------
+
+test('FIX-4: ALLOW_ROOM_CREATE = "0" → 403 room_create_disabled, không đụng KV', async (t) => {
+  const kv = mockKV({ "tenant:cua-toi": JSON.stringify({ secret: "matkhau1", name: "Của tôi" }) });
+  const res = await worker.fetch(
+    apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "newroom", secret: "strongpass1" }) }),
+    { OWM_STATE: kv, ALLOW_ROOM_CREATE: "0" }
+  );
+
+  assert.equal(res.status, 403);
+  const payload = await res.json();
+  assert.equal(payload.code, "room_create_disabled");
+  assert.ok(payload.message.length > 10);
+  // Chặn ngay ở cổng: không đọc/ghi KV, phòng cũ còn nguyên
+  assert.equal(kv.reads.length, 0);
+  assert.deepEqual((await kv.list({ prefix: "tenant:" })).keys, [{ name: "tenant:cua-toi" }]);
+});
+
+/**
+ * KV giả mô phỏng đúng race cướp tên phòng của FIX-4: lần đọc kiểm tra
+ * (trước put) thấy phòng chưa tồn tại, nhưng tới lúc đọc lại sau put thì bản
+ * ghi trên KV đã là của người chen vào với secret KHÁC — đúng thứ mà KV không
+ * có CAS cho phép xảy ra (index.js:309-321).
+ * `readBack` = giá trị put trả về cho lần đọc lại: "null" mô phỏng KV
+ * nhất quán theo colo chưa thấy bản vừa ghi.
+ */
+function racingKV(winnerSecret, readBack = "winner") {
+  let written = false;
+  return {
+    async get(_key, type) {
+      const raw = !written
+        ? null
+        : readBack === "null"
+          ? null
+          : JSON.stringify({ secret: winnerSecret, name: "Phòng của người khác" });
+      if (raw == null) return null;
+      return type === "json" ? JSON.parse(raw) : raw;
+    },
+    async put() {
+      written = true;
+    },
+    async list() {
+      return { keys: [], list_complete: true, cursor: "" };
+    },
+  };
+}
+
+test("FIX-4: race cướp tên phòng → đọc lại thấy secret lệch thì 409 taken, không trả created", async (t) => {
+  const kv = racingKV("matkhau-cu-nguoi-khac");
+  const res = await worker.fetch(
+    apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "newroom", secret: "strongpass1" }) }),
+    { OWM_STATE: kv }
+  );
+
+  assert.equal(res.status, 409);
+  const payload = await res.json();
+  assert.equal(payload.code, "taken");
+  assert.ok(payload.message.length > 10);
+  // Phòng KHÔNG còn của mình nên tuyệt đối không báo created/existed —
+  // báo vậy GUI sẽ tưởng đã xong rồi đi đăng ký và nhận 401 về sau.
+  assert.equal(payload.ok, undefined);
+  assert.equal(payload.created, undefined);
+});
+
+test("FIX-4: read-after-write đọc hụt (null) → vẫn 200 created, không kêu taken oan", async (t) => {
+  // KV nhất quán theo colo có thể chưa thấy bản vừa ghi — đọc hụt KHÔNG phải
+  // bằng chứng ai cướp, nên chỉ kêu "taken" khi ĐỌC ĐƯỢC và secret lệch.
+  const kv = racingKV("matkhau-cu-nguoi-khac", "null");
+  const res = await worker.fetch(
+    apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "newroom", secret: "strongpass1" }) }),
+    { OWM_STATE: kv }
+  );
+
+  assert.equal(res.status, 200);
+  const payload = await res.json();
+  assert.equal(payload.ok, true);
+  assert.equal(payload.created, true);
+  assert.equal(payload.user, "newroom");
+});
+
+test("FIX-4: không đặt ALLOW_ROOM_CREATE (hoặc \"1\") → vẫn tạo phòng như cũ, mặc định là MỞ", async (t) => {
+  for (const flag of [undefined, "1"]) {
+    const kv = mockKV();
+    const res = await worker.fetch(
+      apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "newroom", secret: "strongpass1" }) }),
+      flag === undefined ? { OWM_STATE: kv } : { OWM_STATE: kv, ALLOW_ROOM_CREATE: flag }
+    );
+
+    assert.equal(res.status, 200, `ALLOW_ROOM_CREATE=${flag ?? "(không đặt)"} phải mở`);
+    const payload = await res.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.created, true);
+    assert.equal(payload.user, "newroom");
+    // Ghi thật xuống KV, đăng nhập lại được
+    const saved = await kv.get("tenant:newroom", "json");
+    assert.equal(saved.secret, "strongpass1");
+  }
+});
+
+// ---------- FIX-2: security headers của cửa worker ----------
+
+test("FIX-2: static qua worker mang CSP + nosniff + no-referrer, header ASSETS gốc vẫn còn", async () => {
+  // Cửa Cloudflare là 1 trong 3 cửa vào web (worker / bridge tunnel / Pages),
+  // đặc tả FIX-2 yêu cầu 3 cửa mang CÙNG bộ giáp. Test này gọi thật
+  // withSecurityHeaders() qua worker.fetch — không regex trên source — nên đổi
+  // tên hằng hay bỏ lệnh headers.set(...) đều làm đỏ ở đây trước khi deploy.
+  const seen = [];
+  const env = {
+    OWM_STATE: mockKV(),
+    ASSETS: {
+      async fetch(request) {
+        seen.push(String(request.url));
+        return new Response("<html>app shell</html>", {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8", "x-custom": "giu-lai" },
+        });
+      },
+    },
+  };
+
+  const res = await worker.fetch(new Request("https://worker.test/rooms/abc/messages"), env);
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(seen, ["https://worker.test/rooms/abc/messages"], "phải gọi ASSETS với request gốc");
+  assert.match(res.headers.get("content-security-policy"), /script-src 'self'/);
+  assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(res.headers.get("referrer-policy"), "no-referrer");
+  // Giáp gắn thêm, không xoá header mà binding ASSETS đã trả về.
+  assert.equal(res.headers.get("content-type"), "text/html; charset=utf-8");
+  assert.equal(res.headers.get("x-custom"), "giu-lai");
 });
