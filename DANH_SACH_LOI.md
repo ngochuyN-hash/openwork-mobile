@@ -76,8 +76,8 @@
 |---|---|---|---|
 | O1 | `FindNodeExe()` còn đúng 1 chỗ `p.WaitForExit()` không timeout trên `where.exe` | `desktop/src/OpenPocket.cs` | Nằm ngoài 3 điểm đã nêu tên của lượt hardening; thực tế chạy nhanh, không quan sát được treo |
 | O2 | Comment route `app.jsx` vẫn chép "settings gồm mục Máy của tôi — chùm chìa nhiều máy" trong khi UI đã bỏ từ 13/09 | `web/src/app.jsx:20` | Là comment code, ngoài phạm vi file `.md` của lượt tài liệu |
-| O3 | CSP production (`web/public/_headers` + `withSecurityHeaders`) chỉ được kiểm chứng ở build cục bộ, chưa verify trên môi trường deploy thật | `web/public/_headers` | Cần deploy thật để verify — lượt này KHÔNG chạy `wrangler deploy` (cấm theo quy tắc) |
-| O4 | Chat outbox (hàng đợi offline) và chống xung đột file khi viết trùng vẫn là việc riêng, chưa có regression test | `web/src/pages/chat.jsx`, `files.jsx` | Chưa nằm trong phạm vi bất kỳ lượt vá nào đến nay |
+| ~~O3~~ | ~~CSP production chưa verify trên môi trường thật~~ | `web/public/_headers` | **ĐÃ ĐÓNG 04/10**: deploy thật (`openpocket`, version `e2bd9e28`), header CSP xuất hiện đúng trên `https://YOUR-WORKER.workers.dev/` và app khởi động được dưới CSP đó (`script-src 'self'` không chặn bundle). Ghi lại ở đây để lượt sau khỏi tìm lại |
+| O4 | Chống xung đột file khi ghi trùng chưa có; **hàng đợi offline thì đã có** | `web/src/pages/files.jsx` | Lượt audit 04/10 đã tách hàng đợi theo phiên (`sessionId -> tin`) + `queueRestore` và khoá lần gửi lại; còn lại phần ghi file trùng nội dung |
 | O5 | Bề mặt API dormant: `POST /api/pair/tenant` (bridge) và `POST /api/tenant/create` (worker) còn sống nhưng không UI nào gọi (trừ self-provision của GUI); KV free tier chỉ đủ ~10 phòng (~1000 ghi/ngày) | `bridge/src/index.js`, `worker/src/index.js` | Chủ động giữ lại — phí 0, route đã có test; giới hạn KV là đặc tính free tier |
 | O6 | Lịch sử quét mật khẩu phòng mặc định `12345678`: các phòng tạo TRƯỚC 13/09 vẫn cần re-key (revoke + add) thủ công | KV worker | Việc vận hành trên KV thật, không phải lỗi code |
 
