@@ -9,6 +9,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "marked": "^15.0.12",
     "preact": "^10.24.3"
   },
   "devDependencies": {
