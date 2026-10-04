@@ -161,26 +161,59 @@ streamed text/tool block grew taller than 260 px (the view would silently stop m
 Fix — pure logic in the new `web/src/lib/chat-scroll.js` (unit-tested in
 `web/test/chat-scroll.test.js`), DOM wiring in `chat.jsx`, styles in `styles.css`:
 
-- `scrollPlan({forced, atBottom, changed}) → "instant" | "smooth" | "hold"`. `forced` (first render
-  of a session) always wins, so **entering a session always lands on the newest message**, instantly
-  rather than smooth-scrolling through thousands of pixels.
-- "At bottom" is now tracked by a passive `scroll` listener (rAF-throttled, state only set on a
-  flag flip), i.e. the user's real position measured **before** the next render — so a long streamed
-  block no longer stops the follow.
+- `scrollPlan({forced, atBottom}) → "instant" | "smooth" | "hold"`. `forced` (transcript thật đầu
+  tiên của phiên) always wins, so **entering a session always lands on the newest message**,
+  instantly rather than smooth-scrolling through thousands of pixels.
+- "At bottom" is tracked by a passive `scroll` listener (rAF-throttled, state only set on a flag
+  flip), i.e. the user's real position measured **before** the next render.
+- `keepsAutoScroll()` / `leftBottomBy()` decide two things the listener cannot infer on its own:
+  whether the app itself is mid-scroll (see the QA round below), and whether a swipe up means "let
+  me read history" — which leaves the follow band **immediately**, not after 260 px.
 - New **"jump to latest" pill** (`.jump-latest`, ≥44px, `--shadow-float`, reduced-motion honoured):
   it appears whenever the reader is up in history, reads "Tin mới nhất" or "N tin mới", and is
-  anchored `position: absolute` to `.composer` (already `sticky`, hence a containing block) so it
-  always sits right above the composer without measuring its variable height and without shifting
-  layout.
-- Programmatic scrolls are flagged (`autoScrollRef`) so the button doesn't flicker mid-animation, and
-  the flag is dropped the moment the reader scrolls **up** — the app never fights the user.
-- Navigating chat→chat (e.g. after `fork`) now clears the transcript via `commitMessages(null)` on
+  anchored `position: absolute` to `.composer` (already `sticky`, hence a containing block) at
+  `bottom: calc(100% + var(--sp-3))` so it sits fully outside the composer without measuring its
+  variable height. It is the composer's **last** DOM child on purpose: as the first child, Preact's
+  index-based child matching remounted the whole `flex:1` subtree every time the pill appeared or
+  disappeared — blowing away textarea focus and any in-flight Vietnamese IME composition.
+- `newMessagesSince()` anchors on the rightmost already-seen id, so a streamed part update or an
+  optimistic `local-…` message being replaced by its real `msg_…` never inflates the count.
+- Navigating chat→chat (e.g. after `fork`) clears the transcript via `commitMessages(null)` on
   session change, so the previous session's messages can't flash before the new fetch lands.
 - `settleToBottom()` re-pins for up to ~0.7 s after a load/jump, because content can still grow
   (streaming, opened folds, images). It's cancelled on unmount so it can't scroll another page.
 
-Verified 2026-10-04: `node --test web/test/*.test.js` → **280 pass / 0 fail**; `vite build` → OK.
-Working tree only — **not committed**, and **not deployed** to the worker.
+### QA round (3 independent reviewers) — what the first pass got wrong
+
+The first implementation passed its own tests and was still broken in two ways, both found
+independently by two reviewers:
+
+1. **Auto-follow died mid-message anyway.** `autoScrollRef` was set only inside `settleToBottom()`,
+   which runs on the session-open path. The streaming path (`scrollPlan → "smooth"`) scrolled
+   without the flag, so `measure()` read the app's own in-flight smooth scroll as "the user scrolled
+   up", flipped the flag, and the next flush fell into `"hold"` — the exact bug this change was meant
+   to fix, plus a spurious "jump to latest" button. Now the flag is set before **every**
+   programmatic scroll, and released by `keepsAutoScroll()` when it lands or when the reader
+   actually pulls up.
+2. **A stale fetch could install the wrong session's transcript.** `ChatPage` is rendered unkeyed, so
+   `forkFrom`'s `navigate()` left `run()` reloading with the previous session's closure; that
+   response could land last and both overwrite the new transcript and burn the "always land at the
+   bottom" flag. Every loader (`loadSession`, `loadMessages`, `loadStatus`, `loadTodo`,
+   `loadPermissions`) plus `run()` and `send()`'s optimistic append now capture the session id and
+   bail if it changed while in flight.
+3. Also fixed from that round: `forced` could be consumed by an SSE stub before the real transcript
+   arrived (now gated on `transcriptRef`), the pill's offset sign put it 8 px *inside* the composer
+   (`100% - 8px` → `100% + 12px`), and hardcoded `gap: 5px` / `padding: 0 14px` became spacing
+   tokens.
+
+Verified 2026-10-04: `node --test web/test/*.test.js` → **309 pass / 0 fail**; `vite build` → OK
+(JS 190.64 kB → 62.29 kB gzipped, CSS 26.72 kB → 5.81 kB gzipped). Committed, **not deployed** to the
+worker.
+
+Known trade-off: the pill floats over the transcript (ChatGPT/ZCode pattern) with no reserved
+gutter, so it can cover the bottom-right corner of the newest right-aligned user bubble and swallow
+the tap that opens that message's action sheet. Fixable with one line of `.chat-list` bottom padding
+or by shrinking it to a 44 px round button.
 
 ## Parity rounds closed — 2026-10-04 (web only, working tree)
 
@@ -511,7 +544,8 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | Web API call 403 "Path not allowed" | `bridge/src/proxy.js` — the `ALLOWED` array (add the new openwork-server path prefix) |
 | POST with a body hangs through the bridge | `bridge/src/proxy.js` (the body must be buffered, not streamed; abort only when `res` closes + `!writableEnded` — `req` 'close' also fires for normally finished requests) |
 | SSE doesn't stream / keeps dropping | `bridge/src/proxy.js` (isSSE + keepalive) + `index.js` (`server.requestTimeout = 0`) |
-| Opening a long session shows the OLDEST message, and scrolling up through history has no way back | `web/src/lib/chat-scroll.js` + `web/src/pages/chat.jsx` — the old auto-scroll measured "distance to bottom" *after* the transcript rendered, so on entry (`scrollY` 0, tall document) it always decided the user was reading history and skipped the scroll; it also stopped following a stream whenever one block exceeded the 260px threshold. `scrollPlan()` now forces the first render of a session to the bottom, a passive `scroll` listener supplies the user's real position, and a `.jump-latest` pill ("Tin mới nhất" / "N tin mới") appears whenever the reader is up in history |
+| Opening a long session shows the OLDEST message, and scrolling up through history has no way back | `web/src/lib/chat-scroll.js` + `web/src/pages/chat.jsx` — the old auto-scroll measured "distance to bottom" *after* the transcript rendered, so on entry (`scrollY` 0, tall document) it always decided the user was reading history and skipped the scroll. `scrollPlan()` now forces the first real transcript of a session to the bottom, `keepsAutoScroll()`/`leftBottomBy()` keep the app's own scrolls from being read as a user swipe-up, and a `.jump-latest` pill ("Tin mới nhất" / "N tin mới") appears whenever the reader is up in history. **The QA round in the section above is mandatory reading before touching this** — the first version of the fix passed its own tests and still killed auto-follow mid-message |
+| Forking a session (or switching chat→chat) can show the PARENT session's messages under the child's title | `web/src/pages/chat.jsx` — `ChatPage` is rendered unkeyed, so `run()`'s post-action reload ran with the previous session's closure and a late response overwrote the new transcript (also consuming the jump-to-bottom flag). Every loader now captures `sessionId` and bails if it changed while in flight; `loadPermissions` matters most — a stale card means tapping Allow/Deny answers the wrong agent |
 | Chat view jumps back up while scrolling during a run | `web/src/pages/chat.jsx` (`loadMessages`) + `web/src/lib/chat-stream.js` (`mergeRefetchKeepInflight`) — the transcript API only flushes FINISHED messages, so a mid-run full refetch (SSE reconnect, tab return, 30 s watchdog) used to drop the still-streaming message: the page shrank and the browser clamped the scroll position (felt like being thrown back up, then the text grew back). Mid-run refetches now merge, keeping local messages the machine hasn't persisted yet. Regression: `mergeRefetchKeepInflight` tests in `web/test/chat-stream.test.js` |
 | Phone can't pair | `bridge/src/auth.js` + the token in `%APPDATA%\openwork-bridge\config.json`; the QR prints at bridge startup |
 | Wrong workspace list | openwork-server's side; check `%APPDATA%\openwork\server.json` |
