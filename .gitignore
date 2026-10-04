@@ -4,6 +4,12 @@ web/dist/
 
 # scratch files from one-off test scripts (they self-declare "temporary")
 _tmp-*
+# ad-hoc scratch dirs from a patch session (owm-<random>/). Nothing in the repo
+# is ever named like this, so ignore the whole shape rather than one instance.
+owm-*/
+# Windows redirect artifact: `cmd > nul` / `> nul` writes a real 0-byte file
+# named "nul" here on the bash/git-bash layer. Pure noise, never real content.
+nul
 .DS_Store
 Thumbs.db
 .zcode/

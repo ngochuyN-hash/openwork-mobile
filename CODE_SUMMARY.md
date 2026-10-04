@@ -1,5 +1,188 @@
 # CODE_SUMMARY — OpenWork Mobile
 
+## Denser session list, filter row and bottom nav — 2026-10-04 (web only)
+
+Owner: *"mỗi tab session cũng đang cao và to quá"*. Three surfaces shrank;
+measured with `getBoundingClientRect` in a real browser (A/B page, built CSS):
+
+| Surface | Before | After |
+|---|---|---|
+| Session card | 128px | 84px |
+| Filter chip row (Sessions) | 144px (3 wrapped rows) | 34px (one scrolling row) |
+| Bottom nav bar | 65px | 49px |
+
+**Root cause of the tall card.** Each card holds three small icon buttons
+(pin / assign-group / archive) built as `btn small ghost btn-icon`, and
+`button.btn.small` carries `min-height: 44px`. Each button stretched its whole
+`.row-between` row to 44px, so a 15px title sat inside a 126px box. The
+padding was the second half of the problem: `.card` uses `var(--sp-4)` = 16px.
+
+**What changed** (all in `web/src/styles.css` unless noted):
+
+- New `.card.tap.dense` variant, applied in `pages/home.jsx` and
+  `pages/sessions.jsx` only. `.card` itself is untouched — Workspace and Files
+  cards share it. Padding `8px 10px`, icon buttons 32×32 with `padding: 0` and
+  a transparent border that reappears on `:active`, title 14.5px/1.35,
+  `.row-between + .row-between` margin 2px, swipe gap `--sp-2`.
+- The JSX **inline `style="margin-top:6px"` on the second row had to be
+  removed** in both pages — an inline style beats the stylesheet, so the CSS
+  rule for that gap would never have applied.
+- New `.fs-chips.scroll` variant (`nowrap` + `overflow-x: auto`, hidden
+  scrollbar, chips 34px), modelled on the existing `.composer-pills`. Attached
+  only in `sessions.jsx`; the folder picker in `workspaces.jsx` keeps the
+  wrapping `.fs-chips`.
+- Bottom nav: button `min-height` 50→34, padding `4px 8px`→`2px 6px`, font
+  11→10.5px, gap 2→1px, `.nav-pill` `4px 16px`→`2px 12px`, svg 20→18px, bar
+  padding 6→4px.
+- Two positioning constants move **with** the nav, or content gets covered:
+  `.view` padding-bottom `calc(108px + sab)` → `88px`, `.fab` bottom
+  `calc(86px + sab)` → `66px`. Changing `.bottomnav` without these is the trap.
+
+`pages/search.jsx` renders session rows too but was left alone on purpose: its
+card is a different three-row shape with no 44px buttons inside, so it never
+had the problem.
+
+**Touch target rule.** This is a deliberate, owner-approved exception to the
+project's ≥44px rule: secondary icon actions inside a dense list are 32px.
+Primary actions (open a session, FAB, filter chips) stay ≥44px. Recorded in
+`.zcode/skills/pwa-workspace-ui/SKILL.md` and `references/tokens.md`, whose nav
+figures were already stale (they said 10px bottom offset; the code has used 6px
+since v5.5b).
+
+## Security patch round — 2026-10-04 (bridge + worker, NOT deployed)
+
+Spec: `docs/SECURITY-FIX-SPEC-2026-10-04.md` — a full three-tier audit (worker →
+bridge → web) that also probed the **running** bridge: every token-less API
+answers 401 and 38/38 XSS cases pass, so the verdict is **no critical hole** (no
+XSS, no SSRF, no arbitrary file read). The four items below are hardening, in the
+spec's own priority order. FIX-1 and FIX-2 are bridge-only and therefore testable
+locally; FIX-3 and FIX-4 only exist once the worker is deployed.
+
+| # | Symptom | Where it is fixed | Reach the phone |
+|---|---|---|---|
+| FIX-1 | A paired phone calls `GET /api/pairing-code` and reads the **master token** out of `masterUrl` / `masterQr` | `bridge/src/routes/pairing.js` — `pairingCode({res, device})` now takes `device` (app.js:76 already passed it), builds the payload without the master part and appends `masterUrl`/`masterQr` **only when `isMaster = !device`** | restart bridge |
+| FIX-2 | The web app opened through the **tunnel** URL carries no CSP at all — the shield only existed on the worker door | `bridge/src/static.js` — new `SECURITY_HEADERS` spread into the static `writeHead(200, …)`; the same two headers added to `worker/src/index.js` `withSecurityHeaders()` and `web/public/_headers` | restart bridge + deploy worker |
+| FIX-3 | A stranger who knows the room name can flood the pairing bucket (everyone behind cloudflared is `127.0.0.1` to the bridge) | `worker/src/index.js` — `POST /api/pair` with a room now goes through `rateLimited(request, "pair", 10)` → 429 `rate_limited` | deploy worker |
+| FIX-4 | Anyone knowing the worker URL can self-create rooms, and two concurrent creates race for one name | `worker/src/index.js` — env flag `ALLOW_ROOM_CREATE`; unset/`"1"` = open exactly as before, `"0"` → 403 `room_create_disabled`; **plus** read-after-write after the `put` — a record read back whose secret differs from the one just written → 409 `taken` | deploy worker (+ set the var) |
+
+**FIX-1 — the master token must not travel to a revocable key.** The project's
+security model is *"lose the phone → revoke its key, you're clean"*, and this hole
+voided it: `app.js` accepts both a master token (`device = null`) and a device key
+(`device ≠ null`) on `/api/pairing-code`, so **one single call before the phone is
+revoked** handed the attacker the permanent `owm_` master — unrevocable from the
+phone, rotatable only by hand-editing `config.json` and re-pairing everything. The
+two fields are now **omitted entirely** for a device key (not returned as `""` —
+easy to spot in the network tab), while the pairing part (`code`, `codeFormatted`,
+`pairUrl`, `qr`, `secondsLeft`) is unchanged because it was always meant for the
+device. Consumers re-checked against real code, none of them lost anything: the
+desktop `FetchLiveCode` and CLI `openpocket code` both authenticate with
+`config.mobileToken` (master → still get the master QR), the web Settings card uses
+a device key and never rendered those two fields anyway, and a legacy `?_t=` master
+still resolves to `device = null`.
+
+**FIX-2 — the web app has two doors and only one was armoured.** `bridge/src/static.js`
+serves `web/dist` itself for `*.trycloudflare.com` / a self-hosted `publicUrl`, and
+that path answered with **no CSP, no nosniff, no frame guard** (curl-verified live),
+while the worker door had CSP since the 2026-09-13 hardening round. So the
+"even if XSS got through, the dynamic script can't run and can't reach the token in
+localStorage" argument only held on one door — and the tunnel door is the one a QR
+points at before the machine is paired. The CSP string is now duplicated in three
+places by design (`static.js`, the worker constant, `_headers`); **all three must
+stay identical**, because diverging in one leaves the other two armoured and one
+bare. The error branches (403/404/500) deliberately do not get the headers — they
+answer `text/plain`/JSON, not the app shell, so CSP has nothing to police there.
+
+**FIX-3 — the rate limit has to live where the IP can be trusted.** The bridge's
+`pairLimiter` (10/min) counts `req.socket.remoteAddress`, and *every* internet
+request arrives through cloudflared as `127.0.0.1` — so the bucket is shared by the
+whole internet, and a stranger who knows the room name (it sits in every QR link)
+can fill it so the owner cannot pair a new phone. It cannot be fixed on the bridge:
+the relay forwards client headers verbatim (except `host`), so a forged
+`x-forwarded-for` walks straight past a bridge-side check, and cloudflared itself
+only sees the worker's egress IP. The one trustworthy source is `cf-connecting-ip`,
+which only the worker sees — hence the limit moved there (10/min/IP, the same
+ceiling as `/api/pair/tenant`, reusing the existing Cache-API limiter). The guard
+sits **after** the room is extracted, so a room-less request still falls through to
+the `tenant_required` branch instead of being swallowed by a 429. The bridge keeps
+its own limiter as a second helmet for the direct-tunnel path.
+
+**FIX-4 — the room door is now closable, and the race is detected but not
+prevented.** Both plan B and plan C of the spec are in.
+`ALLOW_ROOM_CREATE=0` (a worker env var) turns new-room creation into 403
+`room_create_disabled` before the body is read, while leaving existing rooms and
+their sign-in completely untouched — unset or `"1"` = open exactly as before, so
+nobody's behaviour changes until someone deliberately sets the var.
+Plan C then re-reads the record after `put` and compares it with
+`sameSecret(secret, saved.secret)`: KV has no CAS, so two concurrent creates of one
+name can still both see `existing = null` and both `put` (last write wins) — the
+read-after-write turns that silent loss into an honest **409 `taken`** at the point
+of creation instead of an inexplicable 401 at bridge registration minutes later.
+Two honest limits, recorded so nobody over-reads it: it **detects** the race, it does
+not **prevent** it (a true guard needs a Durable Object — plan D, judged not worth
+it), and because KV is only eventually consistent across colos it stays quiet when
+the read comes back empty (`null`) rather than cry "taken" on a room it never saw.
+The blast radius of what slips through is what the spec measured — the owner's
+bridge fails to register and the phone gets a wrong-password error; no data leak, no
+redirect to a stranger's machine.
+
+**Tests.** `bridge/test/pairing-routes.test.js` (3 cases) drives real HTTP into
+`createApp` with a fake device minted through the real `PairingService.mintDevice()`:
+master → `masterUrl` carries `config.mobileToken`; device → **no `masterUrl`/
+`masterQr` keys at all** and no field anywhere in the JSON contains the master token,
+while the pairing part is intact; no token → 401. `bridge/test/static-headers.test.js`
+(3 cases) asserts the exact directive set on the app shell, on an asset and on the SPA
+fallback (the shell's `no-cache` and the asset's `max-age=3600` must survive), and
+**parses the worker's CSP array and `_headers` to prove all three copies match** —
+change the CSP in one place and that test names the other two you forgot.
+The two worker changes are covered too, in `worker/test/relay.test.mjs` (mocked
+KV/fetch, never a real machine) — **7 new cases**, taking the file from 11 to **18**:
+the 11th `/api/pair` from one IP in a minute → 429 `rate_limited` while a second IP
+still gets through, and a roomless `/api/pair` → still `400 tenant_required` without
+burning a rate-limit token; `ALLOW_ROOM_CREATE="0"` → 403 `room_create_disabled`
+with **zero KV reads** (the gate is before the body, so a blind flood never touches
+storage); unset and `"1"` → still `200 created` and the secret really lands in KV;
+a fake KV that simulates the hijack → 409 `taken` and no `created`; the
+read-after-write returning `null` → still `200 created`, i.e. the new check cannot
+cry "taken" on a room it merely failed to read; and a static request relayed through
+the worker's `withSecurityHeaders` → carries CSP + `nosniff` + `no-referrer`.
+
+Re-ran for this update, from the repo root, all three files green:
+`node --test bridge/test/pairing-routes.test.js` → 3 pass / 0 fail;
+`node --test bridge/test/static-headers.test.js` → 3 pass / 0 fail;
+`node --test worker/test/relay.test.mjs` → 18 pass / 0 fail.
+(Per-file invocation on purpose — `node --test <dir>` misbehaves on this machine. The
+full bridge/web suites and `vite build` were **not** re-run in this pass.)
+
+> ⚠️ **`web/dist/_headers` is STALE — rebuild before any deploy.** The newest build
+> ran 2026-10-04 21:12 and does contain the UI compaction below (`web/src/styles.css`
+> mtime 19:17 < 21:12), but `web/public/_headers` was edited **after** that build, so
+> the copied `web/dist/_headers` still holds only the CSP line — `cat web/dist/_headers`
+> has no `nosniff` and no `referrer-policy`, while the source has both. The Worker
+> uploads assets straight from that directory (`worker/wrangler.jsonc` →
+> `"assets": { "directory": "../web/dist" }`) and the bridge serves the same folder in
+> `bridge/src/static.js`, so `cd worker && npx wrangler deploy` without
+> `npm --prefix web run build` publishes the old `_headers`. Build first.
+
+> **Commit state: FIX-1 only.** `8020ef1 bridge: stop returning the master token to
+> device keys` (routes/pairing.js + its test) is committed. FIX-2, FIX-3 and FIX-4 —
+> `bridge/src/static.js`, `web/public/_headers`, `worker/src/index.js`,
+> `bridge/test/static-headers.test.js`, `worker/test/relay.test.mjs` — are **working
+> tree only, uncommitted**, each still owed its own commit.
+> The web UI compaction at the top of this file (`web/src/styles.css`,
+> `pages/home.jsx`, `pages/sessions.jsx`) rides in the same working tree but is **not
+> part of the security round** — it needs its own commit, otherwise one `npm run build`
+> would mix an unrelated layout change into the security history.
+
+> ⚠️ **NOT DEPLOYED, BRIDGE NOT RESTARTED.** No `wrangler deploy` was run and no
+> bridge/cloudflared process was restarted in this round (restarting mints a brand
+> new Quick Tunnel and costs against the CF 429 quota anyway), so **none of the four
+> fixes is live yet**: the phone still gets the master token from `/api/pairing-code`,
+> still gets headerless static over the tunnel, and the worker still relays
+> `/api/pair` unthrottled. Deploy order is the spec's: one bridge restart for
+> FIX-1+2, one worker deploy for FIX-2+3+4, then verify live with
+> `curl -s -D - -o /dev/null http://127.0.0.1:8788/ | grep -i "content-security\|nosniff\|referrer"`
+> and a `/api/pairing-code` call with a device key (no `masterUrl` left).
+
 ## Bridge route table split out of `index.js` — 2026-10-04 (bridge only)
 
 `bridge/src/index.js` went 750 → 284 lines. The ~500-line `handleRequest`
@@ -646,7 +829,7 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | `src/discovery.js` | Reads `engine-instances.json` (ownerPid) → parses netstat → probes `/health` → checks `/whoami` (token active). **`isProcessAlive(pid)`** = `process.kill(pid, 0)` (no child process, unlike a `tasklist` spawn; `EPERM` still counts as alive) — needed because the registry file outlives the app, so `/api/state` can report "installed but not running" honestly. |
 | `src/proxy.js` | Reverse proxy `/api/ow/*` → openwork-server. Whitelist after **dot-segment normalization**, method allowlist, injects Bearer owner, **body buffering (64MB cap)**, streams the response + SSE keepalive 20s. Also forwards `content-length/content-range/accept-ranges` so downloads show progress, and **rewrites `content-disposition` on `/files/raw`** (see "Office/binary downloads on the phone"). |
 | `src/auth.js` | Phone → bridge: `owm_` token (header) + `?_t=` (GET only, for EventSource/img). timingSafeEqual. `requestToken()` extracts from both sources, `isTokenAuthorized()` accepts both alike. |
-| `src/static.js` | Serves `web/dist` (SPA fallback to index.html); traversal out of root blocked; a mid-stat vanish answers a clean 500 JSON instead of an uncaughtException. |
+| `src/static.js` | Serves `web/dist` (SPA fallback to index.html); traversal out of root blocked; a mid-stat vanish answers a clean 500 JSON instead of an uncaughtException. **2026-10-04**: stamps `SECURITY_HEADERS` (CSP + `x-content-type-options: nosniff` + `referrer-policy: no-referrer`) on the 200 branch, because this is the tunnel door that bypasses the worker entirely — one of three copies of that CSP that must stay identical |
 | `src/pairing.js` | 9Remote-style pairing: one-time 8-char code (30 min, single use, printed in the QR), permanent device key owd_ (hash stored in devices.json), revocation. **`mintDevice(label)`** issues a key without a code — shared by code-pairing and room sign-in `/api/pair/tenant`. |
 | `src/tunnel.js` | Auto Cloudflare Quick Tunnel (learned from 9Remote): downloads cloudflared into the data dir, spawns `tunnel --url :8788` with `--protocol http2 --edge-ip-version 4` (TCP/443 instead of flaky QUIC/UDP), scrapes the trycloudflare.com URL from logs, restarts it when it dies, calls `onUrl` (index.js prints a fresh QR). Disable with `OPENWORK_BRIDGE_TUNNEL=0`. **Backoff against CF 429/1015 rate-limit**: waits 120s doubling, cap 10 min; exit code **-1 (4294967295 — edge dumps the tunnel right after provisioning while the IP is flagged) also joins the long-wait streak**; all retry paths funnel through one guarded `scheduleRetry` (exit + error can't double-book), a spawn error retries after 60s, and every attempt logs `chạy cloudflared (đợt N)`. The backoff state is PERSISTED to `tunnel-state.json` (`saveTunnelState`/`loadTunnelState`/`rateLimitDelayMs`/`plainRetryDelayMs` pure exports, unit-tested) — a restarted bridge re-reads it and waits out the remaining time. `getState()` exposes `{phase: starting|up|backoff, url, streak, nextRetryAt}` to index.js (→ `/api/state` + the lookup heartbeats). **Manual `restart()`**: cancels `pendingRetryTimer`, zeroes streak/attempt/`nextRetryAt`, kills the live child (late exits self-suppress) and calls `runOnce()` right away; `restarting` flag guards re-entrancy. Wired to `POST /api/tunnel/restart` + the GUI's inline ↻ icon. |
 | `src/lookup.js` | Heartbeat to the Worker (the fixed address): registers the current tunnel URL the moment it changes + keeps warm every **15 minutes** (saves free KV, ~96 writes/day/room; the worker treats >20 min as offline). With a `tenant`, sends it in the body `{url, tenant}` (lowercase). Takes a `getState()` from tunnel.js — when the phase is NOT `up` (judged by phase, not by `getUrl()` being empty), it registers a "presence without URL" `{url: "", tunnelDown: true, retryAt}` on state change + the 15-min warm-up beat (bucketed, so an outage costs only a handful of KV writes) and the worker/phone can then say "machine alive, tunnel waiting" instead of "offline"; register 401/400 backs off exponentially 15s→5 min with ONE clear log line. |
@@ -679,7 +862,7 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 
 | File | Responsibility |
 |---|---|
-| `src/index.js` | KV holds 2 key kinds: `tenant:<id>` = `{secret, name, createdAt}` (accounts issued by the script or self-serve) and `machine:<id>` = `{url, updatedAt}` (the room's current tunnel; `machine:main` = the worker owner's machine, secret env `BRIDGE_SECRET`, no tenant). `POST /__register`: a `tenant` in the body → compares the secret against `tenant:<id>` (timing-safe); otherwise the legacy flow. `/api/*`: picks the slot by `x-owm-tenant` header / `?_m=` (EventSource) / empty = main; specifically `POST /api/pair/tenant` reads the room from `body.user` and **the worker compares the secret BEFORE relaying — unknown room and wrong password return the same 401, so no room's existence can be probed** (the bridge re-checks the password a second time). **Open doors are rate-limited through the Cache API (`rateLimited(request, kind, limit)` — `caches.default`, no KV writes): sign-in 10/min/IP, self-serve room creation 5/min/IP.** **`POST /api/tenant/create` = SELF-SERVE room creation (the desktop GUI's silent provisioning)**: body `{user, secret, name}`; reserved names `main/admin/root/api/www` (creating `tenant:main` would let a stranger's bridge overwrite the owner's `machine:main` address — the one real hijack), password 8–128 chars without `space " ' : &`; **existing room + exact same secret = `{ok, existed:true}`** (reinstall the machine → provisioning reconnects), existing + wrong secret = the same generic 401; a new room costs 1 KV `list` (checked against the **50-room cap**) + 1 `put`. **Dormant door since the one-PC simplification (13/09): the GUI calls `/api/tenant/create` BY ITSELF (random room + secret, user never sees a form) and the web's account login was removed, so no UI offers these forms anymore.** Offline when stale >**20 minutes**. **The relay requests `accept-encoding: identity` and unwraps `content-encoding: gzip/deflate` via `DecompressionStream`** — the CF edge used to compress the tunnel response itself, handing garbage bodies to clients that never asked for gzip. Everything else serves the web static from assets, **stamped with a `Content-Security-Policy` header (`withSecurityHeaders`)**: scripts strictly same-origin (no inline), styles inline-only, `img-src` allows `data:`/`blob:` for file previews. Loosen it there when web ever needs a CDN script or iframe. **v3.3**: `/__register` also accepts `{url: "", tunnelDown: true, retryAt}` via `storeRegister()` (slot stays fresh, `url` empty, flag kept) and the relay returns **503 `tunnel_down`** for a fresh slot carrying that flag — message says the machine is alive and gives the retry ETA — and wraps CF edge error statuses (520–527/530) into clean `tunnel_down` 502 JSON instead of forwarding the raw Cloudflare error page to the phone. Roomless `POST /api/pair` / `GET /api/state` → **400 `tenant_required`** with a message naming the paths that still exist (reworded 2026-10-03: the sign-in UI is gone — rescan the QR / re-open the full `&m=` link from the computer, or type the room in the Phòng box). |
+| `src/index.js` | KV holds 2 key kinds: `tenant:<id>` = `{secret, name, createdAt}` (accounts issued by the script or self-serve) and `machine:<id>` = `{url, updatedAt}` (the room's current tunnel; `machine:main` = the worker owner's machine, secret env `BRIDGE_SECRET`, no tenant). `POST /__register`: a `tenant` in the body → compares the secret against `tenant:<id>` (timing-safe); otherwise the legacy flow. `/api/*`: picks the slot by `x-owm-tenant` header / `?_m=` (EventSource) / empty = main; specifically `POST /api/pair/tenant` reads the room from `body.user` and **the worker compares the secret BEFORE relaying — unknown room and wrong password return the same 401, so no room's existence can be probed** (the bridge re-checks the password a second time). **Open doors are rate-limited through the Cache API (`rateLimited(request, kind, limit)` — `caches.default`, no KV writes): sign-in 10/min/IP, self-serve room creation 5/min/IP, and — since 2026-10-04 — device pairing 10/min/IP, which must live HERE rather than on the bridge because only the worker sees a real client IP (`cf-connecting-ip`; every cloudflared request reaches the bridge as `127.0.0.1`). The room-creation door is closable with the env var `ALLOW_ROOM_CREATE=0` → 403 `room_create_disabled` (unset/`"1"` = open, as before).** **`POST /api/tenant/create` = SELF-SERVE room creation (the desktop GUI's silent provisioning)**: body `{user, secret, name}`; reserved names `main/admin/root/api/www` (creating `tenant:main` would let a stranger's bridge overwrite the owner's `machine:main` address — the one real hijack), password 8–128 chars without `space " ' : &`; **existing room + exact same secret = `{ok, existed:true}`** (reinstall the machine → provisioning reconnects), existing + wrong secret = the same generic 401; a new room costs 1 KV `list` (checked against the **50-room cap**) + 1 `put`. **Dormant door since the one-PC simplification (13/09): the GUI calls `/api/tenant/create` BY ITSELF (random room + secret, user never sees a form) and the web's account login was removed, so no UI offers these forms anymore.** Offline when stale >**20 minutes**. **The relay requests `accept-encoding: identity` and unwraps `content-encoding: gzip/deflate` via `DecompressionStream`** — the CF edge used to compress the tunnel response itself, handing garbage bodies to clients that never asked for gzip. Everything else serves the web static from assets, **stamped with a `Content-Security-Policy` header (`withSecurityHeaders`)**: scripts strictly same-origin (no inline), styles inline-only, `img-src` allows `data:`/`blob:` for file previews. Loosen it there when web ever needs a CDN script or iframe. **v3.3**: `/__register` also accepts `{url: "", tunnelDown: true, retryAt}` via `storeRegister()` (slot stays fresh, `url` empty, flag kept) and the relay returns **503 `tunnel_down`** for a fresh slot carrying that flag — message says the machine is alive and gives the retry ETA — and wraps CF edge error statuses (520–527/530) into clean `tunnel_down` 502 JSON instead of forwarding the raw Cloudflare error page to the phone. Roomless `POST /api/pair` / `GET /api/state` → **400 `tenant_required`** with a message naming the paths that still exist (reworded 2026-10-03: the sign-in UI is gone — rescan the QR / re-open the full `&m=` link from the computer, or type the room in the Phòng box). |
 | `wrangler.jsonc` | name `openpocket` + assets `../web/dist` (SPA, run_worker_first `/api/*` `/__register`) + KV binding. Commands: `npx wrangler kv namespace create` → `wrangler secret put BRIDGE_SECRET` → `wrangler deploy`. |
 | `scripts/tenant.mjs` | Owner-side room admin on KV (requires logged-in wrangler): `add <user> "Name" [url] [--pass <pass>]` (no `--pass` → auto-generates a strong `owes_...`, ≥8 chars, no space/:/&), `list`, `revoke <user>` (deletes both `tenant:` and `machine:`). It still prints an `#i=user:secret` link, but NOTE: the web no longer consumes `#i=` links (the sign-in form was removed with the one-PC simplification) — the link is informational now; rooms are consumed by the GUI's silent provisioning or by pasting user/pass nowhere (no UI). Reads the namespace id from wrangler.jsonc. **Calls wrangler DIRECTLY `node …/web/node_modules/wrangler/bin/wrangler.js`, NOT via a shell** — the old `spawnSync("npx", …, shell:true)` let Windows cmd swallow the JSON quotes, so KV stored `{secret:…}` that wasn't valid JSON (sign-in always 401 despite the right password); a get returning 404 is treated as "room doesn't exist", not an error. Default worker URL comes from env `OWM_WORKER_URL` (or the `[url]` argument) — no real URL is committed. |
 
@@ -705,7 +888,7 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | `src/lib/openwork-fix.js` | **Pure logic for the OpenWork path fixer** (added 2026-10-03), framework-free so `node --test` can reach it, same pattern as `lib/chat-stream.js`. Four exports: `mergeCandidates(...sources)` (empty/whitespace/non-string dropped, deduped, **first-seen order kept** — the bridge's best guess stays on top, and the old `new Set(...).filter(Boolean)` let a truthy object through and painted a "Dùng" row that would have posted `[object Object]` to the bridge), `openworkFoundOf(info, legacyFlag)` / `openworkRunningOf(info, legacyFlag)` (both accept the bridge's boolean OR the legacy field, and **return a boolean only when the signal really is one** — a missing field must never read as "running"), and `openworkStatusLabel(info, opts)` → `"đang chạy"` / `"đã cài, chưa mở"` / `""` (empty when not found, so the caller decides what "not found" reads as). `web/test/openwork-fix.test.js`, 11 tests. |
 | `src/components/openwork-fix.jsx` | **The one OpenWork path chooser, rendered in two places** (2026-10-03): the global red banner in `app.jsx` and the Settings card. Before this, the complete fix lived 2 taps away in Settings while the banner that people actually hit — with its own wake button — **threw the `candidates` away on failure**, so the screen where the error appears had no way out and the screen with the way out was invisible. Contract: `onChoose` **must reject** when saving fails, or the component wipes the typed path after the bridge already refused it. |
 | `src/pages/settings.jsx` | Bridge status table (connected machine, openwork-server, token, engine, public URL, bridge version), **Kiểm tra lại** (recheck — failures now surface in a `role="alert"` line instead of silently restoring the button), **Bật OpenWork trên máy tính** (remote wake), paired-devices card (list + revoke a phone's key), and **Gỡ pairing** = this phone forgets the machine (`removeKey()`; last key gone → back to the pairing page). **Removed 13/09 (one-PC simplification)**: the multi-machine keychain card and the Re-link card — one machine per phone now (the `api.js` keyring functions stay as internal plumbing used by `apiPair`/`removeKey`). **2026-10-03 — card "OpenWork trên máy tính" replaces the dead "OpenWork .exe" row** (that row was a verdict with no way out): `state.openwork` found → a 4-row table (**Tình trạng** "đang chạy" / "đã cài, chưa mở", Phiên bản `v0.18.54` / "không đọc được", Đường dẫn, Tìm ở đâu via `openworkSourceLabel()` = config / env / wellknown) + the hint pointing at the wake button; **not found → the fix**: the `candidates` list as one-tap "Dùng" rows + a `label.field` text input + "Chỉ đường dẫn", all funnelled through one `choosePath()` → `apiOpenWorkPath()`. Candidate sources are merged (state candidates + `error.candidates` from a failed wake, deduped) so the wake path and the state path agree. Success re-renders from `payload.openwork` (local `openworkOverride`, no refetch) and calls `onRecheck()`; failure shows the bridge's Vietnamese `message` **verbatim** in a `Banner`. Reuses only existing classes (`.card`, `.file-row`, `.name`, `.mono`, `.btn small`, `label.field`, `.sheet-body`) + inline `style` — **no `styles.css` change was needed**. **Same day, usability pass** (the first version was correct but fiddly): the chooser is no longer a one-way door — **"Đổi đường dẫn"** re-opens it while found (`editing` state, `showChooser = !found || editing`), because reinstalling OpenWork is ordinary and the old card was stuck at the first answer; **Enter submits** the field; a **"Quét lại máy tính"** button forces `/api/state` so "just installed it" doesn't mean staring at "chưa tìm thấy" for 15s; **"Chép đường dẫn"** (`navigator.clipboard`, plain text fallback); the chooser shows the File Explorer → right-click → Copy as path recipe, since that is the actual moment of confusion; success says the NEXT step ("bấm Bật OpenWork trên máy tính") instead of just "Đã chỉ xong"; a missing version explains itself (portable install, no `app.asar`, still fully usable). `openworkOverride` is **dropped on every `/api/state` tick** (`useEffect` on `state.openwork`) — without that it pinned the screen to a stale answer forever after any reinstall; `running` falls back to `state.server` when talking to a bridge that predates the field. |
-| `public/sw.js` | App-shell precache (`CACHE = "owm-shell-v48"` — bumped in fe3830f because the removed tab's precached index kept serving the old shell to installed PWAs) + navigate fallback; **precaches `/` (index.html) with `cache: "reload"` at install so the offline fallback truly serves the shell** (hashed Vite assets are runtime-cached on first load); never caches `/api/*`. Bump the version on every UI change so the PWA purges the old cache. |
+| `public/sw.js` | App-shell precache (`CACHE = "owm-shell-v54"` — bumped in fe3830f to `v48` because the removed tab's precached index kept serving the old shell to installed PWAs; since bumped again with later UI passes) + navigate fallback; **precaches `/` (index.html) with `cache: "reload"` at install so the offline fallback truly serves the shell** (hashed Vite assets are runtime-cached on first load); never caches `/api/*`. Bump the version on every UI change so the PWA purges the old cache. |
 | `public/_headers` | Same CSP as the worker for Cloudflare's asset-first path (Vite copies it to `web/dist`). |
 | `public/icon*.png/svg` + manifest | Icons on `#111113` with a solid `#0090ff` stripe (matches the desktop logo) 192/512 + maskable (80% safe zone); manifest carries id/scope/lang/orientation/shortcuts. |
 
@@ -722,6 +905,12 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 
 | Symptom | Where to fix |
 |---|---|
+| Session list looks huge, only a few sessions fit on screen | `web/src/styles.css` — `.card.tap.dense` (card density), `.fs-chips.scroll` (one-row filter chips). The inline `style="margin-top:6px"` on the card's second row in `pages/home.jsx` / `pages/sessions.jsx` must stay deleted or the gap ignores CSS. |
+| Content sits under the bottom nav / the FAB covers the last card | The positioning constants live apart from the sizes: `.view` padding-bottom and `.fab` bottom in `web/src/styles.css`. Shrink or grow `.bottomnav` and these two must move with it. |
+| A paired phone can read the **master token** out of `GET /api/pairing-code` | `bridge/src/routes/pairing.js` — `pairingCode({res, device})` adds `masterUrl`/`masterQr` only when `isMaster = !device` (app.js passes `device`; master ⇔ `null`). Device callers must **omit** the two keys entirely, never send `""`. Regression: `bridge/test/pairing-routes.test.js`. The web Settings card never rendered them anyway, so no UI change was needed |
+| Web opened through the **tunnel** URL (or a self-hosted `publicUrl`) has no CSP / nosniff | `bridge/src/static.js` — `SECURITY_HEADERS` spread into the static `writeHead(200, …)`. The CSP string exists in **three** places that must stay identical: `static.js`, the `CSP` constant in `worker/src/index.js`, `web/public/_headers` (Pages). `bridge/test/static-headers.test.js` parses the worker array + `_headers` and fails if any directive drifts. Error branches (403/404/500) intentionally carry no headers |
+| Strangers can flood the pairing rate limit (owner cannot pair a new phone while spammed) | `worker/src/index.js` — `POST /api/pair` **with a room** goes through `rateLimited(request, "pair", 10)` (429 `rate_limited`). It must stay at the worker: the bridge only ever sees `127.0.0.1` for every tunnel client, and the relay forwards client `x-forwarded-for` verbatim, so a bridge-side check is forgeable. The guard must stay **after** the tenant split so room-less requests still get `tenant_required`, not a 429. Regression: the two FIX-3 cases in `worker/test/relay.test.mjs` (11th attempt from one IP → 429 and no relay; room-less → 400 and a rate-limit counter that stays at 0) |
+| Anyone knowing the worker URL can self-create rooms / two creates race for one name | `worker/src/index.js` — `env.ALLOW_ROOM_CREATE === "0"` → 403 `room_create_disabled` (line 274, before the body is read); unset or `"1"` keeps the door open exactly as before. **Both plans B and C landed**: after the `put`, the record is read back and compared with `sameSecret(secret, saved.secret)` (lines 318-321) — a stored secret that is not the one just written answers **409 `taken`** instead of `created`. That DETECTS the race, it does not prevent it (KV has no CAS; a real guard needs a Durable Object), and a read that comes back `null` stays 200 so KV's per-colo lag cannot cry wolf. Regression: the four FIX-4 cases in `worker/test/relay.test.mjs`. GUI provisioning (`desktop/src/OpenPocket.cs`) does **not** read that body: line 854 is `req.GetResponse()`, so a 403 throws a `WebException` and the catch at line 871 shows the raw .NET text ("The remote server returned an error: (403) Forbidden") in `provisionError` — the `room_create_disabled` code never reaches the GUI |
 | Logs pile up / want the machine to keep no logs | `bridge/src/logwipe.js` — daily wipe at local midnight + boot-time cleanup of yesterday's logs; `openpocket stop` and the GUI Stop delete the files, GUI "Thoát hẳn" truncates (bridge still runs). Test with `openpocket logs` right after a stop: it should say "Chưa có log." |
 | Bridge can't find openwork-server | `bridge/src/discovery.js` (parse engine-instances, netstat, health probe) |
 | Owner token 401 despite the restart | `bridge/src/bootstrap.js` + check the `openwork-mobile-bridge` entry is still in `%APPDATA%\openwork\tokens.json` |
@@ -780,7 +969,7 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | `.xlsx`/`.docx` link opens a blank page instead of downloading | `bridge/src/proxy.js` (`shouldForceDownload` + `rawPathOf`): the engine answers `inline` on `/files/raw` and the old fallback regex matched the query string, so it never fired — now the path is matched query-free and office/archive/binary extensions get `attachment`. Images/PDF/media stay `inline`. Real-HTTP proof in `bridge/test/proxy-download.test.js` |
 | iOS download opens in a tab instead of saving / no progress on big files | `web/src/api.js` (`owDownload()`: fetch with auth header + stream read for % + AbortController) + `files.jsx` (Blob download + progress bar + Cancel + Share via `navigator.share` for iOS "Save to Files") + `bridge/src/proxy.js` (adds a `content-disposition: attachment` fallback from `?path=` when upstream forgets); test in `bridge/test/bridge.test.js` + `filenameFromDisposition` in `web/test/api-contract.test.js` |
 | Back buttons drift with content while scrolling | `web/src/app.jsx` + `web/src/styles.css` — the Back buttons live on the `topbar` (sticky at the top, with blur and safe-area). FileViewer borrows the topbar via the `owm:topback` event |
-| Changed web code but the phone still shows the old version | Build `npm run build` in `web/` then deploy the only worker: `cd worker && npx wrangler deploy` (the official `openpocket` worker — it serves the web assets too; there is no secondary worker anymore). Bump `CACHE = "owm-shell-v48"` in `web/public/sw.js` so the PWA purges the old cache |
+| Changed web code but the phone still shows the old version | Build `npm run build` in `web/` then deploy the only worker: `cd worker && npx wrangler deploy` (the official `openpocket` worker — it serves the web assets too; there is no secondary worker anymore). Bump `CACHE = "owm-shell-v54"` in `web/public/sw.js` so the PWA purges the old cache |
 | Bridge doesn't auto-start at Windows login | `openpocket autostart --enable [--with-openwork]` creates the `OpenPocketBridge` task (ONLOGON, **/RL HIGHEST = admin**) in Task Scheduler — see `bridge/src/autostart.js` + `bridge/bin/openpocket.js`. The task runs a **hidden VBS wrapper** (`%APPDATA%\openwork-bridge\bridge-task.vbs` → logs to `bridge-task.log`, `openpocket logs` auto-picks the freshest file) — running node directly would pop a console window and die the moment someone closes it. Needs admin once (UAC); check with `--status`. Admin is required so phone input reaches apps running as Administrator (UIPI blocks normal→elevated input); UAC prompts/lock screen stay unreachable (secure desktop) |
 | Bridge died silently hours ago and nobody noticed (worker 503 for hours) | Happened for real 13/09 (~08:03, cause unknown — process vanished, err.log empty). Cure: `openpocket watchdog --install` (admin once) → every 5 min `openpocket ensure` revives a dead bridge and never duplicates a live one; `watchdog.log` keeps the revive history. Diagnose the death itself: last lines of `%APPDATA%\openwork-bridge\bridge.log` + `tasklist` + Event Viewer (externally-killed processes often leave no trace) |
 | Two starts crash with EADDRINUSE: 127.0.0.1:8788 already in use | Since 13/09 the bridge writes `bridge.pid` itself (any start path) and `start`/`ensure` probe the port before spawning; an outside-CLI instance holding the port is left alone (`openpocket status` says "instance ngoài CLI"); the listener itself retries ten times, 400ms apart (`bridge/test/listener.test.js`). To kill a stale one: `netstat -ano | findstr 8788` → PID → taskkill |
@@ -821,7 +1010,7 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | `GET /api/state` | owm_/owd_ | Bridge + server + token + engine status, current device + `edge: {tenant, machineName}`, **OpenWork desktop `{openwork: {found, exe, version, source, running, candidates}, openworkExeFound}`** (`candidates` are sent **always**, not only when not found — the phone needs a way in to CHANGE a path as much as to find one; `running` is the desktop process alive, not just a registry entry; the legacy boolean stays in the contract) |
 | `POST /api/pair` | **none** (rate-limit 10/min/IP) | Pair a device with the 30-minute code → returns the permanent owd_ key |
 | `POST /api/pair/tenant` | **none** (shared rate-limit, 10/min/IP) | Multi-tenant sign-in: body `{user, secret, label}` — compared against `lookupTenant`/`lookupSecret` in config → returns `{token, device, tenant, machineName}`. Not joined → 404 `not_joined`; wrong → 401 `invalid_credentials` |
-| `GET /api/pairing-code` | owm_/owd_ | Live one-time code: `codeFormatted` + `secondsLeft` + `baseUrl` + **`pairUrl`/`qr` + `masterUrl`/`masterQr` (ASCII QR rendered by qrcode-terminal ON the bridge — CLI `openpocket code` and the desktop GUI just display them; the code never touches a third-party QR service)** |
+| `GET /api/pairing-code` | owm_/owd_ | Live one-time code: `codeFormatted` + `secondsLeft` + `baseUrl` + **`pairUrl`/`qr`** + **`masterUrl`/`masterQr` ONLY when the caller is the master** (ASCII QR rendered by qrcode-terminal ON the bridge — CLI `openpocket code` and the desktop GUI authenticate with `config.mobileToken` and display them; the code never touches a third-party QR service. A **device key gets neither field** — see the 2026-10-04 security round) |
 | `GET /api/devices` · `DELETE /api/devices/:id` | owm_/owd_ | Paired devices list + revoke |
 | `POST /api/recheck` | owm_ | Force discovery |
 | `POST /api/tunnel/restart` | owm_/owd_ | Manual tunnel restart — cancels the 429 backoff wait and asks Cloudflare for a fresh tunnel NOW (bridge stays up, only cloudflared is replaced; new URL re-registers itself). 409 `tunnel_inactive` when the tunnel is off (`OPENWORK_BRIDGE_TUNNEL=0`) or mid-restart |
