@@ -89,6 +89,69 @@ test("HTML thô bị escape chứ không chạy (không cần DOMPurify)", () =>
   assert.match(html, /&lt;img/);
 });
 
+test("escape thì thay TẤT CẢ ký tự, không chỉ ký tự đầu tiên", () => {
+  // Hồi quy thật: regex không cờ `g` khiến `replace` chỉ thay match đầu, nên
+  // mọi thẻ từ thứ hai trở đi sống và chạy ngay khi bubble vẽ ra.
+  const html = renderMarkdownHtml("<p>x</p><img src=x onerror=alert(1)>");
+  assert.doesNotMatch(html, /<(p|img)\b/);
+  assert.equal((html.match(/&lt;/g) ?? []).length, 3);
+});
+
+test("thẻ HTML trong nhãn link / del / code không chạy", () => {
+  // Hồi quy thật: dùng `parser.textRenderer` của marked để tránh <a> lồng <a>
+  // — nhưng đó là bộ rút gọn token về text thô, KHÔNG escape gì cả.
+  const payloads = [
+    "[<img src=x onerror=alert(1)>](https://e.com)",
+    "[**<img src=x onerror=alert(1)>**](https://e.com)",
+    "[`<img src=x onerror=alert(1)>`](https://e.com)",
+    "~~<svg onload=alert(1)>~~",
+    "~~**<svg onload=alert(1)>**~~",
+  ];
+  for (const payload of payloads) {
+    const html = renderMarkdownHtml(payload, { fileHref });
+    assert.doesNotMatch(html, /<(img|svg)\b/, `payload lọt: ${payload}`);
+    assert.match(html, /&lt;/, `payload chưa escape: ${payload}`);
+  }
+});
+
+test("HTML thô trong mọi ngữ cảnh block đều bị escape", () => {
+  const attack = "<img src=x onerror=alert(1)>";
+  for (const wrap of [(s) => s, (s) => `| a | b |\n| --- | --- |\n| ${s} | y |`, (s) => `# ${s}`, (s) => `- ${s}`, (s) => `> ${s}`]) {
+    const html = renderMarkdownHtml(wrap(attack), { fileHref });
+    assert.doesNotMatch(html, /<img\b/, `HTML sống trong: ${wrap(attack).slice(0, 20)}`);
+  }
+});
+
+test("link protocol-relative bị chặn (trình duyệt chuẩn hoá \\ thành /)", () => {
+  for (const href of ["//evil.com", "/\\evil.com", "\\/evil.com"]) {
+    assert.equal(safeHref(href), "#", `lọt: ${href}`);
+  }
+});
+
+test("đường dẫn traversal không được đưa vào URL", () => {
+  for (const path of ["../../secret.md", "../../../../etc/passwd.md", "a/../../b.md", "../x.md"]) {
+    const html = renderMarkdownHtml(path, { fileHref });
+    assert.doesNotMatch(html, /path=..%2F/, `traversal lọt: ${path}`);
+  }
+  // Link dạng markdown cũng vậy, và không được tạo ra link `path=` rỗng.
+  const link = renderMarkdownHtml("[x](../../secret.md)", { fileHref });
+  assert.doesNotMatch(link, /path=""/);
+  assert.doesNotMatch(link, /md-file/);
+});
+
+test("đường dẫn Windows hợp lệ vẫn qua được", () => {
+  const html = renderMarkdownHtml("C:\\work\\out\\a.csv", { fileHref });
+  assert.match(html, /md-file/);
+  assert.match(html, /path=C%3A%5Cwork%5Cout%5Ca\.csv/);
+});
+
+test("URL do fileHref trả về vẫn phải qua safeHref", () => {
+  const evil = () => "javascript:alert(1)";
+  const html = renderMarkdownHtml("mở `docs/a.md`", { fileHref: evil });
+  assert.doesNotMatch(html, /href="javascript:/);
+  assert.doesNotMatch(html, /md-file/);
+});
+
 test("scheme nguy hiểm bị vô hiệu hoá thành #", () => {
   const html = renderMarkdownHtml("[x](javascript:alert(1))");
   assert.match(html, /href="#"/);

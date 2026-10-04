@@ -24,7 +24,7 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
-const TEXT_ESCAPE_RE = /[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/;
+const TEXT_ESCAPE_RE = /[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/g;
 const TEXT_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 
 /**
@@ -34,10 +34,12 @@ const TEXT_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;",
  * hay cả `R&amp;D`, `Q&A`) ra `AT&amp;amp;T` — người đọc thấy chữ `&amp;`.
  * Chỉ dùng cho TEXT; `code`/`codespan` phải escape thẳng vì GFM coi entity
  * trong code là chữ nghĩa đ literally.
+ *
+ * Bắt buộc có cờ `g`: `replace` không có `g` chỉ thay match ĐẦU TIÊN, nên
+ * `<p>x</p><img src=x onerror=…>` sẽ chỉ escape chữ `<` đầu và `<img>` còn sống.
  */
 function escapeText(value) {
-  const source = String(value);
-  return TEXT_ESCAPE_RE.test(source) ? source.replace(TEXT_ESCAPE_RE, (ch) => TEXT_ESCAPE_MAP[ch]) : source;
+  return String(value).replace(TEXT_ESCAPE_RE, (ch) => TEXT_ESCAPE_MAP[ch]);
 }
 
 function escapeAttribute(value) {
@@ -48,11 +50,16 @@ function escapeAttribute(value) {
 export function safeHref(href) {
   const trimmed = String(href ?? "").trim();
   if (!trimmed) return "#";
-  if (trimmed.startsWith("#") || trimmed.startsWith("/") || trimmed.startsWith("./") || trimmed.startsWith("../")) {
-    return trimmed;
+  // Trình duyệt tự chuẩn hoá `\` thành `/`, nên `/\evil.com` và `\/evil.com`
+  // đều ra ngoài — chuẩn hoá trước rồi chặn protocol-relative, không thì
+  // `//evil.com` lọt và đánh cắp Referer.
+  const normalized = trimmed.replace(/\\/g, "/");
+  if (normalized.startsWith("//")) return "#";
+  if (normalized.startsWith("#") || normalized.startsWith("/") || normalized.startsWith("./") || normalized.startsWith("../")) {
+    return normalized;
   }
   try {
-    const parsed = new URL(trimmed);
+    const parsed = new URL(normalized);
     if (["http:", "https:", "mailto:"].includes(parsed.protocol)) return trimmed;
   } catch {
     return "#";
@@ -77,23 +84,58 @@ function linkifyPaths(escapedText, fileHref) {
   return out;
 }
 
-/** Bỏ tiền tố `./` để `fileHref` không nhận path không chuẩn. */
+/**
+ * Chuẩn hoá đường dẫn file trước khi đưa vào URL, và CHẶN traversal.
+ *
+ * Đường dẫn này do LLM sinh ra — chỉ cần nó đọc một file có prompt-injection
+ * là kẻ tấn công điều khiển được. `encodeURIComponent` chỉ mã hoá URL, không
+ * chặn `../`. Đây là lớp phòng thủ thứ hai: **engine phải tự resolve rồi kiểm
+ * tra path nằm trong workspace** trước khi đọc file.
+ *
+ * Đường dẫn Windows tuyệt đối (`C:\...`) giữ nguyên — agent hay nhắc dạng này.
+ * Trả "" để caller biết là bỏ qua, không sinh link.
+ */
 function normalizeFilePath(path) {
-  return String(path).replace(/^\.\//, "");
+  const raw = String(path).replace(/^\.\//, "");
+  if (!raw || /[\u0000-\u001f]/.test(raw)) return "";
+  if (/^[A-Za-z]:[\\/]/.test(raw)) return raw;
+  if (raw.split(/[\\/]/).some((part) => part === "..")) return "";
+  return raw;
 }
 
+/**
+ * Điểm duy nhất để tạo link file: chuẩn hoá + chặn traversal + `safeHref`.
+ * Mọi đường (linkify trong text, codespan, link, image) đều đi qua đây.
+ */
 function wrapPath(display, path, fileHref) {
+  const safePath = normalizeFilePath(path);
+  if (!safePath) return display;
   let href;
   try {
-    href = fileHref(path);
+    href = safeHref(fileHref(safePath));
   } catch {
     return display;
   }
-  if (!href) return display;
+  if (!href || href === "#") return display;
   return `<a class="md-file" href="${escapeAttribute(href)}" target="_blank" rel="noreferrer">${display}</a>`;
 }
 
 function buildMarked({ fileHref } = {}) {
+  // Nhãn của link / của `del` không được linkify (tránh <a> lồng <a>) nhưng VẪN
+  // phải escape như text thường. Không dùng `parser.textRenderer` của marked:
+  // đó là bộ rút gọn token về text thô, KHÔNG escape ký tự nào — dùng nó là mở
+  // lại đúng lỗ hổng mà escapeText sinh ra để chặn.
+  let labelDepth = 0;
+  const insideLabel = () => labelDepth > 0;
+  const renderLabel = (parser, tokens) => {
+    labelDepth += 1;
+    try {
+      return parser.parseInline(tokens);
+    } finally {
+      labelDepth -= 1;
+    }
+  };
+
   return new Marked({
     gfm: true,
     breaks: false,
@@ -136,30 +178,30 @@ function buildMarked({ fileHref } = {}) {
         if (path) {
           let href = "";
           try {
-            href = fileHref(path);
+            href = safeHref(fileHref(path));
           } catch {
-            href = "";
+            href = "#";
           }
-          if (href) {
+          if (href && href !== "#") {
             return `<a class="md-file" href="${escapeAttribute(href)}" target="_blank" rel="noreferrer"><code>${escapeHtml(text)}</code></a>`;
           }
         }
         return `<code>${escapeHtml(text)}</code>`;
       },
       link({ href, title, tokens }) {
-        // Nhãn phải đi qua `textRenderer`: nếu để `renderer.text` của ta chạy,
-        // nó sẽ link-hóa đường dẫn NGAY TRONG nhãn và sinh <a> lồng <a>
-        // (URL trần trong câu là ví dụ dễ gặp nhất).
-        const label = this.parser.parseInline(tokens, this.parser.textRenderer);
+        const label = renderLabel(this.parser, tokens);
         const titleAttr = title ? ` title="${escapeAttribute(title)}"` : "";
-        if (!isExternalHref(href) && typeof fileHref === "function" && FILE_HINT_EXT.test(href)) {
+        if (!isExternalHref(href) && !href.startsWith("/") && typeof fileHref === "function" && FILE_HINT_EXT.test(href)) {
+          const clean = normalizeFilePath(href);
           let local = "";
-          try {
-            local = fileHref(normalizeFilePath(href));
-          } catch {
-            local = "";
+          if (clean) {
+            try {
+              local = safeHref(fileHref(clean));
+            } catch {
+              local = "#";
+            }
           }
-          if (local) {
+          if (local && local !== "#") {
             return `<a class="md-file" href="${escapeAttribute(local)}" target="_blank" rel="noreferrer"${titleAttr}>${label}</a>`;
           }
         }
@@ -171,9 +213,12 @@ function buildMarked({ fileHref } = {}) {
         // nếu không `![](screenshot.png)` sẽ ra ảnh vỡ vì safeHref("a.png")
         // không phải URL hợp lệ.
         let src = safeHref(href);
-        if (typeof fileHref === "function" && !isExternalHref(href)) {
+        // `//evil.com/i.png` là URL ngoài, KHÔNG phải file trong workspace —
+        // không được đưa qua fileHref.
+        if (typeof fileHref === "function" && !isExternalHref(href) && !href.startsWith("/")) {
           try {
-            src = fileHref(normalizeFilePath(href)) || src;
+            const local = safeHref(fileHref(normalizeFilePath(href)));
+            if (local && local !== "#") src = local;
           } catch {
             /* giữ src đã an toàn */
           }
@@ -204,14 +249,15 @@ function buildMarked({ fileHref } = {}) {
         // marked v15 cho cả `~một~` thành <del>; desktop chặn lại vì `a ~ b ~ c`
         // hay bị hiểu nhầm là gạch ngang. Copy y nguyên guard của desktop.
         if (!raw.startsWith("~~")) return escapeHtml(raw);
-        return `<del>${this.parser.parseInline(tokens, this.parser.textRenderer)}</del>`;
+        return `<del>${renderLabel(this.parser, tokens)}</del>`;
       },
       hr() {
         return `<hr>`;
       },
       text(token) {
         if (token.tokens) return this.parser.parseInline(token.tokens);
-        return linkifyPaths(escapeText(token.text), fileHref);
+        const escaped = escapeText(token.text);
+        return insideLabel() ? escaped : linkifyPaths(escaped, fileHref);
       },
     },
   });
