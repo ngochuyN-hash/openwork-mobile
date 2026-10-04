@@ -94,6 +94,39 @@ export function parseModelValue(value) {
 }
 
 /**
+ * Model đang nhớ có còn trong catalog engine vừa trả không.
+ *
+ * Engine đổi danh sách model là chuyện bình thường (đổi tên, bỏ provider),
+ * còn `localStorage` thì nhớ mãi. Gửi model engine không có thì engine VẪN
+ * nhận message, lưu vào transcript, rồi không chạy gì cả — người dùng chỉ
+ * thấy tin đã gửi mà không ai trả lời. Nên model nhớ mà không còn trong danh
+ * sách thì coi như không có, và chọn lại từ danh sách.
+ *
+ * Catalog rỗng (engine chưa kịp trả lời / lỗi mạng) thì GIỮ NGUYÊN giá trị
+ * đang nhớ: bỏ ở đây sẽ xoá sạch lựa chọn của người dùng chỉ vì một lượt
+ * fetch hỏng.
+ */
+export function resolveKnownModel(storedValue, models) {
+  const list = Array.isArray(models) ? models : [];
+  const stored = String(storedValue ?? "").trim();
+  if (!list.length) return stored;
+  if (list.some((m) => m?.value === stored)) return stored;
+  return list[0]?.value ?? "";
+}
+
+/**
+ * Model đang chọn có dùng được không (catalog đã tải xong).
+ *
+ * Catalog RỖNG = chưa tải xong hoặc fetch hỏng, không phải model sai → trả
+ * true để không chặn nhầm lúc app vừa mở.
+ */
+export function isModelUsable(value, models) {
+  const list = Array.isArray(models) ? models : [];
+  if (!list.length) return true;
+  return resolveKnownModel(value, list) === String(value ?? "").trim();
+}
+
+/**
  * Bóc danh sách id variant từ nhiều shape: mảng chuỗi, mảng object {id}
  * (server trả đúng shape này) hoặc map {id: {...}}.
  */

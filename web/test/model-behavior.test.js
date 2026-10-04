@@ -12,6 +12,8 @@ import {
   normalizeEffort,
   parseModelValue,
   pickVariantId,
+  isModelUsable,
+  resolveKnownModel,
   resolveEffort,
   usesReasoningEffortField,
   variantIdsOf,
@@ -186,4 +188,54 @@ test("luồng đầy đủ: bật nhanh -> payload có variant thấp nhất", (
     model: { providerID: "google", modelID: "gemini-3-pro" },
     variant: "low",
   });
+});
+// ---- Model nhớ trong localStorage có còn trong catalog engine không ----
+// BUG THẬT 04/10: máy nhớ "openrouter/stealth" nhưng engine đã đổi tên model
+// thành "openrouter/stealth/space-bunny-alpha". Gửi model cũ → engine vẫn nhận
+// message, lưu vào transcript, rồi không chạy gì: tin nhắn treo im lặng.
+
+test("id model có dấu '/' bên trong không bị cắt mất đuôi", () => {
+  assert.deepEqual(parseModelValue("openrouter/stealth/space-bunny-alpha"), {
+    providerID: "openrouter",
+    modelID: "stealth/space-bunny-alpha",
+  });
+  assert.deepEqual(parseModelValue("9router/ag/claude-sonnet-4-6"), {
+    providerID: "9router",
+    modelID: "ag/claude-sonnet-4-6",
+  });
+  // provider/model vẫn như cũ
+  assert.deepEqual(parseModelValue("google/gemini-3-pro"), {
+    providerID: "google",
+    modelID: "gemini-3-pro",
+  });
+});
+
+test("payload giữ trọn id model nhiều dấu phẩy-tách", () => {
+  assert.deepEqual(buildPromptModelFields({ modelValue: "openrouter/stealth/space-bunny-alpha" }), {
+    model: { providerID: "openrouter", modelID: "stealth/space-bunny-alpha" },
+  });
+});
+
+const catalog = [
+  { value: "openrouter/stealth/space-bunny-alpha" },
+  { value: "9router/ag/claude-sonnet-4-6" },
+];
+
+test("model nhớ còn trong danh sách thì giữ nguyên", () => {
+  assert.equal(resolveKnownModel("openrouter/stealth/space-bunny-alpha", catalog), "openrouter/stealth/space-bunny-alpha");
+  assert.equal(isModelUsable("openrouter/stealth/space-bunny-alpha", catalog), true);
+});
+
+test("model nhớ đã bị engine đổi tên thì chọn lại, và chặn gửi", () => {
+  // Đây đúng là thứ đã làm tin nhắn treo im lặng.
+  assert.equal(resolveKnownModel("openrouter/stealth", catalog), "openrouter/stealth/space-bunny-alpha");
+  assert.equal(isModelUsable("openrouter/stealth", catalog), false);
+  // Rỗng = chưa chọn model: engine cần model tường minh, cũng phải chặn.
+  assert.equal(isModelUsable("", catalog), false);
+});
+
+test("catalog rỗng (chưa tải xong / mạng hỏng) thì KHÔNG xoá lựa chọn", () => {
+  assert.equal(resolveKnownModel("openrouter/stealth", []), "openrouter/stealth");
+  assert.equal(isModelUsable("openrouter/stealth", []), true, "chặn nhầm lúc app vừa mở là hỏng");
+  assert.equal(resolveKnownModel("openrouter/stealth", undefined), "openrouter/stealth");
 });

@@ -40,6 +40,7 @@ import { Banner, Empty, Loading } from "../components/ui.jsx";
 import {
   EffortPicker, ModelPicker, loadEffort, pushRecentModel,
 } from "../components/model-picker.jsx";
+import { isModelUsable, resolveKnownModel } from "../lib/model-behavior.js";
 import { navigate } from "../app.jsx";
 import { ClipIcon, FileIcon, StopIcon, ToolIcon, ThoughtIcon, ChevronDownIcon, CheckIcon } from "../components/icons.jsx";
 
@@ -316,6 +317,13 @@ export function ChatPage({ route }) {
   const flushQueue = useCallback(async () => {
     const pending = planSteerSends(queueRef.current);
     if (!pending.length) return;
+    // Model nhớ trong localStorage có thể đã bị engine đổi tên/xoá. Gửi model
+    // engine không có thì engine VẪN nhận và lưu message rồi không chạy gì —
+    // người dùng thấy "đã gửi" mà không ai trả lời. Chặn ở đây và nói rõ.
+    if (!isModelUsable(modelRef.current, modelsRef.current)) {
+      setError("Model đã chọn không còn trong danh sách của máy. Bấm nút model để chọn lại.");
+      return;
+    }
     queueRef.current = [];
     setQueueCount(pending.length);
     for (let i = 0; i < pending.length; i++) {
@@ -449,9 +457,16 @@ export function ChatPage({ route }) {
           }
         }
         setModels(flat);
-        if (!localStorage.getItem("owm_model") && flat.length) {
-          localStorage.setItem("owm_model", flat[0].value);
-          setModel(flat[0].value);
+        // Model nhớ trong localStorage có thể đã bị engine đổi tên/xoá — giữ
+        // thì mọi tin gửi đi đều im lặng không phản hồi. Chọn lại trong danh
+        // sách vừa nhận, và xoá key để lần sau không phải dò lại.
+        const kept = resolveKnownModel(modelRef.current, flat);
+        if (kept !== modelRef.current) {
+          localStorage.setItem("owm_model", kept);
+          setModel(kept);
+        } else if (!localStorage.getItem("owm_model") && flat.length) {
+          localStorage.setItem("owm_model", kept);
+          setModel(kept);
         }
       })
       .catch(() => {})
