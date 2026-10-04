@@ -139,15 +139,14 @@ test("refetch lần đầu (chưa có gì cục bộ) — fetched không đổi"
 // chạy lại lúc agent đang chạy. Hai lỗi dưới đây chỉ xuất hiện từ đó.
 
 test("tin client tự sinh bị bỏ khi server đã trả bản thật — không hiện trùng", () => {
-  const created = 1750000000000;
   const prev = [
     { info: { id: "msg_1", role: "user" }, parts: [] },
-    { info: { id: `local-${created}`, role: "user", time: { created } }, parts: [] },
+    { info: { id: "local-1750000000000", role: "user" }, parts: [{ id: "lp", type: "text", text: "tin vừa gửi" }] },
   ];
-  // Server đã ghi tin đó và trả về bản thật (id msg_*, cùng thời điểm).
+  // Server đã ghi tin đó và trả về bản thật (id msg_*, chữ khớp).
   const fetched = [
     { info: { id: "msg_1", role: "user" }, parts: [] },
-    { info: { id: "msg_9abc", role: "user", time: { created } }, parts: [] },
+    { info: { id: "msg_9abc", role: "user" }, parts: [{ id: "sp", type: "text", text: "tin vừa gửi" }] },
   ];
   const merged = mergeRefetchKeepInflight(fetched, prev);
   assert.equal(merged.length, 2, "không được dồn thêm bản local");
@@ -160,12 +159,11 @@ test("tin client tự sinh bị bỏ khi server đã trả bản thật — khô
 test("tin client tự sinh VẪN được giữ khi server chưa trả bản thật", () => {
   // Vừa gửi xong, engine chưa kịp ghi → phải giữ để người dùng thấy tin mình
   // vừa gửi, không được làm trống rồi nhảy.
-  const created = 1750000000000;
-  const local = { info: { id: `local-${created}`, role: "user", time: { created } }, parts: [] };
+  const local = { info: { id: "local-1750000000000", role: "user" }, parts: [{ id: "lp", type: "text", text: "vừa gửi" }] };
   const fetched = [{ info: { id: "msg_1", role: "user" }, parts: [] }];
   const merged = mergeRefetchKeepInflight(fetched, [fetched[0], local]);
   assert.equal(merged.length, 2);
-  assert.equal(merged[1].info.id, `local-${created}`);
+  assert.equal(merged[1].info.id, "local-1750000000000");
 });
 
 test("tin đang stream (id thật) vẫn giữ như cũ — không bị coi là tin local", () => {
@@ -177,16 +175,111 @@ test("tin đang stream (id thật) vẫn giữ như cũ — không bị coi là 
 });
 
 test("nhiều tin local cùng lúc — bỏ đúng số đã được server xác nhận", () => {
-  const t1 = 1750000000000;
-  const t2 = 1750000000001;
-  const prev = [
-    { info: { id: `local-${t1}`, role: "user", time: { created: t1 } }, parts: [] },
-    { info: { id: `local-${t2}`, role: "user", time: { created: t2 } }, parts: [] },
-  ];
+  const t1 = userMsg("local-aaa", "tin một");
+  const t2 = userMsg("local-bbb", "tin hai");
+  const prev = [t1, t2];
   // Server mới nhận được tin đầu, tin sau chưa.
-  const fetched = [{ info: { id: "msg_a", role: "user", time: { created: t1 } }, parts: [] }];
+  const fetched = [userMsg("msg_a", "tin một")];
   const merged = mergeRefetchKeepInflight(fetched, prev);
   assert.equal(merged.length, 2);
   assert.equal(merged[0].info.id, "msg_a");
-  assert.equal(merged[1].info.id, `local-${t2}`);
+  assert.equal(merged[1].info.id, "local-bbb");
+});
+
+// ---- Fixture có chữ thật, khớp với tin engine trả về ----
+const asstMsg = (id, text = "trả lời") => ({
+  info: { id, role: "assistant" },
+  parts: [{ id: `${id}-p1`, type: "text", text }],
+});
+
+const userMsg = (id, text, extra = {}) => ({
+  info: { id, role: "user", ...extra },
+  parts: [{ id: `${id}-p1`, type: "text", text }],
+});
+
+test("REGRESSION: hai đồng hồ lệch nhau KHÔNG được dùng để khớp bản thật", () => {
+  // Đây là lý do bản cũ hỏng: nó so `info.time.created` của bản optimistic
+  // (Date.now() CỦA ĐIỆN THOẠI) với `time.created` engine tự đóng (đồng hồ máy
+  // tính). Hai con số gần như không bao giờ bằng nhau → bản optimistic sống mãi
+  // cạnh bản thật: mỗi tin gửi đi hiện HAI lần, refetch lại dồn thêm bản.
+  const prev = [userMsg("local-1750000000000", "tin vừa gửi", { time: { created: 1750000000000 } })];
+  const fetched = [userMsg("msg_9abc", "tin vừa gửi", { time: { created: 1750000004321 } })]; // lệch 4.3 giây
+  const merged = mergeRefetchKeepInflight(fetched, prev);
+  assert.deepEqual(merged.map((m) => m.info.id), ["msg_9abc"], "phải bỏ bản local, chỉ giữ bản thật");
+});
+
+test("hai tin CÙNG CHỮ gửi liên tiếp — bỏ đúng một bản local, không mất tin chưa tới máy", () => {
+  // Ghép sai cặp là mất tin: bỏ cả hai bản local thì tin thứ hai biến mất vĩnh viễn.
+  const merged = mergeRefetchKeepInflight([userMsg("msg_1", "ok")], [userMsg("local-1", "ok"), userMsg("local-2", "ok")]);
+  assert.deepEqual(merged.map((m) => m.info.id), ["msg_1", "local-2"]);
+});
+
+// ---- SSE: bản thật về theo message.updated chứ không qua refetch ----
+
+test("SSE message.updated móc vào đúng bản optimistic, không nối thêm tin trùng", () => {
+  // Đường dễ gặp nhất: sau khi gửi, message.part.updated tới trước và dựng stub
+  // mang messageId thật, message.updated chốt role sau. Nếu reducer chỉ so id
+  // thì tin user hiện hai lần (bản local-* + bản engine).
+  const s = createChatStream();
+  const local = userMsg("local-1750000000000", "sửa lỗi đăng nhập");
+  let msgs = [userMsg("msg_old", "chuyện cũ"), local];
+  msgs = s.apply(msgs, messageUpdated({ id: "msg_new", info: { id: "msg_new", role: "user" }, parts: [] }));
+  assert.equal(msgs.length, 2, "bản optimistic phải được thay bằng bản thật, không phải nối thêm");
+  assert.deepEqual(msgs.map((m) => m.info.id), ["msg_old", "msg_new"]);
+});
+
+test("SSE đến trước bản optimistic (race) — bản thật vẫn loại bản local", () => {
+  const s = createChatStream();
+  const msgs = s.apply(
+    [userMsg("local-1", "hỏi việc này")],
+    messageUpdated({ id: "msg_z", info: { id: "msg_z", role: "user" }, parts: [] }),
+  );
+  assert.deepEqual(msgs.map((m) => m.info.id), ["msg_z"]);
+});
+
+test("tin local CHƯA được máy nhận thì giữ nguyên, không bị xoá nhầm", () => {
+  const s = createChatStream();
+  const msgs = s.apply([userMsg("local-1", "mới bấm gửi")], partUpdated("msg_a", { id: "p1", type: "text", text: "ok" }));
+  assert.deepEqual(msgs.map((m) => m.info.id), ["local-1", "msg_a"]);
+});
+
+test("tin assistant trùng chữ với tin user KHÔNG bị nhầm là bản thật của nó", () => {
+  const s = createChatStream();
+  const msgs = s.apply([userMsg("local-1", "ok")], partUpdated("msg_a", { id: "p1", type: "text", text: "ok" }));
+  assert.equal(msgs.length, 2, "tin assistant phải là một message riêng");
+  assert.equal(msgs[0].info.id, "local-1");
+});
+
+// ---- REGRESSION 04/10: lịch sử nuốt mất tin vừa gửi ----
+// Người dùng gõ "ok" (đã hỏi 20 lượt trước), bấm Gửi, một lượt refetch do SSE
+// reconnect / tab focus → tin vừa gửi biến mất khỏi màn hình cho tới khi engine
+// xác nhận. Nguyên nhân: đếm tin user theo nội dung trong CẢ lịch sử rồi trừ từ
+// đầu, nên tin cũ đã "tiêu" hết chỗ của tin mới.
+
+test("lịch sử có tin cũ cùng chữ thì tin vừa gửi vẫn phải còn", () => {
+  const fetched = [userMsg("msg_old", "ok"), asstMsg("a1"), asstMsg("a2")];
+  const prev = [...fetched, userMsg("local-9", "ok")];
+  const merged = mergeRefetchKeepInflight(fetched, prev);
+  assert.ok(merged.some((m) => m.info.id === "local-9"), "tin vừa gửi không được biến mất");
+  assert.equal(merged.length, 4, "không được nhân bản tin");
+});
+
+test("tin thật MỚI tới mới xác nhận được tin chờ", () => {
+  const fetched = [userMsg("m1", "ok"), userMsg("msg_new", "ok")];
+  const prev = [userMsg("m1", "ok"), userMsg("local-9", "ok")];
+  assert.ok(!mergeRefetchKeepInflight(fetched, prev).some((m) => m.info.id === "local-9"));
+});
+
+test("hai tin cùng chữ gửi liên tiếp: xác nhận theo thứ tự gửi, giữ đúng một bản chờ", () => {
+  const fetched = [userMsg("m1", "ok"), userMsg("msg_new", "ok")];
+  const prev = [userMsg("m1", "ok"), userMsg("local-1", "ok"), userMsg("local-2", "ok")];
+  const waiting = mergeRefetchKeepInflight(fetched, prev).filter((m) => m.info.id.startsWith("local-"));
+  assert.equal(waiting.length, 1, "đúng một tin còn chờ");
+  assert.equal(waiting[0].info.id, "local-2", "bản CŨ NHẤT được xác nhận trước — engine ghi theo thứ tự gửi");
+});
+
+test("chưa có tin thật nào thì giữ nguyên tin chờ", () => {
+  const fetched = [userMsg("m1", "x")];
+  const prev = [userMsg("m1", "x"), userMsg("local-1", "tin mới")];
+  assert.ok(mergeRefetchKeepInflight(fetched, prev).some((m) => m.info.id === "local-1"));
 });

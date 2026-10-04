@@ -177,3 +177,77 @@ test("mapLimit giới hạn số việc chạy song song và giữ đúng thứ 
   assert.ok(peak <= 2, `đỉnh ${peak} request cùng lúc, phải ≤ 2`);
   assert.deepEqual(await mapLimit([], 3, async () => 1), []);
 });
+
+// ---- Lỗi cũ: từ khoá dài hơn cửa sổ làm mất đúng chữ khớp ----
+
+test("snippetAround: từ khoá DÀU hơn cửa sổ vẫn phải thấy chữ khớp", () => {
+  // Người dùng bê nguyên một câu dài vào ô tìm: cap=24 nhưng từ khoá dài 60.
+  // Trước đây (cap-len)/2 âm -> cửa sổ lùi quá tay và bắt đầu SAU chữ khớp,
+  // ra một đoạn trích không liên quan.
+  const phrase = "sửa lỗi đăng nhập bằng mật khẩu cũ";
+  const body = `${"tiền đoạn vô nghĩa. ".repeat(20)}${phrase}. hậu đoạn vô nghĩa.`;
+  const snip = snippetAround(body, phrase, 24);
+  assert.ok(snip.includes(phrase.slice(0, 12)), `phải thấy đầu chữ khớp, nhận "${snip}"`);
+  assert.ok(snip.startsWith("…"), "vẫn đánh dấu bị cắt ở mép trước");
+});
+
+test("snippetAround: nhiều từ khoá thì lấy từ khoá xuất hiện sớm nhất", () => {
+  // "đuôi" đứng sau "đầu" trong câu nhưng được gõ trước — cửa sổ phải bám
+  // chỗ khớp SỚM NHẤT trong văn bản, không bám thứ tự người gõ.
+  const body = `đầu tiên xuất hiện ở đây ${"đuôi ".repeat(30)}`;
+  const snip = snippetAround(body, "đuôi đầu", 40);
+  assert.ok(snip.includes("đầu tiên xuất hiện"), `phải mở cửa sổ quanh "đầu", nhận "${snip}"`);
+});
+
+// ---- XSS: đầu vào người dùng KHÔNG được biến thành HTML ----
+
+test("snippet/tiêu đề giữ NGUYÊN văn bản thô — không escape sẵn, không sinh HTML", () => {
+  // search.jsx render `{r.snippet}` bằng JSX (Preact tự escape khi render).
+  // Vì vậy lib phải GIỮ NGUYÊN văn bản: escape sẵn ở lib thì người dùng thấy
+  // "&lt;script&gt;", còn sinh/thay HTML ở lib thì đó là lỗ hổng.
+  const evil = '<img src=x onerror=alert(1)>';
+  const rows2 = [
+    { id: "s1", title: "phiên x", time: { updated: 1 } },
+    { id: "s2", title: `tiêu đề ${evil}`, time: { updated: 2 } },
+  ];
+  // Từ khoá "satan" chỉ nằm trong NỘI DUNG s1 — s2 có HTML trong tên nhưng
+  // không chứa từ khoá, nên kết quả chỉ có s1 và là nhánh "khớp nội dung".
+  const out = searchSessions(rows2, "satan", { contents: { s1: `dẫn ${evil} satan dẫn` } });
+  assert.equal(out.length, 1, "chỉ phiên có nội dung chứa từ khoá");
+  assert.equal(out[0].matchIn, "content");
+  assert.ok(out[0].snippet.includes(evil), `đoạn trích giữ thô, nhận "${out[0].snippet}"`);
+  assert.equal(out[0].snippet.includes("&lt;"), false, "KHÔNG escape sẵn ở lib");
+  assert.equal(out[0].snippet.includes("&amp;"), false);
+
+  // Nhánh khớp tên: tiêu đề giữ nguyên chuỗi thô (không escape, không cắt).
+  const titled = searchSessions(rows2, "tiêu đề", {});
+  assert.equal(titled[0].title, `tiêu đề ${evil}`);
+  assert.equal(titled[0].snippet, "", "khớp tên thì không cần đoạn trích");
+});
+
+test("từ khoá kiểu regex không làm hỏng tìm kiếm (không dựng RegExp từ input)", () => {
+  // Ô tìm dùng indexOf, không dựng RegExp — nên "(a+)+$" là từ khoá THƯỜNG,
+  // không phải regex; và không có regex nào ném lỗi khiến trang sập.
+  const q = "(a+)+$";
+  const rows2 = [
+    { id: "s1", title: `so khớp ${q}`, time: { updated: 2 } },
+    { id: "s2", title: "không liên quan", time: { updated: 1 } },
+  ];
+  const out = searchSessions(rows2, q, {});
+  assert.equal(out.length, 1);
+  assert.equal(out[0].id, "s1");
+  // Backreference / lookahead cũng phải là chuỗi thường, không ném.
+  for (const weird of ["(?=x)", "\p{L}", "a{2,3}", "[", "((("]) {
+    assert.doesNotThrow(() => searchSessions(rows2, weird, {}), weird);
+  }
+});
+
+test("từ khoá rỗng/khoảng trắng trả về MỌI phiên — đó là lý do UI phải chặn theo phase", () => {
+  const rows2 = [
+    { id: "s1", title: "a", time: { updated: 5 } },
+    { id: "s2", title: "b", time: { updated: 9 } },
+  ];
+  assert.equal(searchSessions(rows2, "", {}).length, 2, "tìm rỗng trả về danh sách, không phải kết quả");
+  assert.equal(searchSessions(rows2, "   ", {}).length, 2);
+  assert.equal(searchSessions(rows2, "", {}).every((r) => r.matchIn === ""), true, "chưa lọc thì không gắn nhãn khớp");
+});

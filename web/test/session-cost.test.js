@@ -175,3 +175,13 @@ test("costViewModel chỉ có token (chưa có cost) thì vẫn hiện được 
   assert.equal(v.usd, "");
   assert.equal(v.label, "1K token");
 });
+// ---- Lỗi cũ: 999_999 token hiện thành "1.000K" (đọc ra là MỘT TRIỆU) ----
+
+test("formatTokens không nhảy bậc sai ở rìa nghìn/triệu", () => {
+  assert.equal(formatTokens(999_999), "1Tr");
+  assert.equal(formatTokens(999_940), "999,9K");
+  assert.equal(formatTokens(999_949), "999,9K");
+  assert.equal(formatTokens(1_000_000), "1Tr");
+  assert.equal(formatTokens(999), "999");
+  assert.equal(formatTokens(1000), "1K");
+});

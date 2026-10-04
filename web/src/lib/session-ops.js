@@ -210,6 +210,69 @@ export function filterCommands(commands, query, limit = 8) {
     .slice(0, limit);
 }
 
+// ---- Trạng thái chạy + thao tác xoá trên danh sách (sessions.jsx / home.jsx) ----
+//
+// Engine báo trạng thái qua `GET /opencode/session/status` → `{ [sid]: {type} }`.
+// type CÓ NHIỀU GIÁ TRỊ, không chỉ "busy":
+//   - engine v1: "idle" | "busy" | "retry" — apps/app/src/react-app/domains/
+//     session/surface/session-admission-outcome.ts:59 và :sync/session-sync.ts:481.
+//   - server adapter v2 rút về busy/idle — apps/server/src/opencode-v2-read-adapter.ts:46-50.
+//   - desktop coi MỌI trạng thái trong danh sách dưới đây là "đang chạy" —
+//     apps/app/src/react-app/domains/session/sidebar/utils.ts:24-30.
+// Chỉ so `status === "busy"` thì phiên đang RETRY (agent thử lại, vẫn sẽ có tin
+// mới) hiện chấm xanh "rảnh" và đếm sai số phiên đang chạy trên Home.
+
+const BUSY_STATUS = new Set([
+  "busy",
+  "retry",
+  "running",
+  "streaming",
+  "thinking",
+  "responding",
+  "compacting",
+]);
+
+/**
+ * Phiên này đang chạy chưa. Nhận cả `{type}` (shape engine) lẫn chuỗi thô
+ * (nếu chỗ gọi đã lấy sẵn `.type`).
+ */
+export function isSessionBusy(status) {
+  const type = typeof status === "string" ? status : status?.type ?? "";
+  return BUSY_STATUS.has(String(type).trim().toLowerCase());
+}
+
+/**
+ * Bỏ một phiên khỏi danh sách — phần thuần của xoá kiểu lạc quan (xoá ngay
+ * trên UI rồi mới gọi máy tính). Trả MẢNG MỚI để useState nhận ra đổi; id
+ * rỗng là no-op vì lúc đó không xoá được phiên nào cụ thể.
+ */
+export function dropSessionById(list, id) {
+  const rows = Array.isArray(list) ? list : [];
+  const sid = String(id ?? "");
+  if (!sid) return rows;
+  return rows.filter((s) => String(s?.id ?? "") !== sid);
+}
+
+/**
+ * Bỏ một phiên khỏi danh sách GỘP nhiều workspace của Home. Mỗi hàng ở đó là
+ * `{ws, session}`, key phải là `${wsId}:${sid}` — cùng key với `statuses`.
+ */
+export function dropSessionItem(items, wsId, sessionId) {
+  const rows = Array.isArray(items) ? items : [];
+  const key = `${String(wsId ?? "")}:${String(sessionId ?? "")}`;
+  return rows.filter((row) => `${String(row?.ws?.id ?? "")}:${String(row?.session?.id ?? "")}` !== key);
+}
+
+/** Xoá luôn trạng thái của phiên vừa bị xoá (nếu còn) — không để lại chấm cũ. */
+export function dropStatusById(map, id) {
+  const src = map && typeof map === "object" ? map : {};
+  const key = String(id ?? "");
+  if (!key || !(key in src)) return src;
+  const next = { ...src };
+  delete next[key];
+  return next;
+}
+
 /** Chi phí phiên: engine trả `cost` (USD) — hiện "$0.0123" hoặc "—". */
 export function formatCost(cost) {
   const n = Number(cost);

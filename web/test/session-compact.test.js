@@ -229,3 +229,20 @@ test("summaryView lấy tin tóm tắt mới nhất, không có thì null", () =
   assert.equal(v.truncated, false);
   assert.equal(v.role, "assistant");
 });
+// ---- Lỗi cũ: cắt trúng giữa emoji làm ký tự hỏng ----
+
+test("formatSummaryText không cắt đôi emoji (ký tự hỏng ở mép cắt)", () => {
+  const text = `${"a".repeat(90)}😀${"b".repeat(90)}`;
+  const cut = formatSummaryText(text, 100);
+  assert.equal(cut.truncated, true);
+  // Không được còn ký tự thay thế U+FFFD do cắt giữa cặp thay thế.
+  assert.ok(!cut.text.includes("\uFFFD"), `bản cắt có ký tự hỏng: ${JSON.stringify(cut.text)}`);
+  assert.ok(!/[\uD800-\uDBFF]$/.test(cut.text.replace("…", "")), "không dừng giữa nửa emoji");
+  assert.ok(cut.text.endsWith("…"));
+});
+
+test("formatSummaryText: ký tự có dấu tiếng Việt vẫn cắt đúng (BMP = 1 đơn vị)", () => {
+  const text = "ỗ".repeat(200);
+  const cut = formatSummaryText(text, 100);
+  assert.equal(cut.text, `${"ỗ".repeat(100)}…`);
+});

@@ -18,6 +18,10 @@ import {
   formatCost,
   shouldClearRevertCursor,
   questionAnswered,
+  isSessionBusy,
+  dropSessionById,
+  dropSessionItem,
+  dropStatusById,
 } from "../src/lib/session-ops.js";
 
 const user = (id, text) => ({ info: { id, role: "user" }, parts: [{ type: "text", text }] });
@@ -231,4 +235,62 @@ test("questionAnswered: câu vừa không có lựa chọn vừa không cho tự
   assert.equal(questionAnswered(view, [[]], ["gõ cũng vậy"]), false);
   // View rỗng/hỏng không được ném.
   assert.equal(questionAnswered(null, [], []), true); // every() trên rỗng = true
+});
+
+// ---- Trạng thái chạy + xoá kiểu lạc quan (sessions.jsx / home.jsx) ----
+// Nguồn: engine báo `idle | busy | retry` (ow-src apps/app/src/react-app/
+// domains/session/sync/session-admission-outcome.ts:59) và desktop coi MỌI
+// trạng thái dưới đây là đang chạy (.../sidebar/utils.ts:24-30).
+
+test("isSessionBusy: 'retry' CŨNG là đang chạy, không chỉ 'busy'", () => {
+  assert.equal(isSessionBusy({ type: "busy" }), true);
+  assert.equal(isSessionBusy({ type: "retry" }), true, "agent đang thử lại — vẫn sẽ có tin mới");
+  assert.equal(isSessionBusy({ type: "running" }), true);
+  assert.equal(isSessionBusy({ type: "compacting" }), true);
+  assert.equal(isSessionBusy({ type: "idle" }), false);
+  assert.equal(isSessionBusy({ type: "waiting" }), false);
+  assert.equal(isSessionBusy(undefined), false);
+  assert.equal(isSessionBusy(null), false);
+  assert.equal(isSessionBusy(""), false);
+});
+
+test("isSessionBusy nhận cả chuỗi thô và chữ hoa/thừa khoảng trắng", () => {
+  assert.equal(isSessionBusy("busy"), true);
+  assert.equal(isSessionBusy(" Busy "), true);
+  assert.equal(isSessionBusy("idle"), false);
+  assert.equal(isSessionBusy(""), false);
+  assert.equal(isSessionBusy(42), false);
+});
+
+test("dropSessionById mất đúng một dòng, trả mảng MỚI (useState nhận ra đổi)", () => {
+  const list = [{ id: "ses_a" }, { id: "ses_b" }, { id: "ses_c" }];
+  const next = dropSessionById(list, "ses_b");
+  assert.deepEqual(next.map((s) => s.id), ["ses_a", "ses_c"]);
+  assert.equal(list.length, 3, "mảng cũ không được sửa tại chỗ");
+  assert.notEqual(next, list);
+  // Id không có trong danh sách -> trả nguyên, không dựng mảng rác.
+  assert.deepEqual(dropSessionById(list, "ses_zz").map((s) => s.id), ["ses_a", "ses_b", "ses_c"]);
+  assert.deepEqual(dropSessionById(null, "ses_a"), []);
+  assert.equal(dropSessionById(list, ""), list);
+});
+
+test("dropSessionItem xoá đúng phiên trong danh sách gộp nhiều workspace", () => {
+  const items = [
+    { ws: { id: "ws1" }, session: { id: "ses_a" } },
+    { ws: { id: "ws2" }, session: { id: "ses_a" } },
+    { ws: { id: "ws1" }, session: { id: "ses_b" } },
+  ];
+  const next = dropSessionItem(items, "ws1", "ses_a");
+  assert.equal(next.length, 2);
+  assert.ok(next.some((it) => it.ws.id === "ws2" && it.session.id === "ses_a"), "cùng id ở workspace khác phải còn");
+  // Xoá nhầm workspace thì không đụng hàng nào.
+  assert.equal(dropSessionItem(items, "ws9", "ses_a").length, 3);
+});
+
+test("dropStatusById dọn luôn trạng thái, không để lại chấm của phiên đã xoá", () => {
+  const map = { ses_a: { type: "busy" }, ses_b: { type: "idle" } };
+  assert.deepEqual(Object.keys(dropStatusById(map, "ses_a")), ["ses_b"]);
+  assert.deepEqual(map.ses_a, { type: "busy" }, "mảng cũ không được sửa tại chỗ");
+  assert.equal(dropStatusById(map, "ses_zz"), map);
+  assert.deepEqual(dropStatusById(null, "ses_a"), {});
 });

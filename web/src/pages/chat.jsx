@@ -26,12 +26,13 @@ import {
 // Cuộn màn chat: quyết định "cuộn không / cuộn kiểu nào" và đếm tin mới nằm ở
 // lib/chat-scroll.js (thuần, có test) — chat.jsx chỉ đo vị trí và gọi.
 import {
-  ARRIVED_PX, BOTTOM_FOLLOW_PX, distanceFromBottom, isAtBottom, jumpLabelVi,
+  distanceFromBottom, isAtBottom, jumpLabelVi,
   keepsAutoScroll, leftBottomBy, newMessagesSince, scrollPlan, shouldShowJump,
 } from "../lib/chat-scroll.js";
 import {
-  composerHintVi, isRetryableSendError, mergeSteerTexts, pendingStatusVi, planSteerSends,
-  sendDecision,
+  composerHintVi, createQueue, isRetryableSendError, pendingStatusVi,
+  planSteerBatches, queueAdd, queueFor, queueRestore, queueSet, sendDecision,
+  sessionBusyFromMap, shouldRestoreComposer, statusLineIsBusy, permissionReplyBody,
 } from "../lib/session-steer.js";
 import {
   isShared, parseShareResponse, shareButtonLabel, shareErrorVi, shareLink, shareResultVi,
@@ -143,11 +144,25 @@ export function ChatPage({ route }) {
   const [shareBusy, setShareBusy] = useState(false);
   const [compacting, setCompacting] = useState(false);
   const renameInputRef = useRef(null);
+  // Khoá chạm kép: state (`busyAction`/`shareBusy`) chỉ đổi ở RENDER kế tiếp,
+  // nên hai chạm liền nhau vẫn chạy cùng handler cũ và bắn hai PATCH /share.
+  const renameLockRef = useRef(false);
+  const shareLockRef = useRef(false);
   const attachRef = useRef(null);
-  const queueRef = useRef([]);
-  const [queueCount, setQueueCount] = useState(0); // chỉ báo "đang gửi lại (n)"
+  const queueRef = useRef(createQueue("", []));
+  // Ô gõ + file đính kèm cất theo phiên, để bấm nhầm Back rồi quay lại không
+  // mất chữ vừa gõ mà cũng không mang tin sang phiên khác. Xem chỗ dùng trong
+  // effect vào phiên mới.
+  const composerRef = useRef(new Map());
+  const leftRef = useRef("");
+  // Mirror của ô gõ: effect vào phiên mới đọc giá trị CŨ (của phiên đang rời)
+  // mà effect đó cố tình không khai báo `draft`/`attached` trong deps — nếu có,
+  // mỗi ký tự người dùng gõ sẽ chạy lại effect và dựng lại cả trang chat.
   const draftRef = useRef("");
   draftRef.current = draft;
+  const attachedRef = useRef([]);
+  attachedRef.current = attached;
+  const [queueCount, setQueueCount] = useState(0); // chỉ báo "đang gửi lại (n)"
   // ---- Vị trí cuộn của người dùng ----
   // `atBottomRef` là vị trí THẬT, đo ở nhịp scroll — tức là TRƯỚC nhịp render kế
   // tiếp. Nhờ vậy một khối text/tool dài hơn ngưỡng cũ không làm auto-follow bỏ
@@ -210,6 +225,20 @@ export function ChatPage({ route }) {
   // Đánh dấu "đang sửa tin" để con trỏ hoàn tác được nhả đúng lúc — xem chỗ
   // dùng trong send().
   const revertForNewMessageRef = useRef(false);
+  // Khoá gửi theo REF: hai chạm nút Gửi (hoặc Ctrl+Enter hai lần) trong cùng
+  // một nhịp render dùng chung handler cũ, nên state `sending` chưa kịp đổi
+  // và cả hai lượt đều đi qua. Xem chỗ khoá trong send().
+  const sendLockRef = useRef(false);
+  // Khoá dừng: `aborting` cũng chỉ đổi ở render kế tiếp, chạm kép sẽ bắn hai
+  // request abort (và abort lần hai rơi vào phiên đã rảnh).
+  const abortLockRef = useRef(false);
+  // Khoá thao tác tin (xoá/hoàn tác/nhánh/trả lời): `busyAction` đổi ở render
+  // kế tiếp, chạm kép sẽ chạy thao tác hai lần.
+  const actionLockRef = useRef(false);
+  // Thẻ "Agent xin phép" đang được trả lời: id để khoá nút, ref để chặn
+  // chạm kép trước lúc render kế tiếp.
+  const [permissionBusy, setPermissionBusy] = useState("");
+  const permissionBusyRef = useRef("");
 
   const base = `/workspace/${encodeURIComponent(wsId)}/opencode`;
 
@@ -262,10 +291,12 @@ export function ChatPage({ route }) {
     try {
       const payload = await ow(`${base}/session/status`);
       if (sessionIdRef.current !== mine) return;
-      const map = unwrap(payload) ?? payload ?? {};
-      setRunning(map[sessionId]?.type === "busy" || map[`ses_${sessionId}`]?.type === "busy");
+      // undefined = map không nói gì về phiên này → giữ trạng thái hiện tại,
+      // đừng dập tắt busy một cách mù (xem sessionBusyFromMap).
+      const busy = sessionBusyFromMap(unwrap(payload) ?? payload, mine);
+      if (busy !== undefined) setRunning(busy);
     } catch {
-      /* bonus */
+      /* bonus — không có status thì để trạng thái do SSE chốt */
     }
   }, [wsId, sessionId]);
 
@@ -315,8 +346,12 @@ export function ChatPage({ route }) {
   // lượt chạy; lô nào máy XÁC NHẬN rồi mới quên, lô nào hỏng giữa chừng thì
   // giữ nguyên để gửi lại — không đoán bừa tin nào đã đi.
   const flushQueue = useCallback(async () => {
-    const pending = planSteerSends(queueRef.current);
-    if (!pending.length) return;
+    // Chỉ đẩy tin chờ CỦA PHIÊN NÀY. Trang chat sống lâu hơn một phiên, hàng
+    // đợi nằm trong ref nên nếu không lọc, tin xếp lúc rò mạng ở phiên A sẽ
+    // bị `flushQueue` của phiên B gửi vào hội thoại B.
+    const mine = sessionId;
+    const waiting = queueFor(queueRef.current, mine);
+    if (!waiting.length) return;
     // Model nhớ trong localStorage có thể đã bị engine đổi tên/xoá. Gửi model
     // engine không có thì engine VẪN nhận và lưu message rồi không chạy gì —
     // người dùng thấy "đã gửi" mà không ai trả lời. Chặn ở đây và nói rõ.
@@ -324,18 +359,27 @@ export function ChatPage({ route }) {
       setError("Model đã chọn không còn trong danh sách của máy. Bấm nút model để chọn lại.");
       return;
     }
-    queueRef.current = [];
-    setQueueCount(pending.length);
-    for (let i = 0; i < pending.length; i++) {
+    // Chốt phiên như mọi loader: người dùng bấm sang phiên khác giữa lúc đang
+    // gửi thì phần chưa gửi phải về đúng hàng đợi của phiên cũ, và KHÔNG được
+    // setState của màn đang hiển thị phiên mới.
+    const batches = planSteerBatches(waiting);
+    queueRef.current = queueSet(queueRef.current, mine, []);
+    setQueueCount(0);
+    for (let i = 0; i < batches.length; i++) {
       try {
-        await owPrompt(wsId, sessionId, promptArgs(pending[i]));
+        await owPrompt(wsId, mine, promptArgs(batches[i].prompt));
       } catch {
-        queueRef.current = pending.slice(i); // vẫn mất mạng - giữ lại lần sau
-        setQueueCount(queueRef.current.length);
+        // Lô này hỏng giữa chừng: giữ nguyên phần CHƯA gửi để thử lại sau —
+        // không đoán bừa tin nào đã đi. Lô trước đã được máy xác nhận thì quên.
+        const unsent = batches.slice(i).flatMap((b) => b.texts);
+        queueRef.current = queueRestore(queueRef.current, mine, unsent);
+        if (sessionIdRef.current === mine) {
+          setQueueCount(queueFor(queueRef.current, mine).length);
+        }
         return;
       }
     }
-    setQueueCount(0);
+    if (sessionIdRef.current !== mine) return;
     loadMessages();
     loadStatus();
   }, [wsId, sessionId, loadMessages, loadStatus]);
@@ -356,6 +400,39 @@ export function ChatPage({ route }) {
     setAtBottom(true);
     setUnseen(0);
     commitMessages(null);
+    // Trạng thái "đang bay" của phiên TRƯỚC không mang ý nghĩa ở phiên mới.
+    // Không dọn thì bấm sang phiên đang rảnh vẫn thấy nút Dừng quay và dòng
+    // "agent đang chạy…" — người dùng bấm Dừng rồi tưởng lỗi. `running` được
+    // chốt lại ngay bởi `loadStatus()` ngay dưới.
+    runningRef.current = false;
+    setRunning(false);
+    setSending(false);
+    setAborting(false);
+    // Ô gõ và file đính kèm thuộc về phiên đang mở: mang sang phiên khác là
+    // gửi nhầm tin của A vào hội thoại B. Nhưng XOÁ thì mất chữ vừa gõ — nên
+    // cất lại theo phiên và lấy lại khi quay về (bấm nhầm Back rồi quay lại
+    // vẫn còn nguyên ô gõ). `leftRef` là phiên mà state đang mô tả, nên lần
+    // chạy đầu tiên không lưu nhầm phiên mới vào làm "phiên đã rời".
+    if (leftRef.current && leftRef.current !== sessionId) {
+      composerRef.current.set(leftRef.current, { draft: draftRef.current, attached: attachedRef.current });
+    }
+    leftRef.current = sessionId;
+    setEditing(null);
+    setDraft(composerRef.current.get(sessionId)?.draft ?? "");
+    setAttached(composerRef.current.get(sessionId)?.attached ?? []);
+    setRevertId("");
+    setMenu(null);
+    setNotice("");
+    setError("");
+    // Đếm tin chờ tính RIÊNG cho từng phiên (lib/session-steer) — đổi phiên
+    // thì phải tính lại, không phải giữ số của phiên trước.
+    setQueueCount(queueFor(queueRef.current, sessionId).length);
+    sendLockRef.current = false;
+    abortLockRef.current = false;
+    actionLockRef.current = false;
+    permissionBusyRef.current = "";
+    setPermissionBusy("");
+    setPermissions([]);
 
     loadSession();
     loadMessages();
@@ -519,9 +596,9 @@ export function ChatPage({ route }) {
         // Run kết thúc thật (idle/errored) hoặc status report — chốt ngay,
         // không chờ poll 2.5s. status mang map {ses: {type}} thì tự suy.
         const props = eventProps(data);
-        const type = name === "session.status" ? props?.[sessionId]?.type ?? props?.[`ses_${sessionId}`]?.type : null;
+        const busy = name === "session.status" ? sessionBusyFromMap(props, sessionId) : false;
         if (name !== "session.status") setRunning(false);
-        else if (type) setRunning(type === "busy" || type === "retry");
+        else if (busy !== undefined) setRunning(busy);
         // Run vừa kết thúc: session có thể vừa bị đổi (cost tăng, con trỏ
         // revert dọn), và todo vừa được chốt — nạp lại cho đúng.
         loadSession();
@@ -710,7 +787,11 @@ export function ChatPage({ route }) {
   // Gộp ở một chỗ để mọi thao tác đều: bật busy, báo lỗi rõ, nạp lại thật.
 
   async function run(action, fn) {
-    if (busyAction) return;
+    // Khoá bằng ref: `busyAction` chỉ đổi ở render kế tiếp, chạm kép (rất dễ
+    // trên điện thoại) sẽ chạy cùng một thao tác hai lần — xoá tin hai lần,
+    // hoàn tác hai lần, tạo nhánh hai nhánh mồ côi.
+    if (actionLockRef.current) return;
+    actionLockRef.current = true;
     const mineSession = sessionId;
     // Lưu ID hành động, không phải nhãn: MessageActionSheet/QuestionCard so
     // busyAction với id ("revert", "answer"…) để bật chữ "Đang làm…".
@@ -731,8 +812,14 @@ export function ChatPage({ route }) {
       if (sessionIdRef.current !== mineSession) return;
       setError(String(e.message || e));
     } finally {
-      setBusyAction("");
-      setMenu(null);
+      actionLockRef.current = false;
+      // Đã sang phiên khác: đừng đụng state của phiên mới — effect vào phiên
+      // mới đã tự dọn `busyAction`/`menu` rồi, xoá tiếp ở đây là xoá nhầm
+      // trạng thái của màn đang mở (ví dụ câu trả lời agent đang chờ).
+      if (sessionIdRef.current === mineSession) {
+        setBusyAction("");
+        setMenu(null);
+      }
     }
   }
 
@@ -814,6 +901,7 @@ export function ChatPage({ route }) {
   }
 
   async function saveRename() {
+    if (renameLockRef.current) return;
     const clean = normalizeSessionTitle(renameDraft);
     if (!clean.ok) {
       setRenameErr(clean.error); // giữ nguyên nội dung ô nhập, không đóng sheet
@@ -823,6 +911,7 @@ export function ChatPage({ route }) {
       setRenaming(false); // không đổi gì -> khỏi tốn một vòng mạng
       return;
     }
+    renameLockRef.current = true;
     setBusyAction("rename");
     setRenameErr("");
     try {
@@ -835,6 +924,7 @@ export function ChatPage({ route }) {
     } catch (e) {
       setRenameErr(String(e.message || e));
     } finally {
+      renameLockRef.current = false;
       setBusyAction("");
     }
   }
@@ -842,7 +932,8 @@ export function ChatPage({ route }) {
   // ---- Chia sẻ: bật/tắt link trên máy, rồi đưa link ra điện thoại ----
 
   async function toggleShare() {
-    if (shareBusy) return;
+    if (shareLockRef.current) return;
+    shareLockRef.current = true;
     setShareBusy(true);
     const wasShared = isShared(session);
     try {
@@ -873,6 +964,7 @@ export function ChatPage({ route }) {
     } catch (e) {
       setError(shareErrorVi(e));
     } finally {
+      shareLockRef.current = false;
       setShareBusy(false);
     }
   }
@@ -922,96 +1014,143 @@ export function ChatPage({ route }) {
     // hàng trong app), còn thiếu nội dung hoặc đang tải file thì mới khoá.
     const decision = sendDecision({ running, sending, text, hasFiles: attached.length > 0 });
     if (decision.action === "wait") return;
-    // Sửa tin đã gửi: hoàn tác tới tin cũ TRƯỚC khi gửi, nếu không lịch sử sẽ
-    // có cả bản cũ lẫn bản sửa nối sau. Abort nếu đang chạy (desktop làm vậy).
-    if (editing) {
-      const target = editing.messageId;
-      setEditing(null);
-      if (running) await ow(`${base}/session/${encodeURIComponent(sessionId)}/abort`, { method: "POST" }).catch(() => {});
-      try {
-        await owRevert(wsId, sessionId, target);
-        setRevertId(target);
-        // Con trỏ này CHỈ để vẽ đúng trạng thái trong khoảnh ngắn giữa lúc
-        // hoàn tác xong và tin mới vừa nhảy lên. Giữ nó tới sau khi gửi sẽ cắt
-        // luôn tin mới: applyRevertCursor cắt từ vị trí con trỏ trở đi, mà tin
-        // mới nối ở CUỐI mảng. Nên nhảy con trỏ khi tin mới đã hiện.
-        revertForNewMessageRef.current = true;
-      } catch (e) {
-        setError(`Không hoàn tác được tin cũ (${e.message || e}) — tin mới sẽ nối sau.`);
-      }
-      loadMessages();
-    }
-    // Upload file đính kèm trước (vào mobile-uploads/), rồi gửi prompt kèm
-    // đường dẫn để agent đọc — engine không có part file riêng.
-    setSending(true);
-    const uploaded = [];
-    let failed = false;
-    if (attached.length) {
-      setAttached((prev) => prev.map((a) => ({ ...a, status: "uploading", error: "" })));
-      for (const item of attached) {
+    // Khoá bằng REF chứ không bằng state `sending`: state chỉ đổi ở lần render
+    // kế tiếp, mà hai chạm (bấm hai lần nút Gửi, Ctrl+Enter hai lần — rất dễ
+    // trên điện thoại) dùng CHUNG một handler cũ nên cả hai đều thấy
+    // `sending === false` và cùng đi qua. Hệ quả: tin gửi trùng, engine chạy
+    // hai lượt. Khoá ở đây, trước cả nhánh hoàn tác của chế độ "sửa tin" —
+    // nhánh đó có await nên cửa sổ bấm kép dài hơn nhiều.
+    if (sendLockRef.current) return;
+    sendLockRef.current = true;
+    // Chốt phiên ngay từ đầu: mọi await bên dưới (hoàn tác, upload, gửi) đều
+    // có thể bị người dùng cắt ngang bằng một cú bấm Back.
+    const mine = sessionId;
+    let sent = false;
+    try {
+      // Sửa tin đã gửi: hoàn tác tới tin cũ TRƯỚC khi gửi, nếu không lịch sử sẽ
+      // có cả bản cũ lẫn bản sửa nối sau. Abort nếu đang chạy (desktop làm vậy).
+      if (editing) {
+        const target = editing.messageId;
+        setEditing(null);
+        if (running) await ow(`${base}/session/${encodeURIComponent(mine)}/abort`, { method: "POST" }).catch(() => {});
         try {
-          const path = await owUploadFile(wsId, "mobile-uploads", item.file);
-          uploaded.push(path);
-          setAttached((prev) => prev.map((a) => (a === item ? { ...a, path, status: "done" } : a)));
+          await owRevert(wsId, mine, target);
+          if (sessionIdRef.current !== mine) return;
+          setRevertId(target);
+          // Con trỏ này CHỈ để vẽ đúng trạng thái trong khoảnh ngắn giữa lúc
+          // hoàn tác xong và tin mới vừa nhảy lên. Giữ nó tới sau khi gửi sẽ cắt
+          // luôn tin mới: applyRevertCursor cắt từ vị trí con trỏ trở đi, mà tin
+          // mới nối ở CUỐI mảng. Nên nhảy con trỏ khi tin mới đã hiện.
+          revertForNewMessageRef.current = true;
         } catch (e) {
-          failed = true;
-          setAttached((prev) => prev.map((a) => (a === item ? { ...a, status: "error", error: String(e.message || e) } : a)));
+          setError(`Không hoàn tác được tin cũ (${e.message || e}) — tin mới sẽ nối sau.`);
+        }
+        loadMessages();
+      }
+      // Upload file đính kèm trước (vào mobile-uploads/), rồi gửi prompt kèm
+      // đường dẫn để agent đọc — engine không có part file riêng.
+      setSending(true);
+      const uploaded = [];
+      let failed = false;
+      if (attached.length) {
+        setAttached((prev) => prev.map((a) => ({ ...a, status: "uploading", error: "" })));
+        for (const item of attached) {
+          try {
+            const path = await owUploadFile(wsId, "mobile-uploads", item.file);
+            uploaded.push(path);
+            setAttached((prev) => prev.map((a) => (a === item ? { ...a, path, status: "done" } : a)));
+          } catch (e) {
+            failed = true;
+            setAttached((prev) => prev.map((a) => (a === item ? { ...a, status: "error", error: String(e.message || e) } : a)));
+          }
         }
       }
-    }
-    const fileBlock = uploaded.length
-      ? `File đính kèm từ điện thoại (đã lưu trong workspace):\n${uploaded.map((p) => `- ${p}`).join("\n")}\n`
-      : "";
-    // Chỉ nối bằng xuống dòng KHI có khối file đứng trước — không thì prompt
-    // thường bị thừa một dòng trống ở đầu, agent đọc lệch nội dung.
-    const fullText = fileBlock
-      ? fileBlock + (text ? `\n${text}` : "\nHãy đọc các file đính kèm trên và xử lý.")
-      : text;
-    const optimisticText = uploaded.length && !text
-      ? `Đã gửi ${uploaded.length} file đính kèm.`
-      : fullText;
-    setDraft("");
-    setAttached([]);
-    // Upload mất mấy giây — người dùng có thể đã bấm sang phiên khác. Tin
-    // optimistic gắn vào phiên nào thì phải là phiên đang mở, không phải phiên
-    // mà `send()` khởi đầu.
-    if (sessionIdRef.current !== sessionId) {
-      setSending(false);
-      return;
-    }
-    // hiển thị ngay tin user (optimistic) — qua commit để messagesRef khớp
-    commitMessages([
-      ...(messagesRef.current ?? []),
-      { info: { id: `local-${Date.now()}`, role: "user", time: { created: Date.now() } }, parts: [{ type: "text", text: optimisticText }] },
-    ]);
-    try {
-      await owPrompt(wsId, sessionId, promptArgs(fullText));
-      setError("");
-      if (shouldClearRevertCursor({ sentNewMessage: true, revertMessageId: revertId })) {
-        // Tin mới đã vào lịch sử → tin cũ bị hoàn tác không còn bị che nữa.
+      const fileBlock = uploaded.length
+        ? `File đính kèm từ điện thoại (đã lưu trong workspace):\n${uploaded.map((p) => `- ${p}`).join("\n")}\n`
+        : "";
+      // Chỉ nối bằng xuống dòng KHI có khối file đứng trước — không thì prompt
+      // thường bị thừa một dòng trống ở đầu, agent đọc lệch nội dung.
+      const fullText = fileBlock
+        ? fileBlock + (text ? `\n${text}` : "\nHãy đọc các file đính kèm trên và xử lý.")
+        : text;
+      const optimisticText = uploaded.length && !text
+        ? `Đã gửi ${uploaded.length} file đính kèm.`
+        : fullText;
+      setDraft("");
+      setAttached([]);
+      // Upload mất mấy giây — người dùng có thể đã bấm sang phiên khác. Tin
+      // optimistic gắn vào phiên nào thì phải là phiên đang mở, không phải phiên
+      // mà `send()` khởi đầu.
+      if (sessionIdRef.current !== mine) {
+        setSending(false);
+        return;
+      }
+      const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      // `localSentText` là chữ THẬT sẽ gửi lên máy — khác `optimisticText` khi
+      // chỉ đính kèm file. lib/chat-stream dùng nó để ghép bản optimistic với
+      // bản engine trả về, thay vì so `time.created` (hai đồng hồ khác nhau).
+      commitMessages([
+        ...(messagesRef.current ?? []),
+        {
+          info: { id: localId, role: "user", time: { created: Date.now() }, localSentText: fullText },
+          parts: [{ type: "text", text: optimisticText }],
+        },
+      ]);
+      // Sửa tin: vừa đặt con trỏ hoàn tác ở nhánh trên, mà `applyRevertCursor`
+      // cắt TỪ con trỏ trở đi — tin vừa gửi nối ở CUỐI mảng nên bị cắt mất và
+      // người dùng không thấy tin mình vừa bấm. Nhảy con trỏ ngay khi tin mới
+      // đã hiện, và cả khi gửi hỏng — nếu không, tin nằm ẩn vĩnh viễn sau
+      // thanh "N tin nhắn phía sau đang ẩn" mà không có lý do gì để bấm "Hiện
+      // lại". Đây cũng là lý do cờ `revertForNewMessageRef` tồn tại: nó nhớ
+      // việc con trỏ do chính lượt gửi này đặt ra, khác con trổ do người dùng
+      // bấm "Hoàn tác" từ trước (cái đó phải giữ tới khi họ gửi tin mới).
+      if (revertForNewMessageRef.current) {
         revertForNewMessageRef.current = false;
         setRevertId("");
       }
-      loadMessages();
-      loadStatus();
-    } catch (e) {
-      if (!isRetryableSendError(e)) {
-        // Máy đã trả lời và nói không (4xx): xếp hàng rồi cũng hỏng y hệt,
-        // mà người dùng thấy dòng "đang gửi lại" thì tưởng còn hy vọng.
-        setError(`Không gửi được tin nhắn: ${e.message || e}`);
-      } else {
-        // Mất mạng giữa đường: xếp lại. Tin chờ sẵn có thì GỘP với tin mới
-        // thành MỘT prompt nối bằng dòng trống (không tự chèn nhãn/đánh số —
-        // đó là chỉ dẫn người dùng không gõ, agent đọc lệch rồi lặp lại).
-        const pending = [...queueRef.current];
-        queueRef.current = pending.length ? [mergeSteerTexts(pending, fullText)] : [fullText];
-        setQueueCount(queueRef.current.length);
-        setError(pendingStatusVi({ running, pendingCount: queueRef.current.length }));
+      try {
+        await owPrompt(wsId, mine, promptArgs(fullText));
+        sent = true;
+        if (sessionIdRef.current !== mine) return;
+        setError("");
+        // Con trỏ do người dùng bấm "Hoàn tác" từ trước (không phải do lượt
+        // gửi này đặt) thì nhảy khi tin mới đã vào lịch sử. Con trỏ do chính
+        // lượt sửa tin này đặt đã được nhả ở trên, lúc tin mới vừa hiện.
+        if (shouldClearRevertCursor({ sentNewMessage: true, revertMessageId: revertId })) {
+          revertForNewMessageRef.current = false;
+          setRevertId("");
+        }
+        loadMessages();
+        loadStatus();
+      } catch (e) {
+        if (sessionIdRef.current !== mine) return;
+        const queued = isRetryableSendError(e);
+        if (queued) {
+          // Mất mạng giữa đường: xếp lại. Tin chờ sẵn có thì GỘP với tin mới
+          // thành MỘT prompt nối bằng dòng trống (không tự chèn nhãn/đánh số —
+          // đó là chỉ dẫn người dùng không gõ, agent đọc lệch rồi lặp lại).
+          queueRef.current = queueAdd(queueRef.current, mine, [fullText]);
+          const n = queueFor(queueRef.current, mine).length;
+          setQueueCount(n);
+          // KHÔNG nhét tin chờ vào banner lỗi đỏ: mất mạng là chuyện thường, và
+          // dòng trạng thái dưới transcript đã nói "Đang gửi lại n tin nhắm…".
+        } else {
+          // Máy đã trả lời và nói không (4xx): tin sẽ không bao giờ đi. Gỡ bản
+          // optimistic — để lại thì transcript hiện vĩnh viễn một tin chưa từng
+          // tới máy, và `mergeRefetchKeepInflight` cứ giữ nó mãi. Trả nội dung
+          // về ô gõ để sửa rồi gửi lại, thay vì bắt gõ lại từ đầu.
+          const list = (messagesRef.current ?? []).filter((m) => messageIdOf(m) !== localId);
+          if (list.length !== (messagesRef.current ?? []).length) commitMessages(list);
+          if (shouldRestoreComposer({ queued: false })) setDraft(fullText);
+          setError(`Không gửi được tin nhắn: ${e.message || e}`);
+        }
+      } finally {
+        setSending(false);
       }
+      if (failed && sent) setError("Có file tải lên lỗi — agent chỉ thấy các file đã tải xong.");
     } finally {
-      setSending(false);
+      sendLockRef.current = false;
     }
-    if (failed) setError("Có file tải lên lỗi — agent chỉ thấy các file đã tải xong.");
   }
 
   function pickFiles(fileList) {
@@ -1019,38 +1158,64 @@ export function ChatPage({ route }) {
     setAttached((prev) => [...prev, ...fresh].slice(0, 5));
   }
 
+  /** Bỏ tin chờ của phiên đang mở (xem nút "Bỏ" ở dòng trạng thái). */
+  function discardQueue() {
+    queueRef.current = queueSet(queueRef.current, sessionId, []);
+    setQueueCount(0);
+  }
+
   async function abort() {
-    if (aborting) return; // chống double-tap
+    // Khoá bằng ref: `aborting` chỉ đổi ở render kế tiếp, nên chạm kép vào
+    // nút Dừng vẫn chạy cả hai nhánh và bắn hai request abort.
+    if (abortLockRef.current) return;
+    abortLockRef.current = true;
+    const mine = sessionId;
     setAborting(true);
     try {
-      await ow(`${base}/session/${encodeURIComponent(sessionId)}/abort`, { method: "POST" });
+      await ow(`${base}/session/${encodeURIComponent(mine)}/abort`, { method: "POST" });
+      if (sessionIdRef.current !== mine) return;
+      // Tắt busy NGAY. Chờ `session.idle` qua SSE là đợi mạng — mà chính lúc
+      // đó luồng thường đang yếu nhất. Không tắt thì nút Dừng cứ quay vô
+      // hạnh khiến người dùng bấm hoài, và ô gõ cứ báo "agent đang chạy" dù
+      // máy đã đứng. `loadStatus` bên dưới vẫn chốt lại nếu máy còn chạy.
+      setRunning(false);
       loadStatus();
       loadMessages();
     } catch (e) {
+      if (sessionIdRef.current !== mine) return;
       setError(String(e.message || e));
+      // Request abort hỏng không có nghĩa agent còn chạy (mất mạng đúng lúc
+      // bấm, tunnel chết, 404 vì session vốn đã rảnh). Để màn kẹt ở "đang
+      // chạy" thì người dùng bấm Dừng hoài không được và ô gõ cứ báo sai;
+      // nói thẳng lỗi rồi để họ tự quyết định gửi tiếp hay không.
+      setRunning(false);
     } finally {
+      abortLockRef.current = false;
       setAborting(false);
     }
   }
 
-  async function replyPermission(permission, response) {
+  async function replyPermission(permission, reply) {
     const pid = permission.id ?? permission.requestID;
-    const candidates = response === "allow" ? ["allow", "once", "always"] : ["deny"];
-    let lastError = "";
-    for (const value of candidates) {
-      try {
-        await ow(`${base}/permission/${encodeURIComponent(pid)}/reply`, {
-          method: "POST",
-          body: { response: value },
-        });
-        setPermissions((prev) => prev.filter((p) => p !== permission));
-        loadMessages();
-        return;
-      } catch (e) {
-        lastError = String(e.message || e);
-      }
+    // Khoá bằng ref để chạm kép không bắn hai reply cho cùng một thẻ; state
+    // bên cạnh chỉ để khoá nút (ref đổi không render lại).
+    if (permissionBusyRef.current === pid) return;
+    permissionBusyRef.current = pid;
+    setPermissionBusy(pid);
+    try {
+      await ow(`${base}/permission/${encodeURIComponent(pid)}/reply`, {
+        method: "POST",
+        body: permissionReplyBody(reply),
+      });
+      setPermissions((prev) => prev.filter((p) => p !== permission));
+      loadMessages();
+      loadStatus();
+    } catch (e) {
+      setError(`Không trả lời được yêu cầu của agent: ${e.message || e}`);
+    } finally {
+      if (permissionBusyRef.current === pid) permissionBusyRef.current = "";
+      setPermissionBusy("");
     }
-    setError(`Không trả lời được permission: ${lastError}`);
   }
 
   // Tin đang bị con trỏ revert che khuất — engine vẫn trả về đủ, nên số phải
@@ -1069,6 +1234,7 @@ export function ChatPage({ route }) {
   // Dòng trạng thái dưới transcript: đang chạy + hàng đợi offline gộp làm một
   // câu (lib/session-steer) để không phải tự chuỗi ở hai chỗ khác nhau.
   const statusLine = pendingStatusVi({ running, sending, pendingCount: queueCount });
+  const statusBusy = statusLineIsBusy({ running, sending });
 
   return (
     <>
@@ -1121,22 +1287,32 @@ export function ChatPage({ route }) {
         />
       ))}
 
-      {permissions.map((p) => (
-        <div class="permission-card" key={p.id ?? p.requestID}>
+      {permissions.map((p) => {
+        const pid = p.id ?? p.requestID;
+        const busy = permissionBusy === pid;
+        return (
+        <div class="permission-card" key={pid}>
           <b>Agent xin phép</b>
           <div style="margin-top:6px" class="mono">
             {p.title ?? p.pattern ?? JSON.stringify(p).slice(0, 160)}
           </div>
           <div class="actions">
-            <button class="btn small" onClick={() => replyPermission(p, "allow")}>
+            {/* Ba nút khớp đúng ba giá trị engine nhận (`reply`). Trước đây
+                gộp còn hai nút và gửi field sai nên thẻ không bao giờ biến mất
+                — xem permissionReplyBody trong lib/session-steer. */}
+            <button class="btn small" disabled={busy} onClick={() => replyPermission(p, "once")}>
               Cho phép
             </button>
-            <button class="btn small danger" onClick={() => replyPermission(p, "deny")}>
+            <button class="btn small ghost" disabled={busy} onClick={() => replyPermission(p, "always")}>
+              Cho phép luôn
+            </button>
+            <button class="btn small danger" disabled={busy} onClick={() => replyPermission(p, "reject")}>
               Từ chối
             </button>
           </div>
         </div>
-      ))}
+        );
+      })}
 
       <div class="chat-list">
         {/* Tóm tắt sinh ra lúc nén — mặc định ĐÓNG giống hàng tool/suy luận,
@@ -1182,7 +1358,21 @@ export function ChatPage({ route }) {
         <div class="msg assistant chat-status" role="status" aria-live="polite">
           {statusLine && (
             <>
-              <span class="spinner" /> {statusLine}
+              <span class="spinner" aria-hidden={statusBusy ? undefined : "true"} /> {statusLine}
+              {/* Bỏ hàng đợi: mất mạng rồi người dùng gõ nhầm, hoặc đã gửi
+                  tay trên máy tính — không có đường thoát thì tin sẽ cứ tự
+                  bay lên máy lúc có mạng. Một chạm, không hộp thoại. */}
+              {queueCount > 0 && (
+                <button
+                  type="button"
+                  class="btn small ghost"
+                  style={{ marginLeft: 8 }}
+                  onClick={discardQueue}
+                  aria-label={`Bỏ ${queueCount} tin nhắn đang chờ gửi lại`}
+                >
+                  Bỏ
+                </button>
+              )}
             </>
           )}
         </div>

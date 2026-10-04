@@ -140,7 +140,10 @@ export function formatTokens(n) {
   if (v === 0) return "0";
   const nf = new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 1 });
   if (v < 1000) return String(Math.round(v));
-  if (v < 1_000_000) return `${nf.format(v / 1000)}K`;
+  // Chặn trước ngưỡng làm tròn: 999_999 token là "1.000K" (đọc ra là MỘT TRIỆU
+  // trong khi thực chưa tới), vì Intl làm tròn 999.999 -> 1000 rồi mới chèn dấu
+  // phân cách nghìn. Tới ngưỡng này thì đổi sang "Tr" cho khỏi nhảy bậc.
+  if (v < 999_950) return `${nf.format(v / 1000)}K`;
   return `${nf.format(v / 1_000_000)}Tr`;
 }
 

@@ -426,6 +426,56 @@ Verification commands from repository root: `npm --prefix bridge test`; `node --
 
 Broader Chat outbox and file conflict protection remain separate work, not covered by these regression tests.
 
+## Audit tương tác toàn diện — 2026-10-04 (4 vùng, +1.9k dòng, 314 → 440 test)
+
+Bốn agent chia theo vùng file không chồng nhau (chat / vòng đời phiên / Files-Search-Settings /
+api-routing-offline), sau đó một agent đối kháng soi lại chính đống vá đó. Dưới đây là phần
+**đã kiểm chứng**, không phải phần báo cáo.
+
+### Bug do chính bản vá tạo ra (tôi tự tái hiện được, không tin báo cáo)
+
+| Lỗi | Triệu chứng | Nguyên nhân |
+|---|---|---|
+| Tin vừa gửi **biến mất** khỏi màn hình | Gõ "ok" (đã hỏi 20 lượt trước) → Gửi → SSE reconnect/tab focus → tin không còn | `mergeRefetchKeepInflight` đếm tin user theo nội dung trong **cả lịch sử** rồi trừ từ đầu, nên tin cũ "tiêu" hết chỗ của tin mới. Chốt đúng: **chỉ tin MỚI xuất hiện trong `fetched` mới xác nhận được tin chờ** (`prevIds` lọc trước), ghép theo thứ tự gửi |
+| Nén hội thoại `/compact` và lệnh `/…` bị cắt sau 30s | abort giữa lúc nén, phiên lửng lơ | `ow()` thêm trần 30s chung, nhưng engine **cố ý miễn timeout** cho `/summarize` + `/command` (opencode.ts, `SESSION_LONG_RUNNING_URL_RE → 0`). Hai hàm đó nay `timeoutMs: 0` |
+| Nút Dừng kẹt vĩnh viễn | Lượt chạy xong, `step-finish` đã về, UI vẫn "agent đang chạy…" | `sessionBusyFromMap` trả `undefined` khi map rỗng, caller giữ trạng thái cũ. Engine chỉ liệt kê phiên **đang chạy**, nên vắng mặt = rảnh → `false`. `undefined` giờ chỉ dành cho "đọc hỏng" hoặc shape lạ |
+| Trần upload nói dối | Báo 40MB nhưng mọi file 5–40MB đều hỏng 413 | `POST /files/raw` kiểm `FILE_SESSION_MAX_FILE_BYTES = 5.000.000`. Trần của web lấy đúng hạn mức engine, không phải trần body của proxy |
+
+### Bug nền tìm được, đã sửa và kiểm chứng
+
+- **Nút "Cho phép" không bao giờ có tác dụng** (nặng nhất trong đợt này): web gửi `{response:"allow"|"deny"}`, engine nhận **`{reply:"once"|"always"|"reject"}`** — engine bỏ qua field lạ nên coi như chưa trả lời, agent treo ở bước xin phép. Nguồn: `opencode-v2-adapter.ts:140` + test `opencode-archive-transport.test.ts:73-85`.
+- **Xoá phiên hỏng không bao giờ thấy lỗi**: `remove()` gọi `load()` ngay cả sau `catch`; `load()` thành công thì `setError("")` xoá mất chính dòng báo lỗi.
+- **Hash hỏng làm sập cả app**: `decodeURIComponent` trên `location.hash` ném `URIError` — mà `absorbTokenFromHash()` chạy lúc **import module**, tức một QR cắt ngang giết app trước cả khi render. Đưa vào `lib/route.js` với `safeDecode`.
+- **`data:` không khoảng trắng bị rơi**: parser cũ lọc `startsWith("data: ")`; chuẩn SSE cho phép không có space và chính engine đọc mọi nơi bằng `startsWith("data:")`. Parser mới theo đúng spec (frame nhiều dòng, CRLF, frame cuối thiếu `\n\n`).
+- **`removeKey` để lại tenant cũ** → token và tenant lệch nhau, mọi request đi nhầm máy, 401/503 không tự hồi.
+- Tin gửi lộn **hai lần**: bản optimistic được ghép với bản thật bằng `info.time.created` — `Date.now()` của điện thoại so với dấu thời gian máy tính, hai đồng hồ không bao giờ bằng nhau.
+- Hàng đợi offline **rò tin sang phiên khác** (bản đồ `sessionId -> tin` thay một hàng đợi chung); bấm hai lần Gửi gửi trùng (khoá bằng ref vì state chỉ đổi ở render kế tiếp); `run()` xoá state của phiên khác; file text >8MB giết tab điện thoại (`textTooLarge`); upload nhiều file chỉ báo lỗi file cuối; `snippetAround` lùi quá tay khi từ khoá dài hơn cửa sổ; `formatTokens(999999)` = "1.000K" (đọc ra là một triệu); bấm "Thu hồi" thiếu `devices` làm sập màn Cài đặt.
+
+### Kiểm chứng thật (không chỉ test)
+
+Chạy app thật trên `vite dev` (proxy `/api` → bridge thật → engine thật), mở phiên `Airwallet` — đúng
+phiên đang treo — và gửi tin thật: tin hiện ngay, nút Gửi hoá nút Dừng, dòng trạng thái báo đang chạy,
+agent trả lời "PING", transcript về đúng 4 tin **không trùng**, và sau khi sửa `sessionBusyFromMap` thì
+dòng trạng thái trống + nút Dừng biến mất. Danh sách phiên, trang Files (kể cả tên thư mục tiếng Việt)
+và deep-link `?open=` mở viewer với nội dung thật đều render đúng.
+
+### Cố ý KHÔNG làm
+
+- Không thêm rate-limit, bước xác nhận hay hộp thoại bắt buộc (chủ dự án đã cấm).
+- Không chặn xoá phiên đang chạy: desktop cũng không chặn, engine tự abort lượt đang chạy.
+- Không validate mã ghép ở client: làm thêm sẽ tạo nguồn chân lý thứ hai, sửa bridge là xoá luôn
+  khả năng ghép máy của mọi người.
+- `sseUrl` vẫn đặt token trong `?_t=` (dùng cho `<img>`/`<iframe>` xem ảnh-PDF, không gửi được header).
+  Token lọt vào history/referrer của trình duyệt; đổi được thì phải qua blob URL — ghi nhận, chưa làm.
+- Web chỉ nói được opencode **v1** (`/opencode/*`). Nếu bật `chatRouting` (v2 sidecar) thì đường
+  question/permission của v2 khác hẳn; khi đó phải sửa theo, không phải lỗi hiện tại.
+
+### Xác minh hợp đồng API
+
+Đối chiếu từng endpoint web gọi với engine: **14/14 khớp**, kể cả hai hàm từng bị nghi ngờ sai
+(`owReplyQuestion`/`owRejectQuestion` — `/question/{id}/reply` với body `{answers}`, không có
+sessionID là **đúng** cho v1; nhầm với bản v2 mới có sessionID trong path).
+
 ## Tin nhắn gửi đi không ai trả lời — 2026-10-04 (web: model nhớ bị engine đổi tên)
 
 **Triệu chứng**: gửi tin trên điện thoại, tin được lưu vào transcript nhưng agent không chạy — không
@@ -663,6 +713,13 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | Want to receive files the agent created without digging in the Files tab | The engine has no dedicated file part — the agent writes via the `write` tool then mentions the path in text. `chat.jsx` (`findFileRefsInText` + `FileRefCard` + `linkifyFiles`) shows slim text rows in the message — tapping one opens the file straight in the Files viewer (view/download) |
 | Want to send a file/image from the phone to the agent | The paperclip in the `chat.jsx` composer: uploads into `mobile-uploads/` via `owUploadFile()` then sends the prompt with the path (the engine takes no file part) |
 | Downloads show no % / no resume | `bridge/src/proxy.js` used to forward only 5 headers — added `content-length/content-range/accept-ranges` |
+| Bấm "Cho phép" xong agent vẫn đứng ở bước xin phép | Body sai tên field: web gửi `{response:"allow"|"deny"}`, engine nhận `{reply:"once"|"always"|"reject"}` và bỏ qua field lạ. `web/src/lib/session-steer.js` (`permissionReplyBody`) + `chat.jsx` |
+| Nút Dừng kẹt sau khi lượt chạy xong | `sessionBusyFromMap` trả `undefined` cho map rỗng nên caller giữ `running=true`. Engine chỉ liệt kê phiên đang chạy → vắng mặt là rảnh (`false`); `undefined` chỉ dành cho "đọc hỏng"/shape lạ. `web/src/lib/session-steer.js` |
+| Nén hội thoại bị báo hết thời gian chờ giữa chừng | `owSummarize` + `owRunCommand` nay `timeoutMs: 0` — engine cũng miễn timeout cho `/summarize` và `/command` (opencode.ts) |
+| Tin vừa gửi biến mất khi mở lại app / SSE reconnect | `mergeRefetchKeepInflight` trong `web/src/lib/chat-stream.js`: chỉ tin MỚI trong `fetched` mới xác nhận được tin chờ (`prevIds` lọc trước khi đếm theo nội dung) |
+| Upload 5–40MB luôn hỏng dù báo "giới hạn 40 MB" | `MAX_UPLOAD_BYTES` lấy đúng `FILE_SESSION_MAX_FILE_BYTES = 5.000.000` của engine (`web/src/api.js`) |
+| Hash/QR cắt ngang làm app trắng màn | `decodeURIComponent` trên `location.hash` ném `URIError` lúc import module. `web/src/lib/route.js` (`safeDecode`), dùng ở `app.jsx` + `files.jsx` |
+| Chat đứng im sau vài tin (stream không vào) | Parser SSE cũ lọc `startsWith("data: ")` nên rơi frame không có space. `web/src/lib/sse.js` viết lại theo spec, `takeFrame` export ra test |
 | Tin gửi đi không ai trả lời (engine nhận + lưu message, không chạy, không báo lỗi) | Model trong `localStorage.owm_model` không còn trong catalog của engine — guard `owm_agent` có nhưng `owm_model` thì không. `web/src/lib/model-behavior.js` (`resolveKnownModel` + `isModelUsable`) + `chat.jsx` (đối chiếu sau `setModels`, chặn ở `flushQueue`); test trong `web/test/model-behavior.test.js` |
 | `.xlsx`/`.docx` link opens a blank page instead of downloading | `bridge/src/proxy.js` (`shouldForceDownload` + `rawPathOf`): the engine answers `inline` on `/files/raw` and the old fallback regex matched the query string, so it never fired — now the path is matched query-free and office/archive/binary extensions get `attachment`. Images/PDF/media stay `inline`. Real-HTTP proof in `bridge/test/proxy-download.test.js` |
 | iOS download opens in a tab instead of saving / no progress on big files | `web/src/api.js` (`owDownload()`: fetch with auth header + stream read for % + AbortController) + `files.jsx` (Blob download + progress bar + Cancel + Share via `navigator.share` for iOS "Save to Files") + `bridge/src/proxy.js` (adds a `content-disposition: attachment` fallback from `?path=` when upstream forgets); test in `bridge/test/bridge.test.js` + `filenameFromDisposition` in `web/test/api-contract.test.js` |

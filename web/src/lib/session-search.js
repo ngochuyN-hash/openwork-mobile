@@ -86,8 +86,12 @@ export function snippetAround(text, query, max = 140) {
     }
   }
   if (at < 0) return cut(flat, 0, cap);
-  // Lùi vừa đủ để chữ khớp không bị cắt ở mép cửa sổ.
-  const start = Math.max(0, at - Math.floor((cap - len) / 2));
+  // Lùi vừa đủ để chữ khớp không bị cắt ở mép cửa sổ. Khi từ khoá DÀU HƠN
+  // cửa sổ (người dùng bê nguyên một câu dài vào ô tìm) thì `(cap-len)/2`
+  // âm — lùi quá tay, cửa sổ bắt đầu SAU chữ khớp và người dùng thấy một
+  // đoạn không liên quan. Trong trường hợp đó chỉ lùi về 0.
+  const room = Math.max(0, Math.floor((cap - len) / 2));
+  const start = Math.max(0, at - room);
   return cut(flat, start, cap);
 }
 

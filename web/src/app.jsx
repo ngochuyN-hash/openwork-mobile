@@ -1,5 +1,7 @@
 import { useEffect, useState, useCallback } from "preact/hooks";
 import { getToken, apiState, apiWakeOpenWork, apiRecheck, apiOpenWorkPath } from "./api.js";
+import { parseHashRoute } from "./lib/route.js";
+import { networkErrorMessage } from "./lib/net.js";
 import { BackIcon, WsIcon, GearIcon, MessageIcon } from "./components/icons.jsx";
 import { Banner } from "./components/ui.jsx";
 import { OpenWorkFix } from "./components/openwork-fix.jsx";
@@ -14,7 +16,8 @@ import { FilesPage } from "./pages/files.jsx";
 import { SearchPage } from "./pages/search.jsx";
 import { SettingsPage } from "./pages/settings.jsx";
 
-// Hash router:
+// Hash router (đọc/ghi ở lib/route.js — thuần, test được bằng node --test;
+// app.jsx là JSX nên không import trực tiếp test được):
 //   #/                     -> home (session gần đây gộp mọi workspace)
 //   #/workspaces           -> danh sách workspace
 //   #/search               -> tìm phiên trên MỌI workspace
@@ -24,20 +27,7 @@ import { SettingsPage } from "./pages/settings.jsx";
 //   #/ws/:id/files         -> files
 //   #/settings             -> settings (gồm mục "Máy của tôi" — chùm chìa nhiều máy)
 function parseHash() {
-  const hash = location.hash.replace(/^#/, "");
-  const [path, query] = hash.split("?");
-  const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
-  const params = new URLSearchParams(query ?? "");
-  if (parts[0] === "settings") return { view: "settings" };
-  if (parts[0] === "workspaces") return { view: "workspaces" };
-  if (parts[0] === "search") return { view: "search", wsId: "" };
-  if (parts[0] === "ws" && parts[1]) {
-    if (parts[2] === "search") return { view: "search", wsId: parts[1] };
-    if (parts[2] === "chat" && parts[3]) return { view: "chat", wsId: parts[1], sessionId: parts[3] };
-    if (parts[2] === "files") return { view: "files", wsId: parts[1], path: params.get("path") ?? "" };
-    return { view: "sessions", wsId: parts[1] };
-  }
-  return { view: "home" };
+  return parseHashRoute(location.hash);
 }
 
 export function navigate(hash) {
@@ -72,15 +62,22 @@ export function App() {
       setState(await apiState());
     } catch (error) {
       if (error.message === "UNPAIRED") setPaired(false);
-      else setState({ ok: false, error: String(error.message || error) });
+      // Mạng chết / tunnel treo: `fetch` ném TypeError "Failed to fetch" (tiếng
+      // Anh, không nói nguyên nhân). `networkErrorMessage` dịch sang tiếng Việt
+      // và tách hẳn "hết thời gian chờ" khỏi "mất mạng" — hai chuyện khác nhau,
+      // người dùng xử lý cũng khác nhau.
+      else setState({ ok: false, error: networkErrorMessage(error) });
     }
   }, []);
 
+  // KHÔNG để `route.view` trong deps: mỗi lần đổi trang là reset timer và bắn
+  // thêm một vòng poll ngay — lướt nhanh qua vài trang là dồn request /api/state
+  // vô ích. Vòng 15s là đủ; điều kiện duy nhất cần là callback ổn định.
   useEffect(() => {
     refreshState();
     const timer = setInterval(refreshState, 15_000);
     return () => clearInterval(timer);
-  }, [refreshState, route.view]);
+  }, [refreshState]);
 
   // Chùm chìa đổi (rời máy / ngắt hẳn máy active) — App tự cập nhật paired
   // (xóa sạch chìa thì về màn đăng nhập) và poll lại máy mới.

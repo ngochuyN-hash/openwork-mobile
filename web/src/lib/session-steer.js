@@ -88,25 +88,146 @@ export function mergeSteerTexts(pending, incoming = "") {
 }
 
 /**
- * Chia hàng đợi chờ thành nhiều prompt, mỗi prompt tối đa `maxPerPrompt` tin.
+ * Chia hàng đợi chờ thành nhiều lô, mỗi lô tối đa `maxPerPrompt` tin.
  *
  * Vì sao không gộp hết thành một: 30 tin chờ dồn vào một lượt sẽ làm lượt đó
  * nặng hơn nhiều so với từng tin một, và người dùng mất khả năng biết tin nào
- * agent đã xử. Cách chia này giữ nguyên hành vi cũ (flushQueue gửi từng tin,
- * chat.jsx:193-209) chỉ gom nhóm cho đỡ tốn lượt.
+ * agent đã xử.
  *
- * @param {string[]} pending
- * @param {{maxPerPrompt?: number}} [opts]
- * @returns {string[]} danh sách prompt, gửi theo thứ tự
+ * @returns {{prompt: string, texts: string[], from: number}[]} danh sách lô,
+ *   kèm số tin mỗi lô phủ để lô hỏng giữa chừng biết chừng nào tin đã ĐI và
+ *   chừng nào phải GIỮ (không đoán bừa).
  */
-export function planSteerSends(pending, opts = {}) {
+export function planSteerBatches(pending, opts = {}) {
   const texts = normalizeTexts(pending);
   const size = Math.max(1, Math.floor(opts?.maxPerPrompt) || STEER_MAX_PER_PROMPT);
   const out = [];
   for (let i = 0; i < texts.length; i += size) {
-    out.push(texts.slice(i, i + size).join(JOINER));
+    const slice = texts.slice(i, i + size);
+    out.push({ prompt: slice.join(JOINER), texts: slice, from: i });
   }
   return out;
+}
+
+// ---- Hàng đợi offline: thuộc đúng phiên đã gõ ----
+//
+// Hàng đợi nằm trong ref của trang chat, mà trang chat SỐNG LÂU hơn một phiên
+// (đổi phiên chỉ đổi route, không unmount). Nếu không gắn nhãn phiên, lúc rò
+// mạng ở phiên A rồi người dùng chuyển sang phiên B, hàng đợi A sẽ được
+// `flushQueue` của B đẩy vào ĐÚNG phiên B — tin của phiên A nằm trong hội
+// thoại của phiên B.
+//
+// Giữ theo BẢN ĐỒ sessionId -> tin, không phải một danh sách đơn: bấm qua
+// phiên B rồi lại mất mạng và gõ ở B sẽ KHÔNG được phép xoá mất tin đang chờ
+// của A.
+
+/** Hàng đợi rỗng (null = chưa có tin chờ nào ở phiên nào). */
+export function createQueue(sessionId = "", texts = []) {
+  const sid = String(sessionId ?? "");
+  if (!sid && !(Array.isArray(texts) && texts.length)) return { bySession: {} };
+  return { bySession: { [sid]: normalizeTexts(texts) } };
+}
+
+function bucket(queue, sessionId, create = false) {
+  const bySession = queue?.bySession && typeof queue.bySession === "object" ? queue.bySession : {};
+  const sid = String(sessionId ?? "");
+  if (create && !bySession[sid]) return { bySession: { ...bySession, [sid]: [] } };
+  return { bySession };
+}
+
+/** Tin chờ của ĐÚNG phiên này — hàng đợi phiên khác trả về rỗng. */
+export function queueFor(queue, sessionId) {
+  const list = bucket(queue, sessionId).bySession[String(sessionId ?? "")];
+  return Array.isArray(list) ? list : [];
+}
+
+/** Thay cả hàng đợi của phiên (chuẩn hoá: bỏ rỗng, bỏ trùng liền kề). */
+export function queueSet(queue, sessionId, texts) {
+  const sid = String(sessionId ?? "");
+  const next = { ...bucket(queue, sid, true).bySession };
+  const clean = normalizeTexts(texts);
+  if (clean.length) next[sid] = clean;
+  else delete next[sid];
+  return { bySession: next };
+}
+
+/** Nối thêm tin vào hàng đợi của phiên. */
+export function queueAdd(queue, sessionId, texts) {
+  const sid = String(sessionId ?? "");
+  return queueSet(queue, sid, [...queueFor(queue, sid), ...(Array.isArray(texts) ? texts : [texts])]);
+}
+
+/**
+ * Đặt lại phần CHƯA gửi của một lượt flush.
+ *
+ * Lúc flush bắt đầu, hàng đợi cũ đã bị dọn sạch; trong lúc chờ, người dùng có
+ * thể xếp thêm tin mới (mất mạng lúc đó) — những tin đó nằm ở `queue` và phải
+ * được GIỮ. `unsent` phải đứng TRƯỚC chúng: người dùng gõ trước, gửi sau.
+ */
+export function queueRestore(queue, sessionId, unsent) {
+  const sid = String(sessionId ?? "");
+  const added = queueFor(queue, sid);
+  // Dọn ô của phiên này rồi viết lại theo đúng thứ tự thời gian.
+  return queueSet(queue, sid, [...(Array.isArray(unsent) ? unsent : []), ...added]);
+}
+
+// ---- Trả lời "Agent xin phép" ----
+
+/**
+ * Body đúng cho `POST /permission/:id/reply`.
+ *
+ * Engine nhận `{ reply: "once" | "always" | "reject" }` — KHÔNG phải
+ * `{ response: "allow" | "deny" }`. Đối chiếu:
+ *  - apps/app/tests/opencode-archive-transport.test.ts:73-85 khoá đúng body
+ *    `JSON.stringify({ reply })` cho cả ba giá trị;
+ *  - apps/app/src/app/lib/opencode-v2-adapter.ts:140 `type PermissionReply =
+ *    "once" | "always" | "reject"`;
+ *  - apps/app/src/react-app/domains/session/sync/use-session-interactions.ts:388
+ *    là nơi desktop gọi, cũng truyền `reply`.
+ *
+ * Web trước đây gửi field `response` với giá trị `allow`/`deny` — engine bỏ
+ * qua, coi như chưa trả lời, và agent treo ở bước xin phép mãi mãi: bấm
+ * "Cho phép" xong thẻ vẫn còn, nút không có phản ứng gì.
+ *
+ * @param {"once"|"always"|"reject"} reply
+ */
+export function permissionReplyBody(reply) {
+  return { reply: String(reply ?? "reject") };
+}
+
+// ---- Trạng thái chạy của phiên ----
+
+/** Engine báo loại nào coi là "đang chạy". Nguồn: apps/app/src/react-app/
+ *  domains/session/status/session-activity-store.ts:112-125 — `busy` (v1),
+ *  `running` (v2, xem apps/server/src/opencode-v2-read-adapter.ts:46-50) và
+ *  `retry` (đang chờ thử lại sau lỗi) đều là chưa xong. */
+export function isBusyStatusType(type) {
+  const t = String(type ?? "");
+  return t === "busy" || t === "running" || t === "retry";
+}
+
+/**
+ * Phiên này có đang chạy không, đọc từ map `/session/status` của engine.
+ *
+ * Key của map có thể là id thô lẫn id đã gắn tiền tố `ses_` (engine trả về
+ * tuỳ bản), nên tra cả hai — bỏ sót một bên là nút Dừng nhấp nháy.
+ *
+ * Phân biệt hai kiểu "không thấy":
+ * - Map RỖNG `{}` = engine nói KHÔNG có phiên nào chạy. Đây là tin đúng, phải
+ *   trả `false`. Trả `undefined` ở đây là nút Dừng kẹt vĹnh viễn sau khi
+ *   lượt chạy xong: engine đã trả `{}`, tin `step-finish` đã về, mà UI vẫn
+ *   hiện "agent đang chạy…".
+ * - CÓ entry cho phiên nhưng shape không nhận ra = chưa đủ thông tin, để caller
+ *   giữ trạng thái hiện tại thay vì dập tắt mù.
+ */
+export function sessionBusyFromMap(map, sessionId) {
+  if (!map || typeof map !== "object") return undefined; // không đọc được: caller giữ trạng thái
+  const sid = String(sessionId ?? "");
+  const direct = map[sid] ?? map[`ses_${sid}`];
+  // Engine chỉ liệt kê phiên ĐANG chạy; phiên không có trong map là rảnh.
+  if (direct === undefined) return false;
+  if (typeof direct !== "object" || typeof direct.type !== "string") return undefined; // shape lạ: đừng đoán
+  return isBusyStatusType(direct.type);
 }
 
 /**
@@ -131,6 +252,18 @@ export function isRetryableSendError(err) {
 // ---- Chuỗi tiếng Việt cho UI (chỗ gọi nằm ở chat.jsx) ----
 
 /**
+ * Ô gõ sau khi bấm Gửi: có nên trả nội dung đã xoá về không?
+ *
+ * Mất mạng giữa đường thì tin đã nằm trong hàng đợi và sẽ tự đi khi có mạng
+ * — dựng lại trong ô gõ chỉ khiến người dùng tưởng phải bấm Gửi lần nữa (thà
+ * gửi hai lần). Nhưng lỗi MÁY ĐÃ TỪ CHỐI (4xx) thì tin sẽ không bao giờ đi —
+ * phải trả lại ô gõ để họ sửa rồi gửi lại, chứ im lặng xoá mất.
+ */
+export function shouldRestoreComposer({ queued }) {
+  return !queued;
+}
+
+/**
  * Dòng trạng thái dưới danh sách tin (aria-live): đang chạy + có tin chờ.
  * Rỗng = không có gì cần nói.
  */
@@ -140,6 +273,16 @@ export function pendingStatusVi({ running, sending, pendingCount } = {}) {
   const n = Number(pendingCount) || 0;
   if (n > 0) parts.push(`Đang gửi lại ${n} tin nhắn khi có mạng…`);
   return parts.join(" · ");
+}
+
+/**
+ * Dòng trạng thái có thực sự đang "chạy" không — quyết định có hiện spinner.
+ *
+ * Hàng đợi offline đứng yên cho tới lúc có mạng: bật vòng quay cho nó là nói
+ * dối người đọc bằng mắt (và screen reader đọc "đang tải" rồi im luôn).
+ */
+export function statusLineIsBusy({ running, sending, pendingCount } = {}) {
+  return Boolean(running) || Boolean(sending);
 }
 
 /** Gợi ý trong ô gõ. Khi busy phải nói rõ tin sẽ CHÈN vào lượt chạy hiện tại. */

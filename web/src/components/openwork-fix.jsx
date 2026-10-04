@@ -105,7 +105,16 @@ export function OpenWorkFix({ candidates, onChoose, saving, title }) {
           {list.map((p) => (
             <div class="file-row" key={p} style="cursor:default">
               <span class="name mono">{p}</span>
-              <button class="btn small" disabled={saving} onClick={() => submit(p)}>
+              {/* aria-label kèm đường dẫn: nhãn "Dùng" trần khiến người
+                  dùng đọc bằng màn hình nghe N hàng giống hệt nhau, không biết
+                  dòng nào ứng với file nào. */}
+              <button
+                type="button"
+                class="btn small"
+                aria-label={`Dùng đường dẫn ${p}`}
+                disabled={saving}
+                onClick={() => submit(p)}
+              >
                 Dùng
               </button>
             </div>
@@ -144,6 +153,7 @@ export function OpenWorkFix({ candidates, onChoose, saving, title }) {
           placeholder="C:\Users\...\OpenWork.exe"
         />
         <button
+          type="button"
           class="btn"
           style="flex:none"
           disabled={saving || !manualPath.trim()}

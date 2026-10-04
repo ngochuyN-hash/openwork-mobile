@@ -39,7 +39,10 @@ export function Empty({ title, hint, actionLabel, onAction, icon }) {
       <p class="empty-title">{title}</p>
       {hint && <p class="empty-hint">{hint}</p>}
       {actionLabel && (
-        <button class="btn small primary" onClick={onAction}>
+        // `type="button"` BẮT BUỘC: component này dùng chung, và `<button>` mặc
+        // định là submit — đặt trong `<form>` (sessions.jsx có hai form) thì
+        // bấm "Tải file lên" / "Thử lại" sẽ submit form ngoài ý muốn.
+        <button type="button" class="btn small primary" onClick={onAction}>
           {actionLabel}
         </button>
       )}
@@ -52,7 +55,7 @@ export function Banner({ kind = "err", children, actionLabel, onAction }) {
     <div class={`banner ${kind}`} role="alert">
       <span>{children}</span>
       {actionLabel && (
-        <button class="btn small ghost" onClick={onAction}>
+        <button type="button" class="btn small ghost" onClick={onAction}>
           {actionLabel}
         </button>
       )}
@@ -67,10 +70,10 @@ export function ConfirmDialog({ title, body, confirmLabel = "Xác nhận", onCon
         <h3>{title}</h3>
         {body && <p class="sheet-body">{body}</p>}
         <div class="sheet-actions">
-          <button class="btn ghost" onClick={onClose}>
+          <button type="button" class="btn ghost" onClick={onClose}>
             Đóng
           </button>
-          <button class="btn danger-solid" onClick={onConfirm}>
+          <button type="button" class="btn danger-solid" onClick={onConfirm}>
             {confirmLabel}
           </button>
         </div>

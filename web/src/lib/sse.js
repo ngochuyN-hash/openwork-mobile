@@ -18,7 +18,37 @@ function headersFor() {
 }
 
 /**
- * Nối 1 lượt: GET stream, bóc từng dòng `data:` và gọi onEvent(type, data).
+ * Bóc một FRAME SSE theo đúng chuẩn: gom mọi dòng `data:` trong frame nối bằng
+ * "\n" rồi mới JSON.parse một lần (engine opencode phát `data: {...}` — có
+ * space — nhưng chuẩn SSE cho phép `data:{...}` không space, và opencode
+ * phát cả hai; bản cũ lọc bằng `startsWith("data: ")` nên RƠI IM LẶNG mọi
+ * frame không có space, biểu hiện ngoài đời là app đứng im không nhận event).
+ *
+ * Frame = các dòng giữa hai dòng trống. Comment (`:keepalive`), `event:`,
+ * `id:`, `retry:` và dòng rỗng bị bỏ. Frame không có `data:` hoặc JSON hỏng ->
+ * null (không ném: rác trên wire không được làm đứt stream).
+ */
+export function parseSseFrame(frame) {
+  const dataLines = [];
+  for (const raw of String(frame ?? "").split("\n")) {
+    const line = raw.replace(/\r$/, "");
+    if (!line.startsWith("data:")) continue;
+    // Chuẩn SSE: bỏ ĐÚNG MỘT space ngay sau dấu ":" (nếu có), phần còn lại
+    // là dữ liệu — kể cả khi nó bắt đầu bằng space thật.
+    dataLines.push(line.slice(5).replace(/^ /, ""));
+  }
+  if (!dataLines.length) return null;
+  const text = dataLines.join("\n");
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Tích 1 lượt: GET stream, bóc từng frame `data:` và gọi onEvent(type, data).
  * Chỉ thoát khi stream đóng / abort / lỗi fetch — event nghiệp vụ không ném.
  */
 async function readOnce(path, { onEvent, onOpen, signal }) {
@@ -40,21 +70,32 @@ async function readOnce(path, { onEvent, onOpen, signal }) {
     const { done, value } = await reader.read();
     if (done) break;
     buf += dec.decode(value, { stream: true });
-    let idx;
-    while ((idx = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, idx).replace(/\r$/, "");
-      buf = buf.slice(idx + 1);
-      // ":keepalive" của bridge và dòng trống/comment — bỏ qua.
-      if (!line.startsWith("data: ")) continue;
-      let data = null;
-      try {
-        data = JSON.parse(line.slice(6));
-      } catch {
-        continue;
-      }
-      onEvent(typeof data?.type === "string" ? data.type : "message", data);
+    // Tách theo ranh giới FRAME (dòng trống), không theo từng dòng: một payload
+    // JSON có thể nhiều dòng `data:` và chỉ hợp lệ khi nối lại rồi parse MỘT lần.
+    // Một chunk có thể chứa nhiều frame — phải đẩy HẾT ra, không được giữ lại
+    // frame cuối rồi bỏ các frame trước.
+    for (let frame = takeFrame(buf); frame; frame = takeFrame(buf)) {
+      buf = frame.rest;
+      emitFrame(frame.text, onEvent);
     }
   }
+  // Server đóng giữa chừng: dòng cuối không kịp `\n\n` vẫn là frame hợp lệ,
+  // bỏ nó thì mất event cuối mà không có lý do.
+  if (buf.trim()) emitFrame(buf, onEvent);
+}
+
+/** Cắt frame đầu tiên trong `buf` -> {text, rest} | null. */
+export function takeFrame(buf) {
+  const at = buf.search(/\r?\n\r?\n/);
+  if (at < 0) return null;
+  const sep = /\r?\n\r?\n/.exec(buf.slice(at))[0];
+  return { text: buf.slice(0, at), rest: buf.slice(at + sep.length) };
+}
+
+function emitFrame(text, onEvent) {
+  const data = parseSseFrame(text);
+  if (data === null) return; // keepalive/comment/rác
+  onEvent(typeof data?.type === "string" ? data.type : "message", data);
 }
 
 /**
@@ -87,6 +128,7 @@ export function connectEvents(path, onEvent, { onOpen, onLost } = {}) {
   return () => {
     stopped = true;
     clearTimeout(timer);
+    timer = null;
     ac.abort();
   };
 }

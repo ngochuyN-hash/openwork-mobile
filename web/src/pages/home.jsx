@@ -13,6 +13,11 @@ import {
   flagOn,
 } from "../lib/session-organize.js";
 import { sessionTitleOf } from "../lib/session-rename.js";
+import {
+  // Xoá kiểu lạc quan + nhận diện "đang chạy" (luật thuần ở lib/session-ops.js).
+  dropSessionItem,
+  isSessionBusy,
+} from "../lib/session-ops.js";
 import { PinIcon } from "./sessions.jsx";
 
 /** Màu chấm nhận diện workspace — hash id, đúng kiểu desktop (mỗi ws 1 màu). */
@@ -32,28 +37,45 @@ export function HomePage() {
   const [error, setError] = useState("");
   const [openId, setOpenId] = useState(null); // key `${wsId}:${sid}` — 1 dòng vuốt mở / lúc
   const timerRef = useRef(null);
+  // Chống race (mẫu của pages/files.jsx:41-64): poll 15s vừa bắt đầu thì người
+  // dùng bấm "Thử lại", hoặc vuốt xoá xong lại load — lượt cũ về sau không
+  // được ghi đè lượt mới. `seq` cho từng lượt, `abort` để bỏ request thừa
+  // (mỗi lượt là 8 workspace x 2 call — tốn băng thông điện thoại).
+  const seqRef = useRef(0);
+  const abortRef = useRef(null);
+  const itemsRef = useRef(null); // bản sao mới nhất, để hoàn tác xoá lạc quan
+  itemsRef.current = items;
+  const deletingRef = useRef(new Set());
+  const aliveRef = useRef(true);
 
   const load = useCallback(async () => {
+    const seq = ++seqRef.current;
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    const stale = () => !aliveRef.current || seq !== seqRef.current;
     try {
-      const payload = await ow("/workspaces");
+      const payload = await ow("/workspaces", { signal: ctrl.signal });
+      if (stale()) return;
       const wss = unwrap(payload)?.workspaces ?? payload?.workspaces ?? [];
       const slice = wss.slice(0, 8);
       const [sessRes, statRes] = await Promise.allSettled([
         Promise.all(
           slice.map((ws) =>
-            ow(`/workspace/${encodeURIComponent(ws.id)}/opencode/session`)
+            ow(`/workspace/${encodeURIComponent(ws.id)}/opencode/session`, { signal: ctrl.signal })
               .then((p) => (unwrap(p) ?? []).map((s) => ({ ws, session: s })))
               .catch(() => [])
           )
         ),
         Promise.all(
           slice.map((ws) =>
-            ow(`/workspace/${encodeURIComponent(ws.id)}/opencode/session/status`)
+            ow(`/workspace/${encodeURIComponent(ws.id)}/opencode/session/status`, { signal: ctrl.signal })
               .then((p) => ({ wsId: ws.id, map: unwrap(p) ?? p ?? {} }))
               .catch(() => null)
           )
         ),
       ]);
+      if (stale()) return;
       const groups = sessRes.status === "fulfilled" ? sessRes.value : [];
       const merged = groups.flat().sort(
         (a, b) => (b.session.time?.updated ?? 0) - (a.session.time?.updated ?? 0)
@@ -76,18 +98,28 @@ export function HomePage() {
         setStatuses(next);
       }
     } catch (e) {
+      if (stale() || e?.name === "AbortError") return;
+      // KHÔNG xoá sạch danh sách khi một lượt poll hỏng: máy tính ngủ hoặc
+      // rớt mạng giữa lúc app mở là Home trắng bệch "Chưa có session nào",
+      // người dùng tưởng mất sạch phiên. Giữ danh sách cũ, chỉ báo lỗi.
       setError(String(e.message || e));
-      setItems([]);
+      if (itemsRef.current === null) setItems([]);
     }
   }, []);
 
   useEffect(() => {
+    aliveRef.current = true;
     load();
     timerRef.current = setInterval(load, 15_000); // home poll nhẹ (SSE chỉ ở trong workspace)
-    return () => clearInterval(timerRef.current);
+    return () => {
+      aliveRef.current = false;
+      clearInterval(timerRef.current);
+      abortRef.current?.abort(); // đừng vẽ vào màn đã đóng
+    };
   }, [load]);
 
-  const busyCount = items?.filter((it) => statuses[`${it.ws.id}:${it.session.id}`] === "busy").length ?? 0;
+  const busyCount =
+    items?.filter((it) => isSessionBusy(statuses[`${it.ws.id}:${it.session.id}`])).length ?? 0;
 
   /** Cờ ghim/lưu trữ của workspace chứa phiên này. */
   const flagsOf = (wsId) => flagMap[wsId] ?? { pinned: [], archived: [] };
@@ -109,14 +141,32 @@ export function HomePage() {
     setFlagMap((prev) => ({ ...prev, [ws.id]: next }));
   }
 
+  /**
+   * Xoá phiên bằng cử chỉ vuốt — cùng ba lỗi đã sửa ở sessions.jsx:
+   * chặn vuốt hai lần, mất dòng ngay (đỡ tay bấm tiếp tưởng chưa xoá), và
+   * lỗi xoá KHÔNG bị `load()` ngay sau đó xoá mất (trước đây `load()` gọi
+   * setError("") nên máy tính ngủ lúc vuốt là không có một chữ báo nào).
+   */
   async function remove(ws, session) {
     setOpenId(null);
+    const sid = String(session?.id ?? "");
+    const wsId = String(ws?.id ?? "");
+    const key = `${wsId}:${sid}`;
+    if (!sid || deletingRef.current.has(key)) return;
+    deletingRef.current.add(key);
+    const before = itemsRef.current;
+    const afterDrop = dropSessionItem(before, wsId, sid);
+    setItems(afterDrop);
     try {
-      await owDeleteSession(ws.id, session.id);
+      await owDeleteSession(wsId, sid);
+      setError("");
+      load();
     } catch (e) {
-      setError(String(e.message || e));
+      if (itemsRef.current === afterDrop) setItems(before);
+      setError(`Không xoá được phiên này: ${e?.message || e}`);
+    } finally {
+      deletingRef.current.delete(key);
     }
-    load();
   }
 
   return (
@@ -155,8 +205,7 @@ export function HomePage() {
       {shown?.map(({ ws, session }) => {
         const status = statuses[`${ws.id}:${session.id}`];
         const pinned = isPinned(ws.id, session.id);
-        const key = `${ws.id}:${session.id}`;
-        return (
+        const key = `${ws.id}:${session.id}`;        return (
           <SwipeRow
             key={key}
             open={openId === key}
@@ -190,7 +239,7 @@ export function HomePage() {
                   >
                     <PinIcon size={16} filled={pinned} />
                   </button>
-                  <span class={`dot ${status === "busy" ? "busy" : "ok"}`} aria-label={status ?? "idle"} />
+                  <span class={`dot ${isSessionBusy(status) ? "busy" : "ok"}`} aria-label={status ?? "idle"} />
                 </div>
               </div>
               <div class="row-between" style="margin-top:6px">

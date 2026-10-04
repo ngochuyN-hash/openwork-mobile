@@ -37,3 +37,14 @@ test("pairingSecondsLeft: đã qua mốc trả 0, không âm", () => {
   assert.equal(pairingSecondsLeft(0, now), 0);
   assert.equal(pairingSecondsLeft(NaN, now), 0);
 });
+
+test("pairingSecondsLeft dùng floor như bridge — không lệch 1 giây", () => {
+  const now = 1_700_000_000_000;
+  const deadline = pairingDeadline(1800, now);
+  // Còn 1799.6s: floor -> 1799 (khớp bridge), round -> 1800 (lệch, hiện
+  // "còn 30:00" khi bridge đã tính 29:59).
+  assert.equal(pairingSecondsLeft(deadline, now + 400), 1799);
+  assert.equal(formatPairingCountdown(pairingSecondsLeft(deadline, now + 400)), "29:59");
+  // Còn 0.4s: floor -> 0, không bao giờ hiện "còn 1s" khi bridge đã hết hạn.
+  assert.equal(pairingSecondsLeft(deadline, deadline - 400), 0);
+});

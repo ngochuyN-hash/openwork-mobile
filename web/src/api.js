@@ -2,12 +2,20 @@
 import { normalizeSessionTitle } from "./lib/session-rename.js";
 import { buildSummarizeBody, summarizePath } from "./lib/session-compact.js";
 import { buildPromptModelFields } from "./lib/model-behavior.js";
+import { parseHashParam } from "./lib/route.js";
+import { withTimeoutSignal } from "./lib/net.js";
 
 const TOKEN_KEY = "owm_token";
 // Multi-tenant: "phòng" = máy đang kết nối. Lưu kèm token; mọi request kèm
 // header x-owm-tenant (worker dùng để chọn đúng bridge), SSE dùng ?_m=.
 const TENANT_KEY = "owm_tenant";
 const TENANT_NAME_KEY = "owm_tenant_name";
+
+// Trần chờ cho request qua tunnel. Engine desktop dùng 10s cho request không
+// phải stream (app/lib/opencode.ts:44); web đi qua thêm 2 chặng (worker ->
+// cloudflared -> bridge) nên để rộng hơn, nhưng KHÔNG để vô hạn — fetch tới
+// tunnel treo không tự hết và UI sẽ kẹt vĩnh viễn ở "đang tải".
+const OW_TIMEOUT_MS = 30_000;
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY) ?? "";
@@ -107,6 +115,11 @@ export function removeKey(tenant) {
   const next = keys[0];
   if (next) {
     setToken(next.token);
+    // setTenant("") cố tình KHÔNG ghi — nhưng cũng không XOÁ được phòng cũ đã
+    // nằm trong storage. Thăng lên máy chính (phòng rỗng) mà để lại
+    // owm_tenant của phòng vừa gỡ thì mọi request đi nhầm phòng → 401/503
+    // liên miên dù khóa đúng. Phải dọn phòng TRƯỚC rồi mới set lại.
+    clearTenant();
     setTenant(next.tenant, next.name);
   } else {
     clearToken();
@@ -121,19 +134,19 @@ export function notifyKeysChanged() {
 }
 
 // Bóc giá trị từ hash dạng #<key>=GIÁ_TRỊ[&m=PHÒNG], xóa hash sau khi đọc.
-function parseHashParam(key) {
-  const match = new RegExp(`^#${key}=([^&]+)(?:&m=([^&]+))?`).exec(location.hash);
-  if (!match?.[1]) return null;
+// Việc decode/parse nằm ở lib/route.js (thuần, test được); chỗ này giữ phần
+// đụng trình duyệt. `decodeURIComponent` trên hash hỏng từng ném URIError ra
+// giữa lúc main.jsx import module — app trắng màn.
+function readHashParam(key) {
+  const parsed = parseHashParam(location.hash, key);
+  if (!parsed) return null;
   history.replaceState(null, "", location.pathname + location.search);
-  return {
-    value: decodeURIComponent(match[1]),
-    tenant: match[2] ? decodeURIComponent(match[2]) : "",
-  };
+  return parsed;
 }
 
 // Auto-pairing kiểu cũ (master token trong #t=) — vẫn giữ làm đường dự phòng.
 export function absorbTokenFromHash() {
-  const parsed = parseHashParam("t");
+  const parsed = readHashParam("t");
   if (parsed?.value) {
     setToken(parsed.value);
     if (parsed.tenant) setTenant(parsed.tenant);
@@ -144,7 +157,7 @@ export function absorbTokenFromHash() {
 
 // Mã one-time từ QR/link dạng .../#p=<code>&m=<phòng> — màn pairing sẽ tự ghép.
 export function pairingCodeFromHash() {
-  const parsed = parseHashParam("p");
+  const parsed = readHashParam("p");
   if (parsed?.value) {
     if (parsed.tenant) setTenant(parsed.tenant);
     return parsed.value;
@@ -154,10 +167,16 @@ export function pairingCodeFromHash() {
 
 /** Ghép thiết bị bằng mã 30 phút → nhận khóa vĩnh viễn owd_... */
 export async function apiPair(code, label) {
+  // KHÔNG chặn mã sai hình dạng ở client. Bridge mới là nơi quyết định
+  // (so thời gian trên mã ĐANG SỐNG, bridge/src/pairing.js:97) và bảng chữ cái
+  // của nó là (`ABCDEFGHJKLMNPQRSTUVWXYZ23456789`, pairing.js:14) — đặt bản sao
+  // thứ hai ở web nghĩa là mỗi lần sửa bridge là mọi người dùng không ghép
+  // được nữa, và lỗi nằm ở máy tính chứ không phải điện thoại. Sai hình dạng
+  // tốn đúng MỘT vòng mạng và bridge trả sẵn câu tiếng Việt rõ ràng.
   const res = await fetch("/api/pair", {
     method: "POST",
     headers: tenantHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({ code: code.trim(), label: label?.trim() || undefined }),
+    body: JSON.stringify({ code: String(code ?? "").trim(), label: label?.trim() || undefined }),
   });
   const payload = await res.json().catch(() => null);
   if (!res.ok) {
@@ -209,7 +228,13 @@ function tenantHeaders(extra = {}) {
 }
 
 export async function apiState() {
-  const res = await fetch("/api/state", { headers: authHeaders() });
+  const guard = withTimeoutSignal(null, OW_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch("/api/state", { headers: authHeaders(), signal: guard.signal });
+  } finally {
+    guard.release();
+  }
   if (res.status === 401) throw new Error("UNPAIRED");
   if (!res.ok) throw new Error(`state ${res.status}`);
   return res.json();
@@ -319,27 +344,68 @@ export async function apiFsMkdir(dir, name) {
   return payload;
 }
 
-/** Gọi openwork-server qua bridge. path bắt đầu bằng "/". */
-export async function ow(path, { method = "GET", body, headers = {}, raw = false, signal } = {}) {
-  const res = await fetch(`/api/ow${path}`, {
-    method,
-    headers: authHeaders(body !== undefined ? { "content-type": "application/json", ...headers } : headers),
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    signal,
-  });
-  if (res.status === 401) throw new Error("UNPAIRED");
-  if (raw) return res;
-  if (!res.ok) {
-    let detail = "";
+/**
+ * Gọi openwork-server qua bridge. path bắt đầu bằng "/".
+ *
+ * `timeoutMs` mặc định OW_TIMEOUT_MS: tunnel treo thì fetch treo mãi và UI kẹt
+ * vô hạn. Truyền `0` để tắt (stream dài / tải file lớn — `raw: true` tự tắt vì
+ * đọc body kiểu stream không có "xong" để đo).
+ */
+export async function ow(
+  path,
+  { method = "GET", body, headers = {}, raw = false, signal, timeoutMs = OW_TIMEOUT_MS } = {}
+) {
+  // `raw` tự tắt trần chờ: caller đọc body kiểu stream (tải file chục MB, xem
+  // tiến trình %) nên không có mốc "xong" để đo, và caller đã tự quản lý
+  // AbortController của nút Hủy.
+  const guard = raw || !timeoutMs ? null : withTimeoutSignal(signal, timeoutMs);
+  try {
+    const res = await fetch(`/api/ow${path}`, {
+      method,
+      headers: authHeaders(body !== undefined ? { "content-type": "application/json", ...headers } : headers),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: guard?.signal ?? signal,
+    });
+    if (res.status === 401) throw new Error("UNPAIRED");
+    if (raw) return res;
+    if (!res.ok) {
+      const error = new Error((await errorTextOf(res)) || `HTTP ${res.status}`);
+      error.status = res.status;
+      throw error;
+    }
+    if (res.status === 204) return null;
+    // 200 nhưng body không phải JSON (SPA fallback của worker, trang lỗi HTML của
+    // Cloudflare): `res.json()` ném SyntaxError thô lên UI. Thay bằng lỗi nói
+    // đúng nguyên nhân thay vì "... is not valid JSON".
+    const text = await res.text();
+    if (!text.trim()) return null;
     try {
-      detail = (await res.json())?.message ?? "";
-    } catch {}
-    const error = new Error(detail || `HTTP ${res.status}`);
-    error.status = res.status;
-    throw error;
+      return JSON.parse(text);
+    } catch {
+      const error = new Error("Máy tính trả về dữ liệu lỗi thay vì JSON (kiểm tra lại tunnel).");
+      error.status = res.status;
+      throw error;
+    }
+  } finally {
+    // Ở CUỐI hàm, không phải ngay sau fetch: tháo listener sớm làm mất khả
+    // năng hủy của caller đúng lúc đang đọc body.
+    guard?.release();
   }
-  if (res.status === 204) return null;
-  return res.json();
+}
+
+/**
+ * Message lỗi từ body của bridge/worker/engine. Cả ba tầng đều trả
+ * `{code, message}` (bridge/src/auth.js:21, worker/src/index.js:132,
+ * apps/server/src/errors.ts:7) nhưng body rác/HTML vẫn phải cho ra `HTTP <n>`
+ * chứ không phải nội dung HTML.
+ */
+async function errorTextOf(res) {
+  try {
+    const payload = await res.json();
+    return typeof payload?.message === "string" ? payload.message : "";
+  } catch {
+    return "";
+  }
 }
 
 /** Xoá hẳn 1 hội thoại (session) trên máy tính — nút vuốt-trái ở màn Sessions/Home. */
@@ -462,7 +528,11 @@ export async function owPrompt(wsId, sid, { text, model = "", agent = "", effort
 export async function owSummarize(wsId, sid, model) {
   const body = buildSummarizeBody(model);
   if (!body) throw new Error("Chọn model trước khi nén hội thoại.");
-  return ow(summarizePath(wsId, sid), { method: "POST", body });
+  // `timeoutMs: 0` = không đặt timeout. `/summarize` và `/command` đều gọi LLM,
+  // chạy hàng chục giây tới vài phút; engine cũng miễn timeout cho đúng hai
+  // endpoint này (apps/app/src/app/lib/opencode.ts, SESSION_LONG_RUNNING_URL_RE
+  // → 0). Bỏ giữa lúc nén là abort nửa chừng, phiên còn lửng lơ.
+  return ow(summarizePath(wsId, sid), { method: "POST", body, timeoutMs: 0 });
 }
 
 /** Bật link chia sẻ (POST /session/:id/share, body rỗng). Link ở Session.share.url. */
@@ -480,6 +550,7 @@ export async function owRunCommand(wsId, sid, { command, args = "", model } = {}
   return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/command`), {
     method: "POST",
     body: { command, arguments: args, ...(model ? { model } : {}) },
+    timeoutMs: 0, // xem owSummarize: lệnh cũng gọi LLM, miễn timeout
   });
 }
 
@@ -575,8 +646,21 @@ export function sseUrl(path) {
 
 // ---- Helpers chuẩn hóa shape openwork/opencode (có / không có wrapper .data)
 
+/**
+ * Bóc wrapper `{data: ...}` của engine.
+ *
+ * `{data: null}` vẫn trả `null` (không đổi so với bản cũ) vì hàng chục chỗ gọi
+ * kiểu `unwrap(p) ?? []` / `unwrap(p) ?? p ?? {}` — trả về chính envelope ở đây
+ * làm `.map`/`sortByUpdated` nổ trên object. Chỗ thật sự hỏng trước đây là
+ * `data: undefined`: `"data" in payload` khớp rồi trả `undefined`, mất trắng
+ * luôn object. Mảng đi qua nguyên vẹn (`"data" in []` là false với mảng rỗng
+ * nhưng để rõ ý định thì chặn trước).
+ */
 export function unwrap(payload) {
-  if (payload && typeof payload === "object" && "data" in payload) return payload.data;
+  if (Array.isArray(payload)) return payload;
+  if (payload && typeof payload === "object" && "data" in payload) {
+    return payload.data === undefined ? payload : payload.data;
+  }
   return payload;
 }
 
@@ -591,8 +675,15 @@ export function timeAgo(ts) {
 
 // ---- File hai chiều (điện thoại <-> workspace) ----
 
-/** Trần upload thô: base64 phồng ~37%, proxy chặn body trên 64MB. */
-const MAX_UPLOAD_BYTES = 40 * 1024 * 1024;
+/**
+ * Trần upload: lấy đúng hạn mức của ENGINE, không phải trần của proxy.
+ *
+ * `POST /files/raw` kiểm FILE_SESSION_MAX_FILE_BYTES = 5.000.000 byte
+ * (apps/server/src/routes/files.ts) và trả 413 `file_too_large`. Trần 40MB
+ * của proxy là trần "body", nên báo 40MB là nói dối: mọi file 5–40MB đều hỏng
+ * với lỗi không giải thích được. Đổi con số này thì phải sửa cả thông báo.
+ */
+const MAX_UPLOAD_BYTES = 5_000_000;
 
 /** Định dạng dung lượng theo Intl (vi-VN). */
 export function formatBytes(bytes) {

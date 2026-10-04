@@ -206,6 +206,23 @@ export function summarizePath(wsId, sid, { directory = "" } = {}) {
 // ---- Định dạng phần tóm tắt để hiện ra ----
 
 /**
+ * Cắt chuỗi theo CODE POINT, không cắt đôi ký tự. `slice(0, cap)` đếm theo
+ * đơn vị UTF-16 nên cắt trúng giữa một emoji (😀 = 2 đơn vị) là ra ký tự
+ * hỏng "" — người dùng thấy tóm tắt bị vỡ đúng chỗ đã cắt, tưởng lỗi engine.
+ * Đây là cùng lý do lib/session-rename.js có clipByCodePoint.
+ */
+function clipByCodePoint(value, max) {
+  let end = 0;
+  let count = 0;
+  while (end < value.length && count < max) {
+    const cp = value.codePointAt(end);
+    end += cp > 0xffff ? 2 : 1; // bước qua TRỌN một ký tự, không dừng giữa cặp thay thế
+    count += 1;
+  }
+  return value.slice(0, end);
+}
+
+/**
  * Cắt phần tóm tắt cho màn hình điện thoại. Ưu tiên cắt ở DÒNG (bản tóm tắt
  * là markdown nhiều dòng) và chỉ cắt giữa dòng khi dòng cuối quá dài; luôn
  * thêm "…" khi bị cắt để không ai tưởng là hết nội dung.
@@ -216,7 +233,7 @@ export function formatSummaryText(raw, maxChars = 1200) {
   if (!full) return { text: "", truncated: false, total: 0 };
   const cap = Math.max(80, Number(maxChars) || 1200);
   if (full.length <= cap) return { text: full, truncated: false, total };
-  const cut = full.slice(0, cap);
+  const cut = clipByCodePoint(full, cap);
   const nl = cut.lastIndexOf("\n");
   const keep = nl > cap * 0.6 ? cut.slice(0, nl) : cut;
   return { text: `${keep.trimEnd()}…`, truncated: true, total };
