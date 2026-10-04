@@ -93,8 +93,8 @@ export async function launchOpenWork({ configOpenworkExe = "", log = console.log
   const exe = findOpenWorkExe(configOpenworkExe);
   if (!exe) {
     const error = new Error(
-      "Không tìm thấy file OpenWork.exe trên máy tính. " +
-        "Mở OpenWork bằng tay 1 lần, hoặc set đường dẫn trong config (openworkExe) / env OPENWORK_EXE."
+      "OpenWork.exe not found on this computer. " +
+        "Open OpenWork manually once, or set the path in config (openworkExe) / env OPENWORK_EXE."
     );
     error.code = "openwork_exe_not_found";
     error.candidates = candidateExePaths(configOpenworkExe);
@@ -104,8 +104,8 @@ export async function launchOpenWork({ configOpenworkExe = "", log = console.log
   const child = spawn(exe, [], { detached: true, stdio: "ignore" });
   // A locked/missing exe fires async 'error' AFTER this function already
   // returned — without a listener it escapes as an uncaughtException.
-  child.on("error", (err) => log(`[openwork] mở OpenWork lỗi: ${err.message}`));
+  child.on("error", (err) => log(`[openwork] failed to launch OpenWork: ${err.message}`));
   child.unref();
-  log(`[openwork] đã mở OpenWork (${exe}, pid ${child.pid}) — đợi server lên...`);
+  log(`[openwork] launched OpenWork (${exe}, pid ${child.pid}) - waiting for the server...`);
   return { launched: true, exe };
 }

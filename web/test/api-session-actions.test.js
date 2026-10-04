@@ -80,7 +80,7 @@ test("owRenameSession chặn tên rỗng NGAY ở client, không tốn request",
   await assert.rejects(
     () => api.owRenameSession("w1", "s1", "   "),
     (err) => {
-      assert.equal(err.message, "Tên phiên không được để trống.");
+      assert.equal(err.message, "Session name cannot be empty.");
       return true;
     }
   );
@@ -91,7 +91,7 @@ test("owRenameSession chặn tên quá trần, nói rõ con số", async () => {
   await assert.rejects(
     () => api.owRenameSession("w1", "s1", "x".repeat(200)),
     (err) => {
-      assert.match(err.message, /120 ký tự/);
+      assert.match(err.message, /120 characters/);
       return true;
     }
   );
@@ -163,7 +163,7 @@ test("owSummarize chưa chọn model thì nói rõ, không gửi request", async
   await assert.rejects(
     () => api.owSummarize("w1", "s1", ""),
     (err) => {
-      assert.match(err.message, /Chọn model/);
+      assert.match(err.message, /Select a model/);
       return true;
     }
   );

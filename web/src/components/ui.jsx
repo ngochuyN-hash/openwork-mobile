@@ -4,7 +4,7 @@ import { FolderIcon } from "./icons.jsx";
 /** Component dùng chung (skill pwa-workspace-ui) — gom mẫu loading/error/empty
  *  đang copy ở mỗi page, thay confirm() native, icon SVG thay emoji. */
 
-export function Loading({ text = "Đang tải…" }) {
+export function Loading({ text = "Loading…" }) {
   return (
     <div class="empty" role="status" aria-live="polite">
       <span class="spinner" aria-hidden="true" /> {text}
@@ -63,7 +63,7 @@ export function Banner({ kind = "err", children, actionLabel, onAction }) {
   );
 }
 
-export function ConfirmDialog({ title, body, confirmLabel = "Xác nhận", onConfirm, onClose }) {
+export function ConfirmDialog({ title, body, confirmLabel = "Confirm", onConfirm, onClose }) {
   return (
     <div class="sheet-backdrop" onClick={onClose}>
       <div class="card sheet" role="alertdialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
@@ -71,7 +71,7 @@ export function ConfirmDialog({ title, body, confirmLabel = "Xác nhận", onCon
         {body && <p class="sheet-body">{body}</p>}
         <div class="sheet-actions">
           <button type="button" class="btn ghost" onClick={onClose}>
-            Đóng
+            Close
           </button>
           <button type="button" class="btn danger-solid" onClick={onConfirm}>
             {confirmLabel}
@@ -108,7 +108,7 @@ export function useConfirm() {
  * - Bấm vào nội dung khi đang mở = đóng lại; bấm ra ngoài = đóng; bấm nội dung
  *   khi đóng thì chạy `onTap` (mở hội thoại). Kéo không được tính là bấm.
  */
-export function SwipeRow({ open, requestOpen, onAction, onTap, actionLabel = "Xoá", actionWidth = 84, children }) {
+export function SwipeRow({ open, requestOpen, onAction, onTap, actionLabel = "Delete", actionWidth = 84, children }) {
   const rowRef = useRef(null);
   const contentRef = useRef(null);
   const s = useRef({ startX: 0, startY: 0, base: 0, axis: null, suppress: false });

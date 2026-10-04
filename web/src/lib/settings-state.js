@@ -39,15 +39,15 @@ export function deviceListOf(payload) {
 export function tunnelStatusLabel(tunnel) {
   const phase = String(tunnel?.phase ?? "");
   const streak = Math.max(0, Number(tunnel?.streak) || 0);
-  if (phase === "up") return { label: "đang chạy", ok: true };
-  if (phase === "starting") return { label: "đang lên", ok: false };
+  if (phase === "up") return { label: "running", ok: true };
+  if (phase === "starting") return { label: "starting", ok: false };
   if (phase === "backoff") {
     // `streak` là số lần liên tiếp bị giới hạn (bridge/src/tunnel.js:186) —
     // đưa vào nhãn vì "đang nghỉ" nghe như lỗi một lần, còn "tạm nghỉ sau N
     // lần bị giới hạn" nói đúng tình hình.
-    return { label: `tạm nghỉ (${streak} lần bị giới hạn)`, ok: false };
+    return { label: `backing off (${streak} rate-limited attempts)`, ok: false };
   }
-  return { label: "không rõ", ok: false };
+  return { label: "unknown", ok: false };
 }
 
 /**

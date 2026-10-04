@@ -112,7 +112,7 @@ export class PairingService {
     const token = `owd_${randomBytes(24).toString("hex")}`;
     const device = {
       id: `d_${randomUUID().slice(0, 8)}`,
-      label: String(label ?? "").trim().slice(0, 40) || `Thiết bị ${new Date(this.now()).toLocaleString("vi-VN")}`,
+      label: String(label ?? "").trim().slice(0, 40) || `Device ${new Date(this.now()).toLocaleString("en-US")}`,
       tokenHash: sha256(token),
       createdAt: this.now(),
       lastSeenAt: this.now(),

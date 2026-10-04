@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import {
   EFFORT_NONE,
   buildPromptModelFields,
-  effortLabelVi,
+  effortLabel,
   effortOptionsFor,
   fastModeEffort,
   normalizeEffort,
@@ -57,10 +57,10 @@ test("normalizeEffort gộp mọi cách viết về id chuẩn", () => {
   assert.equal(normalizeEffort("tùy"), "tùy"); // id lạ giữ nguyên, không ép
 });
 
-test("effortLabelVi có tiếng Việt cho mức chuẩn, giữ nguyên id lạ", () => {
-  assert.equal(effortLabelVi("high"), "Cao");
-  assert.equal(effortLabelVi(EFFORT_NONE), "Mặc định");
-  assert.equal(effortLabelVi("extreme"), "extreme");
+test("effortLabel gives an English label for standard levels, keeps unknown ids as-is", () => {
+  assert.equal(effortLabel("high"), "High");
+  assert.equal(effortLabel(EFFORT_NONE), "Default");
+  assert.equal(effortLabel("extreme"), "extreme");
 });
 
 // ---- Variant: chỉ chọn được thứ engine thật sự khai ----
@@ -98,7 +98,7 @@ test("model không có variant nào: chỉ gửi model, không gửi field lạ"
   assert.equal("reasoning_effort" in out, false);
 });
 
-test("mức Mặc định -> chỉ có model (engine tự chọn)", () => {
+test("level Default -> only model (engine decides)", () => {
   const out = buildPromptModelFields({
     modelValue: "google/gemini-3-pro",
     effort: EFFORT_NONE,
@@ -113,7 +113,7 @@ test("Codex: reasoning_effort THAY variant, không bao giờ gửi cả hai", ()
   assert.equal("variant" in out, false);
 });
 
-test("Codex mức Mặc định -> không field mức suy luận nào", () => {
+test("Codex at Default -> no reasoning effort field at all", () => {
   const out = buildPromptModelFields({ modelValue: "openai/gpt-5-codex", effort: EFFORT_NONE });
   assert.deepEqual(out, { model: { providerID: "openai", modelID: "gpt-5-codex" } });
 });
@@ -126,26 +126,26 @@ test("model rỗng -> payload rỗng (không dựng model ma)", () => {
 
 // ---- Danh sách mức bấm được ----
 
-test("effortOptionsFor suy ra từ variant thật, Mặc định luôn ở đầu", () => {
+test("effortOptionsFor derives real variants, Default always first", () => {
   const opts = effortOptionsFor(gemini(), [{ id: "high" }, { id: "low" }, { id: "medium" }]);
   assert.deepEqual(opts.map((o) => o.id), ["none", "low", "medium", "high"]);
-  assert.equal(opts[0].vi, "Mặc định");
+  assert.equal(opts[0].label, "Default");
 });
 
 test("effortOptionsFor giữ nguyên id lạ và không thêm mức không có", () => {
   const opts = effortOptionsFor(gemini(), [{ id: "extreme" }, { id: "low" }]);
   assert.deepEqual(opts.map((o) => o.id), ["none", "low", "extreme"]);
-  assert.equal(opts[2].vi, "extreme");
+  assert.equal(opts[2].label, "extreme");
 });
 
-test("effortOptionsFor model không có variant -> chỉ còn Mặc định", () => {
+test("effortOptionsFor model without variants -> only Default left", () => {
   assert.deepEqual(effortOptionsFor(gemini(), []).map((o) => o.id), ["none"]);
 });
 
 test("effortOptionsFor Codex -> bộ effort chuẩn của OpenAI", () => {
   const opts = effortOptionsFor(codex(), []);
   assert.deepEqual(opts.map((o) => o.id), ["none", "minimal", "low", "medium", "high"]);
-  assert.ok(opts.slice(1).every((o) => o.viCodex === true));
+  assert.ok(opts.slice(1).every((o) => o.codexOnly === true));
 });
 
 // ---- Chế độ nhanh ----
@@ -156,14 +156,14 @@ test("chế độ nhanh lấy variant thấp nhất của model", () => {
   assert.equal(fastModeEffort(codex(), []), "low"); // Codex không có variants
 });
 
-test("chế độ nhanh trên model không có variant -> Mặc định", () => {
+test("fast mode on model without variants -> Default", () => {
   assert.equal(fastModeEffort(gemini(), []), EFFORT_NONE);
   assert.equal(fastModeEffort(gemini(), undefined), EFFORT_NONE);
 });
 
 // ---- Đổi model thì mức cũ không còn hợp lệ ----
 
-test("resolveEffort về Mặc định khi model mới không có variant đã chọn", () => {
+test("resolveEffort falls back to Default when new model lacks the chosen variant", () => {
   assert.equal(resolveEffort("high", gemini(), [{ id: "low" }]), EFFORT_NONE);
   assert.equal(resolveEffort("high", gemini(), [{ id: "low" }, { id: "high" }]), "high");
   // đổi từ model có variant sang Codex thì mức cũ vẫn dùng được (reasoning_effort)

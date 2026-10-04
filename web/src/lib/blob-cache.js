@@ -94,7 +94,7 @@ export function createBlobCache({ create, revoke, ...limits } = {}) {
         .then(() => create(key))
         .then((made) => {
           const url = typeof made === "string" ? made : String(made?.url ?? "");
-          if (!url) throw new Error("blob rỗng");
+          if (!url) throw new Error("empty blob");
           const fresh = urls.get(key);
           if (fresh) return fresh.url; // lượt khác kịp đưa vào trước
           const size = typeof made === "string" ? 0 : Number(made?.bytes ?? 0) || 0;

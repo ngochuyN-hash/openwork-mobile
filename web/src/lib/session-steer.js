@@ -4,7 +4,7 @@
 //
 // TÌNH TRẠNG CONSUMER (2026-10-04): ĐÃ NỐI. `send()` ở chat.jsx gọi
 // `sendDecision()` để quyết định send/steer/wait, và `mergeSteerTexts()` khi
-// flush hàng đợi offline. `pendingStatusVi()` cho dòng trạng thái.
+// flush hàng đợi offline. `pendingStatus()` cho dòng trạng thái.
 //
 // ---- HAI QUYẾT ĐỊNH, đọc trước khi đổi ----
 //
@@ -266,11 +266,11 @@ export function shouldRestoreComposer({ queued }) {
  * Dòng trạng thái dưới danh sách tin (aria-live): đang chạy + có tin chờ.
  * Rỗng = không có gì cần nói.
  */
-export function pendingStatusVi({ running, sending, pendingCount } = {}) {
+export function pendingStatus({ running, sending, pendingCount } = {}) {
   const parts = [];
-  if (running) parts.push(sending ? "agent đang chạy, đang tải file…" : "agent đang chạy…");
+  if (running) parts.push(sending ? "agent is running, uploading files…" : "agent is running…");
   const n = Number(pendingCount) || 0;
-  if (n > 0) parts.push(`Đang gửi lại ${n} tin nhắn khi có mạng…`);
+  if (n > 0) parts.push(`Resending ${n} messages when back online…`);
   return parts.join(" · ");
 }
 

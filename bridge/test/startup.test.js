@@ -35,10 +35,10 @@ test("background bridge retries occupied port, serves API and does not log pairi
     child.stdout.on("data", (chunk) => { output += chunk; });
     child.stderr.on("data", (chunk) => { output += chunk; });
     const deadline = Date.now() + 12000;
-    while (!output.includes("thử lại lần 1/10") && Date.now() < deadline && child.exitCode === null) {
+    while (!output.includes("retry 1/10") && Date.now() < deadline && child.exitCode === null) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    assert.match(output, /thử lại lần 1\/10/);
+    assert.match(output, /retry 1\/10/);
     await new Promise((resolve) => blocker.close(resolve));
     released = true;
     while (!output.includes("listening on") && Date.now() < deadline && child.exitCode === null) {

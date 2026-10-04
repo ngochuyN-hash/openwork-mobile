@@ -9,7 +9,7 @@ import {
   turnsSinceSummary,
   lastTurnTokens,
   shouldSuggestCompact,
-  compactHintVi,
+  compactHint,
   compactBlockReason,
   buildSummarizeBody,
   buildCompactCommandBody,
@@ -68,13 +68,13 @@ test("lượt cuối ăn hết context thì gợi ý dù phiên mới có vài l
   const v = shouldSuggestCompact({ messages: turns(3, { input: 90_000, output: 40_000, cache: { read: 5_000 } }) });
   assert.equal(v.level, "hint");
   assert.equal(v.tokens, 135_000);
-  assert.equal(v.reason, "lượt gần nhất đã nặng");
+  assert.equal(v.reason, "last turn was heavy");
 });
 
 test("agent đang chạy thì không gợi ý (lượt đang stream sẽ lệch)", () => {
   const v = shouldSuggestCompact({ messages: turns(40), running: true });
   assert.equal(v.suggest, false);
-  assert.equal(v.reason, "agent đang chạy");
+  assert.equal(v.reason, "agent is running");
 });
 
 test("vừa nén xong thì im một lúc, đủ lượt rồi mới gợi ý lại", () => {
@@ -84,7 +84,7 @@ test("vừa nén xong thì im một lúc, đủ lượt rồi mới gợi ý l�
   });
   assert.equal(v.suggest, false);
   assert.equal(v.turnsSince, COMPACT_THRESHOLDS.cooldown - 1);
-  assert.equal(v.reason, "vừa nén xong, để agent làm tiếp đã");
+  assert.equal(v.reason, "just compacted, let the agent continue");
   // Đủ lượt kể từ lần nén là gợi ý lại
   assert.equal(shouldSuggestCompact({ messages: turns(40), sinceLastCompact: COMPACT_THRESHOLDS.hint }).level, "hint");
 });
@@ -133,19 +133,19 @@ test("lastTurnTokens lấy lượt assistant GẦN NHẤT, chỉ tính input+out
 
 // ---- Câu gợi ý + lý do chặn ----
 
-test("compactHintVi đổi lời theo mức, rỗng khi chưa tới lúc", () => {
-  assert.equal(compactHintVi("none"), "");
-  assert.match(compactHintVi("hint", { turnsSince: 12 }), /12 lượt/);
-  assert.match(compactHintVi("urgent", { turnsSince: 25 }), /sắp quên việc đang dở/);
+test("compactHint đổi lời theo mức, rỗng khi chưa tới lúc", () => {
+  assert.equal(compactHint("none"), "");
+  assert.match(compactHint("hint", { turnsSince: 12 }), /12 turns/);
+  assert.match(compactHint("urgent", { turnsSince: 25 }), /about to forget the pending work/);
   // Không biết số lượt thì vẫn đọc được, không in "null lượt"
-  assert.doesNotMatch(compactHintVi("hint"), /null/);
+  assert.doesNotMatch(compactHint("hint"), /null/);
 });
 
 test("compactBlockReason nói rõ vì sao chưa nén được", () => {
   assert.equal(compactBlockReason({ turns: 10 }), "");
-  assert.match(compactBlockReason({ turns: 10, running: true }), /Agent đang chạy/);
-  assert.match(compactBlockReason({ turns: 1 }), /Mới có vài tin/);
-  assert.match(compactBlockReason({ turns: 10, busy: true }), /Đang nén rồi/);
+  assert.match(compactBlockReason({ turns: 10, running: true }), /Agent is running/);
+  assert.match(compactBlockReason({ turns: 1 }), /Only a few messages/);
+  assert.match(compactBlockReason({ turns: 10, busy: true }), /Already compacting/);
 });
 
 // ---- Body hai đường nén: KHÁC NHAU ----

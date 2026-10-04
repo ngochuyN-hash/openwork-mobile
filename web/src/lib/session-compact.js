@@ -115,21 +115,21 @@ export function shouldSuggestCompact({ messages, running = false, sinceLastCompa
   let level = "none";
   let reason = "";
   if (running) {
-    reason = "agent đang chạy";
+    reason = "agent is running";
   } else if (since != null && effective < (t.cooldown ?? 0)) {
     // Chỉ khi BIẾT đã nén lúc nào mới im — phiên chưa nén bao giờ (`since`
     // null) thì tính từ đầu phiên, không bị cooldown vô lý chặn.
-    reason = "vừa nén xong, để agent làm tiếp đã";
+    reason = "just compacted, let the agent continue";
   } else if (effective >= (t.urgent ?? Infinity)) {
     level = "urgent";
-    reason = "phiên đã rất dài";
+    reason = "session is very long";
   } else if (effective >= (t.hint ?? Infinity)) {
     level = "hint";
-    reason = "phiên đã đủ dài";
+    reason = "session is long enough";
   } else if (tokens >= (t.tokens ?? Infinity)) {
     // Lượt cuối ăn hết context dù mới chỉ vài lượt -> vẫn nên nén.
     level = "hint";
-    reason = "lượt gần nhất đã nặng";
+    reason = "last turn was heavy";
   }
 
   return {
@@ -143,22 +143,22 @@ export function shouldSuggestCompact({ messages, running = false, sinceLastCompa
 }
 
 /** Câu gợi ý tiếng Việt cho banner/nút. Rỗng khi chưa tới lúc nén. */
-export function compactHintVi(level, { turnsSince = null } = {}) {
+export function compactHint(level, { turnsSince = null } = {}) {
   const n = turnsSince;
   if (level === "urgent") {
-    return n ? `Phiên này đã ${n} lượt — nên nén lại, agent sắp quên việc đang dở.` : "Phiên này đã rất dài — nên nén lại, agent sắp quên việc đang dở.";
+    return n ? `This session has ${n} turns — time to compact again, the agent is about to forget the pending work.` : "This session is very long — time to compact again, the agent is about to forget the pending work.";
   }
   if (level === "hint") {
-    return n ? `Phiên đã ${n} lượt. Nén lại một chút cho agent dễ nhớ việc đang dở.` : "Phiên đã khá dài. Nén lại một chút cho agent dễ nhớ việc đang dở.";
+    return n ? `This session has ${n} turns. Compact again so the agent remembers the pending work better.` : "This session is fairly long. Compact again so the agent remembers the pending work better.";
   }
   return "";
 }
 
 /** Vì sao KHÔNG nén được lúc này (rỗng = nén được). */
 export function compactBlockReason({ running = false, turns = 0, busy = false } = {}) {
-  if (busy) return "Đang nén rồi, chờ xong đã.";
-  if (running) return "Agent đang chạy — dừng lại rồi nén, nếu không lượt đang stream sẽ lệch.";
-  if (turns < 2) return "Mới có vài tin, nén chưa được đâu.";
+  if (busy) return "Already compacting, please wait.";
+  if (running) return "Agent is running — stop it before compacting, otherwise the streaming turn will get out of sync.";
+  if (turns < 2) return "Only a few messages so far — not worth compacting yet.";
   return "";
 }
 

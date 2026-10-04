@@ -148,6 +148,6 @@ export function openworkStatusLabel(info, opts = {}) {
   const found = openworkFoundOf(info, opts?.foundFallback);
   if (!found) return "";
   return openworkRunningOf(info, opts?.runningFallback)
-    ? "đang chạy"
-    : "đã cài, chưa mở";
+    ? "running"
+    : "installed, not running";
 }

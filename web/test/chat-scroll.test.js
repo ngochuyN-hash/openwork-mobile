@@ -8,7 +8,7 @@ import {
   BOTTOM_FOLLOW_PX,
   distanceFromBottom,
   isAtBottom,
-  jumpLabelVi,
+  jumpLabel,
   keepsAutoScroll,
   leftBottomBy,
   newMessagesSince,
@@ -179,8 +179,8 @@ test("nút chỉ hiện khi đang lịch sử và có tin để cuộn tới", (
 });
 
 test("chữ nút đếm đúng", () => {
-  assert.equal(jumpLabelVi(0), "Tin mới nhất");
-  assert.equal(jumpLabelVi(1), "1 tin mới");
-  assert.equal(jumpLabelVi(7), "7 tin mới");
-  assert.equal(jumpLabelVi(-3), "Tin mới nhất");
+  assert.equal(jumpLabel(0), "Latest message");
+  assert.equal(jumpLabel(1), "1 new messages");
+  assert.equal(jumpLabel(7), "7 new messages");
+  assert.equal(jumpLabel(-3), "Latest message");
 });

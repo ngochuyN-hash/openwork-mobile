@@ -287,7 +287,7 @@ test("trần upload phải khớp hạn mức thật của engine (5.000.000 byt
   assert.equal(await withReader({ name: "a.bin", size: 5_000_000 }), "a.bin", "đúng hạn thì qua");
   await assert.rejects(
     () => api.owUploadFile("w1", "", { name: "b.bin", size: 5_000_001 }),
-    /quá lớn/,
+    /too large/,
     "vượt hạn engine thì chặn ngay, không gửi lên để nhận 413"
   );
 });

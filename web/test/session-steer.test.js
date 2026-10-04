@@ -19,7 +19,7 @@ import {
   statusLineIsBusy,
   permissionReplyBody,
   isRetryableSendError,
-  pendingStatusVi,
+  pendingStatus,
   STEER_MAX_PER_PROMPT,
 } from "../src/lib/session-steer.js";
 
@@ -125,20 +125,20 @@ test("chỉ lỗi mạng/lỗi tạm mới xếp hàng; 4xx của máy thì khô
 // ---- Chuỗi tiếng Việt cho UI ----
 
 test("dòng trạng thái: đang chạy + có tin chờ thì nói cả hai, rỗng khi không có gì", () => {
-  assert.equal(pendingStatusVi({}), "");
-  assert.equal(pendingStatusVi({ running: false, pendingCount: 0 }), "");
-  assert.equal(pendingStatusVi({ running: true }), "agent đang chạy…");
+  assert.equal(pendingStatus({}), "");
+  assert.equal(pendingStatus({ running: false, pendingCount: 0 }), "");
+  assert.equal(pendingStatus({ running: true }), "agent is running…");
   assert.equal(
-    pendingStatusVi({ running: true, pendingCount: 2 }),
-    "agent đang chạy… · Đang gửi lại 2 tin nhắn khi có mạng…"
+    pendingStatus({ running: true, pendingCount: 2 }),
+    "agent is running… · Resending 2 messages when back online…"
   );
   assert.equal(
-    pendingStatusVi({ running: false, pendingCount: 1 }),
-    "Đang gửi lại 1 tin nhắn khi có mạng…"
+    pendingStatus({ running: false, pendingCount: 1 }),
+    "Resending 1 messages when back online…"
   );
   assert.equal(
-    pendingStatusVi({ running: true, sending: true }),
-    "agent đang chạy, đang tải file…"
+    pendingStatus({ running: true, sending: true }),
+    "agent is running, uploading files…"
   );
 });
 
@@ -224,7 +224,7 @@ test("map status tra cả id thô lẫn id có tiền tố ses_", () => {
 
 test("REGRESSION: map RỖNG nghĩa là xong, không phải 'chưa biết'", () => {
   // Lượt chạy kết thúc: engine trả `{}` và tin `step-finish` đã về, nhưng UI
-  // vẫn hiện "agent đang chạy…" với nút Dừng kẹt vĩnh viễn. Nguyên nhân là
+  // vẫn hiện "agent is running…" với nút Dừng kẹt vĩnh viễn. Nguyên nhân là
   // coi map rỗng như "chưa biết" rồi giữ trạng thái cũ. Engine chỉ liệt kê
   // phiên ĐANG chạy, nên vắng mặt = rảnh.
   assert.equal(sessionBusyFromMap({}, "A"), false);
@@ -234,7 +234,7 @@ test("REGRESSION: map RỖNG nghĩa là xong, không phải 'chưa biết'", () 
 test("đọc hỏng thì trả undefined (chưa biết) — đừng đoán", () => {
   assert.equal(sessionBusyFromMap(null, "A"), undefined);
   assert.equal(sessionBusyFromMap(undefined, "A"), undefined);
-  assert.equal(sessionBusyFromMap("lỗi", "A"), undefined);
+  assert.equal(sessionBusyFromMap("error", "A"), undefined);
   assert.equal(sessionBusyFromMap({ ses_A: {} }, "A"), undefined, "shape lạ thì giữ trạng thái");
 });
 

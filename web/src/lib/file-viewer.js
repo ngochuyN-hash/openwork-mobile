@@ -31,7 +31,7 @@ export const TEXT_PREVIEW_MAX_BYTES = 8 * 1024 * 1024;
 export function humanBytes(bytes) {
   const n = Number(bytes);
   if (!Number.isFinite(n) || n < 0) return "";
-  const nf = new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 1 });
+  const nf = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${nf.format(n / 1024)} KB`;
   return `${nf.format(n / (1024 * 1024))} MB`;
@@ -122,9 +122,9 @@ export function crumbPaths(path) {
 export function textTooLarge(size) {
   const n = Number(size);
   if (!Number.isFinite(n) || n <= TEXT_PREVIEW_MAX_BYTES) return "";
-  return `File nặng ${humanBytes(n)} — quá lớn để mở trong trình soạn (tối đa ${humanBytes(
+  return `File is ${humanBytes(n)} — too large to open in the editor (max ${humanBytes(
     TEXT_PREVIEW_MAX_BYTES
-  )}). Hãy tải về rồi mở bằng ứng dụng khác.`;
+  )}). Download it and open it with another app.`;
 }
 
 /**
@@ -145,10 +145,10 @@ export function uploadSummary(ok, failed) {
   const total = okCount + failedNames.length;
   if (!total) return { note: "", error: "" };
   const note = okCount
-    ? `Đã tải lên ${okCount}/${total} file.`
-    : `Không tải được file nào (${total} file).`;
+    ? `Uploaded ${okCount}/${total} files.`
+    : `Could not upload any files (${total} files).`;
   if (!failedNames.length) return { note, error: "" };
   const shown = failedNames.slice(0, 3).join(", ");
-  const more = failedNames.length > 3 ? ` và ${failedNames.length - 3} file khác` : "";
-  return { note, error: `Không tải được: ${shown}${more}.` };
+  const more = failedNames.length > 3 ? ` and ${failedNames.length - 3} more` : "";
+  return { note, error: `Could not upload: ${shown}${more}.` };
 }

@@ -189,8 +189,8 @@ test("openworkRunningOf áp đúng quy tắc boolean cho running", () => {
 // UI đổi theo — đây là bằng chứng, không phải lưới an toàn.
 
 test("openworkStatusLabel: running=true -> 'đang chạy', running=false -> 'đã cài, chưa mở'", () => {
-  assert.equal(openworkStatusLabel({ found: true, running: true }), "đang chạy");
-  assert.equal(openworkStatusLabel({ found: true, running: false }), "đã cài, chưa mở");
+  assert.equal(openworkStatusLabel({ found: true, running: true }), "running");
+  assert.equal(openworkStatusLabel({ found: true, running: false }), "installed, not running");
 });
 
 test("openworkStatusLabel trả CHUỖI RỖNG khi chưa tìm thấy exe", () => {
@@ -208,39 +208,39 @@ test("openworkStatusLabel trả CHUỖI RỖNG khi chưa tìm thấy exe", () =>
 
 test("openworkStatusLabel dùng foundFallback khi found KHÔNG phải boolean", () => {
   // Boolean CŨ bridge gửi (bridge/src/index.js:400).
-  assert.equal(openworkStatusLabel(null, { foundFallback: true, runningFallback: true }), "đang chạy");
-  assert.equal(openworkStatusLabel({ running: true }, { foundFallback: true }), "đang chạy");
+  assert.equal(openworkStatusLabel(null, { foundFallback: true, runningFallback: true }), "running");
+  assert.equal(openworkStatusLabel({ running: true }, { foundFallback: true }), "running");
   assert.equal(openworkStatusLabel(null, { foundFallback: false, runningFallback: true }), "");
   // found là boolean thì là nguồn chính — fallback KHÔNG được ghi đè.
   assert.equal(openworkStatusLabel({ found: false }, { foundFallback: true, runningFallback: true }), "");
-  assert.equal(openworkStatusLabel({ found: true }, { foundFallback: false }), "đã cài, chưa mở");
+  assert.equal(openworkStatusLabel({ found: true }, { foundFallback: false }), "installed, not running");
   // found: "false" là chuỗi (truthy trong JS) nên KHÔNG tin, lùi về fallback.
-  assert.equal(openworkStatusLabel({ found: "false" }, { foundFallback: true, runningFallback: true }), "đang chạy");
+  assert.equal(openworkStatusLabel({ found: "false" }, { foundFallback: true, runningFallback: true }), "running");
   assert.equal(openworkStatusLabel({ found: "false" }, { foundFallback: false }), "");
 });
 
 test("openworkStatusLabel dùng runningFallback khi running KHÔNG phải boolean", () => {
   assert.equal(
     openworkStatusLabel({ found: true, running: "yes" }, { runningFallback: true }),
-    "đang chạy"
+    "running"
   );
   assert.equal(
     openworkStatusLabel({ found: true, running: "yes" }, { runningFallback: false }),
-    "đã cài, chưa mở"
+    "installed, not running"
   );
   // running boolean là nguồn chính, fallback không ghi đè.
   assert.equal(
     openworkStatusLabel({ found: true, running: false }, { runningFallback: true }),
-    "đã cài, chưa mở"
+    "installed, not running"
   );
   assert.equal(
     openworkStatusLabel({ found: true, running: true }, { runningFallback: false }),
-    "đang chạy"
+    "running"
   );
   // Thiếu cả hai fallback: coi như chưa cài / chưa chạy — nhãn đổi từ
-  // "đang chạy" sang "đã cài, chưa mở" sẽ bật thêm một cảnh báo sai.
-  assert.equal(openworkStatusLabel({ found: true }), "đã cài, chưa mở");
-  assert.equal(openworkStatusLabel({ found: true }, {}), "đã cài, chưa mở");
-  assert.equal(openworkStatusLabel({ found: true, running: 1 }), "đã cài, chưa mở");
-  assert.equal(openworkStatusLabel({ found: true, running: null }), "đã cài, chưa mở");
+  // "running" sang "installed, not running" sẽ bật thêm một cảnh báo sai.
+  assert.equal(openworkStatusLabel({ found: true }), "installed, not running");
+  assert.equal(openworkStatusLabel({ found: true }, {}), "installed, not running");
+  assert.equal(openworkStatusLabel({ found: true, running: 1 }), "installed, not running");
+  assert.equal(openworkStatusLabel({ found: true, running: null }), "installed, not running");
 });

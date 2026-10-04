@@ -15,12 +15,12 @@ export function createPairingRoutes(ctx) {
       const body = await readJsonBody(req);
       const result = ctx.pairing.pair(body?.code, body?.label);
       if (!result) {
-        return sendJson(res, 401, { code: "invalid_code", message: `Mã không đúng, đã dùng hoặc hết hạn (mã sống ${CODE_TTL_MINUTES} phút). Lấy mã mới trong terminal bridge.` });
+        return sendJson(res, 401, { code: "invalid_code", message: `Wrong code, already used, or expired (codes live ${CODE_TTL_MINUTES} minutes). Get a new code from the bridge terminal.` });
       }
-      console.log(`[pairing] thiết bị mới đã ghép: ${result.device.label} (${result.device.id})`);
+      console.log(`[pairing] new device paired: ${result.device.label} (${result.device.id})`);
       sendJson(res, 200, result);
     } catch {
-      sendJson(res, 400, { code: "invalid_body", message: "Body JSON không hợp lệ" });
+      sendJson(res, 400, { code: "invalid_body", message: "Invalid JSON body" });
     }
   }
 
@@ -33,22 +33,22 @@ export function createPairingRoutes(ctx) {
       const body = await readJsonBody(req);
       const { config } = ctx;
       if (!config.lookupTenant || !config.lookupSecret) {
-        return sendJson(res, 404, { code: "not_joined", message: "Máy này chưa tham gia phòng nào. Trên máy tính chạy: openpocket edge join" });
+        return sendJson(res, 404, { code: "not_joined", message: "This computer has not joined any room. Run this on the computer: openpocket edge join" });
       }
       const userOk = String(body?.user ?? "").trim().toLowerCase() === config.lookupTenant;
       const passOk = isTokenAuthorized(String(body?.secret ?? ""), config.lookupSecret);
       if (!userOk || !passOk) {
-        return sendJson(res, 401, { code: "invalid_credentials", message: "Sai tên đăng nhập hoặc mật khẩu." });
+        return sendJson(res, 401, { code: "invalid_credentials", message: "Wrong login name or password." });
       }
       const result = ctx.pairing.mintDevice(body?.label);
-      console.log(`[pairing] đăng nhập phòng ${config.lookupTenant}: thiết bị mới "${result.device.label}" (${result.device.id})`);
+      console.log(`[pairing] room login ${config.lookupTenant}: new device "${result.device.label}" (${result.device.id})`);
       sendJson(res, 200, {
         ...result,
         tenant: config.lookupTenant,
         machineName: config.machineName || config.lookupTenant,
       });
     } catch {
-      sendJson(res, 400, { code: "invalid_body", message: "Body JSON không hợp lệ" });
+      sendJson(res, 400, { code: "invalid_body", message: "Invalid JSON body" });
     }
   }
 

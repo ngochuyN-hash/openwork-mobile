@@ -18,14 +18,14 @@ test("chưa gõ gì -> idle, không bao giờ là phase khác", () => {
 test("có kết quả -> none (vẽ danh sách), kể cả khi vẫn đang quét", () => {
   const r = scanState({ debounced: "css", resultCount: 3, scanning: 5, scanned: 0, totalSessions: 12 });
   assert.equal(r.phase, "none");
-  assert.match(r.hint, /3 kết quả/);
-  assert.match(r.hint, /đang quét 5 phiên/);
+  assert.match(r.hint, /3 results/);
+  assert.match(r.hint, /scanning 5 sessions/);
 });
 
 test("chưa có kết quả + đang quét -> scanning, KHÔNG kết luận 'không tìm thấy'", () => {
   const r = scanState({ debounced: "css", resultCount: 0, scanning: 12, scanned: 0, totalSessions: 40 });
   assert.equal(r.phase, "scanning");
-  assert.match(r.hintText, /chờ thêm chút/);
+  assert.match(r.hintText, /please wait a moment/);
 });
 
 test("quét xong mà không khớp -> empty, nói rõ đã quét tới đâu", () => {
@@ -37,22 +37,22 @@ test("quét xong mà không khớp -> empty, nói rõ đã quét tới đâu", (
 test("quét hết mà vẫn không khớp -> empty nhưng không còn câu 'mới quét'", () => {
   const r = scanState({ debounced: "zzz", resultCount: 0, scanning: 0, scanned: 40, totalSessions: 40 });
   assert.equal(r.phase, "empty");
-  assert.equal(/Mới quét/.test(r.hintText), false);
+  assert.equal(/Scanned content/.test(r.hintText), false);
 });
 
 test("scanning kẹt ở số cũ là bug: hint không được nói 'đang quét' khi không quét", () => {
   // phase phải quyết được từ 4 con số — không phụ thuộc chỗ nào "vừa đặt cờ".
   const idle = scanState({ debounced: "css", resultCount: 0, scanning: 0, scanned: 0, totalSessions: 12 });
   assert.equal(idle.phase, "empty");
-  assert.equal(/đang quét/.test(idle.hint), false);
+  assert.equal(/scanning/.test(idle.hint), false);
 });
 
 test("hint đổi đúng: quét xong thì nhắc đã quét bao nhiêu", () => {
   const busy = scanState({ debounced: "a", resultCount: 1, scanning: 4, scanned: 8, totalSessions: 30 });
-  assert.match(busy.hint, /đang quét 4 phiên/);
-  assert.equal(/đã quét/.test(busy.hint), false);
+  assert.match(busy.hint, /scanning 4 sessions/);
+  assert.equal(/scanned/.test(busy.hint), false);
   const done = scanState({ debounced: "a", resultCount: 1, scanning: 0, scanned: 12, totalSessions: 30 });
-  assert.match(done.hint, /đã quét nội dung 12 phiên/);
+  assert.match(done.hint, /scanned content of 12 sessions/);
 });
 
 test("số rác không làm vỡ phase", () => {

@@ -38,13 +38,13 @@ export function scanState({ debounced, resultCount = 0, scanning = 0, scanned = 
   if (!q) {
     return {
       phase: "idle",
-      hint: total ? `${total} phiên sẵn sàng tìm` : "…",
+      hint: total ? `${total} sessions to search` : "…",
       hintText: "",
     };
   }
 
-  const tail = busy ? ` · đang quét ${busy} phiên` : done ? ` · đã quét nội dung ${done} phiên` : "";
-  const hint = `${n} kết quả${tail}`;
+  const tail = busy ? ` · scanning ${busy} sessions` : done ? ` · scanned content of ${done} sessions` : "";
+  const hint = `${n} results${tail}`;
 
   if (n > 0) return { phase: "none", hint, hintText: "" };
   // Còn đang quét -> chưa kết luận được, đừng nói "không tìm thấy".
@@ -52,7 +52,7 @@ export function scanState({ debounced, resultCount = 0, scanning = 0, scanned = 
     return {
       phase: "scanning",
       hint,
-      hintText: "Đang dò tiếp phần hội thoại của các phiên gần đây — chờ thêm chút nhé.",
+      hintText: "Still scanning the conversation content of recent sessions — please wait a moment.",
     };
   }
   return {
@@ -62,8 +62,8 @@ export function scanState({ debounced, resultCount = 0, scanning = 0, scanned = 
     // thông tin sai. `scanPlan` chỉ quét SCAN_LIMIT phiên mỗi lượt.
     hintText:
       done < total
-        ? `Mới quét nội dung ${done}/${total} phiên — phiên cũ hơn chưa được dò. Thử thêm từ khoá hoặc bớt chữ.`
-        : "Thử bớt từ khoá, hoặc kiểm tra lại chính tả.",
+        ? `Scanned content of ${done}/${total} sessions — older sessions were not scanned. Try adding more keywords or fewer words.`
+        : "Try fewer keywords, or check the spelling.",
   };
 }
 

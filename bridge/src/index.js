@@ -72,7 +72,7 @@ const tenantHashSuffix = () => (config.lookupTenant ? `&m=${encodeURIComponent(c
 let printingPairing = false;
 pairing.onCode = () => {
   // Mã mới (thiết bị vừa ghép xong hoặc mã cũ hết hạn) -> in lại QR
-  if (!printingPairing) printPairing(currentBase(), "[pairing] mã ghép MỚI:");
+  if (!printingPairing) printPairing(currentBase(), "[pairing] NEW pairing code:");
 };
 
 async function refreshDiscovery({ force = false } = {}) {
@@ -137,7 +137,7 @@ await refreshDiscovery();
 // autostart). Discovery loop 5s có sẵn sẽ tự bắt server khi app mở xong.
 if (config.autoLaunchOpenWork && !state.server) {
   launchOpenWork({ configOpenworkExe: config.openworkExe }).catch((error) =>
-    console.error(`[openwork] tự mở lúc khởi động lỗi: ${error.message}`)
+    console.error(`[openwork] auto-launch at startup failed: ${error.message}`)
   );
 }
 
@@ -193,14 +193,14 @@ function printPairing(base, note, { withMaster = false } = {}) {
   const pairingUrl = `${base}/#p=${code}${tenantHashSuffix()}`;
   console.log("");
   if (note) console.log(note);
-  console.log(`  QR ghép thiết bị (mã 1 lần, hết hạn sau ${CODE_TTL_MINUTES} phút):`);
+  console.log(`  Device pairing QR (one-time code, expires after ${CODE_TTL_MINUTES} minutes):`);
   console.log(`  ${pairingUrl}`);
-  console.log(`  Mã ghép: ${code.slice(0, 4)}-${code.slice(4)}`);
+  console.log(`  Pairing code: ${code.slice(0, 4)}-${code.slice(4)}`);
   console.log("");
   qrcode.generate(pairingUrl, { small: true });
   if (withMaster) {
     const masterUrl = `${base}/#t=${config.mobileToken}${tenantHashSuffix()}`;
-    console.log("  QR MASTER (token vĩnh viễn — chỉ dùng tại máy, TUYỆT ĐỐI không chia sẻ):");
+    console.log("  MASTER QR (permanent token - local machine only, NEVER share it):");
     console.log(`  ${masterUrl}`);
     console.log("");
     qrcode.generate(masterUrl, { small: true });
@@ -219,13 +219,13 @@ const onListening = () => {
   } catch {}
   console.log("");
   console.log(`OpenWork Mobile bridge v${BRIDGE_VERSION}`);
-  console.log(`listening on ${local} (localhost only - remote đi qua tunnel bên dưới)`);
+  console.log(`listening on ${local} (localhost only - remote access goes through the tunnel below)`);
   console.log(`openwork-server: ${state.server ? state.server.baseUrl : "not found yet (waiting for OpenWork...)"}`);
   console.log(`token status: ${state.tokenActive ? "ACTIVE" : state.restartRequired ? "needs OpenWork restart (one time)" : "pending"}`);
   // QR thứ 1 (mã one-time 30 phút): để ghép thiết bị mới — hết hạn tự chết.
   // QR thứ 2 (master token): vĩnh viễn, chỉ in tại máy để chủ máy tiện tay
   // nhập thẳng trên điện thoại của mình — TUYỆT ĐỐI không chụp/chia sẻ.
-  printPairing(config.publicUrl || local, "Mở link này (hoặc quét QR) trên điện thoại:", {
+  printPairing(config.publicUrl || local, "Open this link (or scan the QR) on your phone:", {
     withMaster: true,
   });
 
@@ -236,7 +236,7 @@ const onListening = () => {
       onUrl: (url) => {
         state.tunnelUrl = url;
         // Tunnel URL là public — chỉ in QR mã one-time, KHÔNG in QR master.
-        printPairing(currentBase(), "[tunnel] URL public MỚI (dùng được từ 4G, không cần app nào trên điện thoại):");
+        printPairing(currentBase(), "[tunnel] NEW public URL (works from 4G, no phone app needed):");
       },
     })
       .then((controller) => {
@@ -244,14 +244,14 @@ const onListening = () => {
         tunnel.getState = () => controller.getState();
         tunnel.restart = () => controller.restart();
       })
-      .catch((error) => console.error(`[tunnel] lỗi: ${error.message}`));
+      .catch((error) => console.error(`[tunnel] error: ${error.message}`));
   }
 
   // Heartbeat lên Cloudflare Worker (địa chỉ cố định) nếu đã cấu hình:
   // điện thoại mở đúng 1 URL duy nhất, tự tìm được bridge dù tunnel đổi.
   if (config.lookupUrl && config.lookupSecret) {
     console.log(
-      `[lookup] reporting tới ${config.lookupUrl}${config.lookupTenant ? ` (phòng: ${config.lookupTenant})` : ""}`
+      `[lookup] reporting to ${config.lookupUrl}${config.lookupTenant ? ` (room: ${config.lookupTenant})` : ""}`
     );
     startLookup({
       getUrl: () => state.tunnelUrl,
@@ -279,10 +279,10 @@ server.on("error", (err) => {
   const retry = () => {
     attempt += 1;
     if (attempt > 10) {
-      console.error(`[listener] không lấy được cổng ${config.port} sau 10 lần — thoát.`);
+      console.error(`[listener] could not get port ${config.port} after 10 attempts - exiting.`);
       process.exit(1);
     }
-    console.warn(`[listener] cổng ${config.port} chưa nhả (bridge cũ tắt chậm) — thử lại lần ${attempt}/10...`);
+    console.warn(`[listener] port ${config.port} not free yet (old bridge is slow to exit) - retry ${attempt}/10...`);
     setTimeout(() => server.listen(config.port, "127.0.0.1", onListening), 400);
   };
   retry();

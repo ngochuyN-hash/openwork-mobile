@@ -163,7 +163,7 @@ export function FilesPage({ route }) {
     // `undefined` — mọi request sau đó đều hỏng với một thông báo khó hiểu.
     const target = node.path ?? node.absolutePath ?? "";
     if (!target) {
-      setError(`Không đọc được đường dẫn của "${name}" — tải lại danh sách.`);
+      setError(`Could not read path of "${name}" — reload file list.`);
       return;
     }
     const shown = name || fileNameOf(target);
@@ -179,7 +179,7 @@ export function FilesPage({ route }) {
     let done = 0;
     const failed = [];
     for (const file of files) {
-      setUploadNote(`Đang tải lên ${done + failed.length + 1}/${files.length}: ${file.name}…`);
+      setUploadNote(`Uploading ${done + failed.length + 1}/${files.length}: ${file.name}…`);
       try {
         await owUploadFile(wsId, path, file);
         done += 1;
@@ -200,7 +200,7 @@ export function FilesPage({ route }) {
     // Gộp hai lỗi: nạp lại danh sách hỏng VÀ có file upload hỏng là hai chuyện
     // khác nhau, hiện một là mất một.
     if (summary.error) {
-      setError(loadErr ? `${summary.error} Thư mục cũng không tải lại được: ${loadErr}` : summary.error);
+      setError(loadErr ? `${summary.error} Directory could not be reloaded: ${loadErr}` : summary.error);
     }
   }
 
@@ -230,7 +230,7 @@ export function FilesPage({ route }) {
       <div class="page-head">
         <div class="page-actions" style="margin-left:auto">
           <button type="button" class="btn small ghost btn-icon" disabled={uploading} onClick={() => uploadRef.current?.click()}>
-            <UploadIcon size={16} /> {uploading ? "Đang tải lên…" : "Tải lên"}
+            <UploadIcon size={16} /> {uploading ? "Uploading…" : "Upload"}
           </button>
           <input
             ref={uploadRef}
@@ -244,13 +244,13 @@ export function FilesPage({ route }) {
               e.currentTarget.value = "";
             }}
           />
-          <button type="button" class="btn small ghost btn-icon" aria-label="Tải lại danh sách file" onClick={() => load(path)}>
+          <button type="button" class="btn small ghost btn-icon" aria-label="Reload file list" onClick={() => load(path)}>
             <RefreshIcon size={16} />
           </button>
         </div>
       </div>
 
-      <nav class="crumbs" aria-label="Đường dẫn thư mục">
+      <nav class="crumbs" aria-label="Folder path">
         <a href="#" onClick={(e) => { e.preventDefault(); setPath(""); }}>root</a>
         {crumbs.map((crumb, i) => (
           <span key={crumb}>
@@ -269,11 +269,11 @@ export function FilesPage({ route }) {
         ))}
       </nav>
 
-      {error && <Banner kind="err" actionLabel="Thử lại" onAction={() => load(path)}>{error}</Banner>}
+      {error && <Banner kind="err" actionLabel="Retry" onAction={() => load(path)}>{error}</Banner>}
       {/* KHÔNG điều kiện `!error`: upload 3/5 thành công + 2 file hỏng phải hiện
           CẢ HAI dòng. Bản cũ ẩn dòng thông báo khi có lỗi, nên người dùng mất
           thông tin "đã tải được mấy file" đúng lúc nó quan trọng nhất. */}
-      {uploadNote && <Banner kind="warn" actionLabel="Đã rõ" onAction={() => setUploadNote("")}>{uploadNote}</Banner>}
+      {uploadNote && <Banner kind="warn" actionLabel="Dismiss" onAction={() => setUploadNote("")}>{uploadNote}</Banner>}
       {entries === null && <Loading />}
 
       {path && (
@@ -281,7 +281,7 @@ export function FilesPage({ route }) {
           class="file-row"
           role="button"
           tabIndex={0}
-          aria-label="Lên thư mục cha"
+          aria-label="Go to parent directory"
           onClick={() => setPath(parent)}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
@@ -304,7 +304,7 @@ export function FilesPage({ route }) {
             key={node.path ?? label}
             role="button"
             tabIndex={0}
-            aria-label={`${isDir ? "Mở thư mục" : "Mở file"} ${label}`}
+            aria-label={`${isDir ? "Open folder" : "Open file"} ${label}`}
             onClick={() => (isDir ? setPath(node.path ?? node.absolutePath ?? "") : openFile(node))}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
@@ -325,7 +325,7 @@ export function FilesPage({ route }) {
       })}
 
       {entries?.length === 0 && !error && (
-        <Empty title="Thư mục trống" hint="Tải file lên để bắt đầu." actionLabel="Tải file lên" onAction={() => uploadRef.current?.click()} />
+        <Empty title="Folder is empty" hint="Upload files to get started." actionLabel="Upload file" onAction={() => uploadRef.current?.click()} />
       )}
     </>
   );
@@ -359,7 +359,7 @@ function FileViewer({ wsEnc, file, onClose }) {
 
   // Nút Đóng mượn topbar (ghim cố định): báo lên App qua event nội bộ, gửi 1 lần lúc mở.
   useEffect(() => {
-    window.dispatchEvent(new CustomEvent("owm:topback", { detail: { label: "Đóng", onBack: () => closeRef.current() } }));
+    window.dispatchEvent(new CustomEvent("owm:topback", { detail: { label: "Close", onBack: () => closeRef.current() } }));
     return () => window.dispatchEvent(new CustomEvent("owm:topback", { detail: null }));
   }, []);
 
@@ -451,7 +451,7 @@ function FileViewer({ wsEnc, file, onClose }) {
         if (cancel) return;
         const msg = String(e?.message ?? "");
         // UNPAIRED = app mất chìa; App tự xử, đừng báo thêm lỗi file.
-        if (msg !== "UNPAIRED") setError(`Không mở được "${file.name}": ${msg || "tải lỗi"}`);
+        if (msg !== "UNPAIRED") setError(`Could not open "${file.name}": ${msg || "failed to load"}`);
       }
     );
     return () => {
@@ -475,7 +475,7 @@ function FileViewer({ wsEnc, file, onClose }) {
       // sửa dở bị báo là "Đã lưu" và nút Lưu tắt -> mất thay đổi đó.
       setDirty(editedRef.current !== text);
     } catch (e) {
-      setError(`Lưu lỗi: ${e.message}`);
+      setError(`Save failed: ${e.message}`);
     } finally {
       setSaving(false);
     }
@@ -522,7 +522,7 @@ function FileViewer({ wsEnc, file, onClose }) {
       a.remove();
     } catch (e) {
       if (dlToken.current !== token) return;
-      if (e?.name !== "AbortError") setDlError(`Tải lỗi: ${e.message}`);
+      if (e?.name !== "AbortError") setDlError(`Download failed: ${e.message}`);
       setDl(null);
     } finally {
       if (dlToken.current === token) abortRef.current = null;
@@ -563,10 +563,10 @@ function FileViewer({ wsEnc, file, onClose }) {
       // activation" — trả về null. Báo lỗi thay vì im lặng.
       const win = window.open(url, "_blank", "noopener");
       if (!win && owned) {
-        setDlError("Trình duyệt chặn cửa sổ mới — bấm Tải về để lưu file thay thế.");
+        setDlError("Browser blocked new window — tap Download to save file instead.");
       }
     } catch (e) {
-      if (e?.name !== "AbortError") setDlError(`Chia sẻ lỗi: ${e.message}`);
+      if (e?.name !== "AbortError") setDlError(`Share failed: ${e.message}`);
     }
   }
 
@@ -583,12 +583,12 @@ function FileViewer({ wsEnc, file, onClose }) {
 
   const dlBusy = !!dl && !dl.done;
   const dlLabel = !dl
-    ? "Tải về"
+    ? "Download"
     : dl.done
-      ? "Tải lại"
+      ? "Download again"
       : dl.total
-        ? `Đang tải ${Math.round((dl.loaded / dl.total) * 100)}% (${formatBytes(dl.loaded)}/${formatBytes(dl.total)})`
-        : `Đang tải ${formatBytes(dl.loaded)}…`;
+        ? `Downloading ${Math.round((dl.loaded / dl.total) * 100)}% (${formatBytes(dl.loaded)}/${formatBytes(dl.total)})`
+        : `Downloading ${formatBytes(dl.loaded)}…`;
 
   return (
     <>
@@ -596,7 +596,7 @@ function FileViewer({ wsEnc, file, onClose }) {
         <div class="page-actions" style="margin-left:auto">
           {dlBusy ? (
             <button type="button" class="btn small ghost btn-icon" onClick={cancelDownload}>
-              Hủy
+              Cancel
             </button>
           ) : (
             <button type="button" class="btn small ghost btn-icon" onClick={downloadFile}>
@@ -607,14 +607,14 @@ function FileViewer({ wsEnc, file, onClose }) {
             type="button"
             class="btn small ghost btn-icon"
             disabled={dlBusy}
-            title={dlBusy ? "Đang tải — bấm Hủy trước nếu muốn chia sẻ." : "Chia sẻ file"}
+            title={dlBusy ? "Downloading — cancel first if you want to share." : "Share file"}
             onClick={shareFile}
           >
-            Chia sẻ
+            Share
           </button>
           {file.kind === "text" && content !== null && (
             <button type="button" class="btn small" disabled={!dirty || saving} onClick={save}>
-              {saving ? "Đang lưu…" : dirty ? "Lưu" : "Đã lưu"}
+              {saving ? "Saving…" : dirty ? "Save" : "Saved"}
             </button>
           )}
         </div>
@@ -628,7 +628,7 @@ function FileViewer({ wsEnc, file, onClose }) {
       {error && (
         <Banner
           kind="err"
-          actionLabel="Thử lại"
+          actionLabel="Retry"
           onAction={() => {
             setError(""); // nạp lại xong phải xoá lỗi cũ, không thì Banner đứng lại
             setLoadNonce((v) => v + 1);
@@ -637,13 +637,13 @@ function FileViewer({ wsEnc, file, onClose }) {
           {error}
         </Banner>
       )}
-      {dlError && <Banner kind="err" actionLabel="Thử lại" onAction={downloadFile}>{dlError}</Banner>}
+      {dlError && <Banner kind="err" actionLabel="Retry" onAction={downloadFile}>{dlError}</Banner>}
       {dlBusy && dl.total > 0 && (
-        <progress value={dl.loaded} max={dl.total} style="width:100%;height:6px" aria-label="Tiến trình tải file" />
+        <progress value={dl.loaded} max={dl.total} style="width:100%;height:6px" aria-label="File download progress" />
       )}
 
       {file.kind === "text" && blocked && (
-        <Empty title="File quá lớn để mở trong trình soạn" hint={blocked} actionLabel="Tải về" onAction={downloadFile} />
+        <Empty title="File too large to open in editor" hint={blocked} actionLabel="Download" onAction={downloadFile} />
       )}
 
       {file.kind === "text" && !blocked && content === null && !error && <Loading />}
@@ -651,7 +651,7 @@ function FileViewer({ wsEnc, file, onClose }) {
       {file.kind === "text" && !blocked && content !== null && (
         <div class="file-editor">
           <textarea
-            aria-label={`Nội dung file ${file.name}`}
+            aria-label={`Content of file ${file.name}`}
             value={edited}
             onInput={(e) => {
               setEdited(e.currentTarget.value);
@@ -672,7 +672,7 @@ function FileViewer({ wsEnc, file, onClose }) {
             alt={file.name}
             width="800"
             style="max-width:100%;height:auto;border-radius:12px;border:1px solid var(--border)"
-            onError={() => setError(`Không tải được ảnh "${file.name}" — file có thể đã bị xoá hoặc di chuyển.`)}
+            onError={() => setError(`Failed to load image "${file.name}" — file may have been deleted or moved.`)}
           />
         </div>
       )}
@@ -684,7 +684,7 @@ function FileViewer({ wsEnc, file, onClose }) {
           chính nó. */}
       {file.kind === "pdf" && previewUrl && (
         <iframe
-          title={`Xem trước ${file.name}`}
+          title={`Preview ${file.name}`}
           src={previewUrl}
           style="width:100%;height:70vh;border-radius:12px;border:1px solid var(--border);background:var(--bg-raised)"
         />
@@ -693,7 +693,7 @@ function FileViewer({ wsEnc, file, onClose }) {
       {file.kind === "pdf" && !previewUrl && !error && <Loading />}
 
       {file.kind === "binary" && (
-        <Empty title="File nhị phân" actionLabel="Tải về" onAction={downloadFile} />
+        <Empty title="Binary file" actionLabel="Download" onAction={downloadFile} />
       )}
     </>
   );

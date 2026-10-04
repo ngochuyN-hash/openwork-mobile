@@ -59,7 +59,7 @@ export function scheduleDailyWipe(dir = bridgeDataDir()) {
     next.setHours(24, 0, 0, 0); // nửa đêm hôm sau (giờ địa phương)
     const t = setTimeout(() => {
       wipeLogs(dir);
-      console.log(`[${new Date().toISOString()}] [log] sang ngày mới — đã dọn log.`);
+      console.log(`[${new Date().toISOString()}] [log] new day - old logs cleaned.`);
       arm();
     }, next.getTime() - now.getTime());
     if (typeof t.unref === "function") t.unref();

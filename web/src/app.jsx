@@ -125,7 +125,7 @@ export function App() {
       // wsId rỗng = tìm trên mọi workspace -> quay lại Home; có wsId = tìm
       // trong workspace đó -> quay lại danh sách phiên của workspace.
       view = <SearchPage route={route} />;
-      title = "Tìm phiên";
+      title = "Search sessions";
       showNav = false;
       back = route.wsId
         ? { label: "Sessions", href: `#/ws/${encodeURIComponent(route.wsId)}` }
@@ -155,7 +155,7 @@ export function App() {
               if (target.onBack) target.onBack();
               else navigate(target.href);
             }}
-            aria-label={`Quay lại ${(topBackOverride ?? back).label}`}
+            aria-label={`Back to ${(topBackOverride ?? back).label}`}
           >
             <BackIcon size={18} />
             <span>{(topBackOverride ?? back).label}</span>
@@ -225,7 +225,7 @@ function StatusBanners({ state, onRecheck, view }) {
     // nuốt mất và thay bằng `String(e.message)` — lỗi "bridge không thấy file"
     // phải hiện nguyên văn tiếng Việt của ta, không phải "openwork_not_found".
     if (!openworkFoundOf(payload?.openwork)) {
-      setFixErr("Đã lưu nhưng bridge vẫn không thấy file này — kiểm tra lại đường dẫn.");
+      setFixErr("Saved, but bridge still cannot find this file — check the path.");
       // Throw để `submit` GIỮ NGUYÊN cả ô gõ lẫn danh sách: đường dẫn này
       // người dùng vừa gõ tay hoặc vừa bấm "Dùng", xoá đi thì phải làm lại
       // từ đầu đúng lúc app chưa thấy exe.
@@ -236,7 +236,7 @@ function StatusBanners({ state, onRecheck, view }) {
     // kèm, kể cả khi đã tìm thấy"), nên danh sách hợp nhất vẫn còn dù xoá
     // state. Việc ẩn khối sửa dựa vào cờ `openworkFound` bên dưới, không dựa
     // vào việc dọn mảng.
-    setFixMsg("Đã chỉ xong. Bấm “Bật OpenWork trên máy tính” ở trên để mở app.");
+    setFixMsg("Path set. Tap “Launch OpenWork on computer” above to start the app.");
     onRecheck();
   }
 
@@ -245,10 +245,10 @@ function StatusBanners({ state, onRecheck, view }) {
     return (
       <Banner
         kind="warn"
-        actionLabel="Kiểm tra lại"
+        actionLabel="Recheck"
         onAction={onRecheck}
       >
-        Cần <b>restart OpenWork đúng 1 lần</b> để kích hoạt token cho bridge. Xong rồi bấm kiểm tra lại.
+        Please <b>restart OpenWork once</b> to activate the token for bridge. Then tap recheck.
       </Banner>
     );
   }
@@ -257,8 +257,8 @@ function StatusBanners({ state, onRecheck, view }) {
   // dùng đi restart một máy đang khoẻ.
   if (state.error) {
     return (
-      <Banner kind="err" actionLabel="Thử lại" onAction={onRecheck}>
-        Mất kết nối tới bridge: <b>{state.error}</b> — kiểm tra mạng/Wi-Fi rồi thử lại.
+      <Banner kind="err" actionLabel="Retry" onAction={onRecheck}>
+        Lost connection to bridge: <b>{state.error}</b> — check your network/Wi-Fi and try again.
       </Banner>
     );
   }
@@ -302,7 +302,7 @@ function StatusBanners({ state, onRecheck, view }) {
           await apiRecheck();
           onRecheck();
         } else {
-          setWakeMsg("Đã gửi lệnh mở OpenWork — đợi ~20s rồi bấm Kiểm tra lại.");
+          setWakeMsg("Launch command sent to OpenWork — wait ~20s then tap Recheck.");
         }
       } catch (e) {
         setWakeMsg(String(e.message || e));
@@ -316,12 +316,12 @@ function StatusBanners({ state, onRecheck, view }) {
     };
     return (
       <div>
-        <Banner kind="err" actionLabel="Thử lại" onAction={onRecheck}>
-          Không tìm thấy openwork-server — OpenWork desktop có đang chạy không?
+        <Banner kind="err" actionLabel="Retry" onAction={onRecheck}>
+          openwork-server not found — is OpenWork desktop running?
         </Banner>
         <div class="page-actions" style="margin:8px 0 0">
           <button class="btn small" disabled={waking} onClick={wake}>
-            {waking ? "Đang bật…" : "Bật OpenWork trên máy tính"}
+            {waking ? "Launching…" : "Launch OpenWork on computer"}
           </button>
         </div>
         {wakeMsg && <p class="sheet-body" style="margin:6px 0 0">{wakeMsg}</p>}
@@ -332,7 +332,7 @@ function StatusBanners({ state, onRecheck, view }) {
         {showFix && !openworkFound && candidates.length > 0 && (
           <div class="card" style="margin-top:12px">
             <OpenWorkFix
-              title="Chưa thấy OpenWork.exe — chỉ cho bridge biết nó nằm ở đâu"
+              title="OpenWork.exe not found — specify where it is located"
               candidates={candidates}
               onChoose={chooseExePath}
               saving={fixing}

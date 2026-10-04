@@ -112,7 +112,7 @@ test("apiSetMachineName POST body name đã dẹp khoảng trắng", async () =>
 
 test("apiSetMachineName chặn tên rỗng NGAY ở client, không tốn request", async () => {
   failIfCalled();
-  await assert.rejects(() => api.apiSetMachineName("   "), (e) => e.message === "Tên máy trống.");
+  await assert.rejects(() => api.apiSetMachineName("   "), (e) => e.message === "Machine name is empty.");
 });
 
 // ---- Nạp lại engine: POST /workspace/:id/engine/reload ----

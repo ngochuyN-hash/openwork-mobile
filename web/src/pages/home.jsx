@@ -163,7 +163,7 @@ export function HomePage() {
       load();
     } catch (e) {
       if (itemsRef.current === afterDrop) setItems(before);
-      setError(`Không xoá được phiên này: ${e?.message || e}`);
+      setError(`Failed to delete this session: ${e?.message || e}`);
     } finally {
       deletingRef.current.delete(key);
     }
@@ -174,31 +174,31 @@ export function HomePage() {
       <div class="page-head">
         <span class="hint">
           {items
-            ? `${shown.length} session${pinnedCount ? ` · ${pinnedCount} ghim` : ""}${busyCount ? ` · ${busyCount} đang chạy` : ""}`
+            ? `${shown.length} session${pinnedCount ? ` · ${pinnedCount} pinned` : ""}${busyCount ? ` · ${busyCount} running` : ""}`
             : "…"}
         </span>
         <button type="button" class="btn small ghost" onClick={() => navigate("#/search")}>
-          <SearchIcon size={16} /> Tìm phiên
+          <SearchIcon size={16} /> Search sessions
         </button>
       </div>
 
-      {error && <Banner kind="err" actionLabel="Thử lại" onAction={load}>{error}</Banner>}
+      {error && <Banner kind="err" actionLabel="Retry" onAction={load}>{error}</Banner>}
 
       {items === null && !error && <SkeletonList rows={4} />}
 
       {items?.length === 0 && (
         <Empty
           icon
-          title="Chưa có session nào"
-          hint="Vào tab Workspace, chọn workspace rồi bấm (+) để tạo session đầu tiên."
+          title="No sessions yet"
+          hint="Go to Workspace tab, select a workspace, and tap (+) to create your first session."
         />
       )}
 
       {items?.length > 0 && shown.length === 0 && (
         <Empty
           icon
-          title="Không còn phiên nào ở đây"
-          hint="Bạn đã lưu trữ hết session rồi. Vào một workspace để lấy lại."
+          title="No sessions here"
+          hint="All sessions are archived. Open a workspace to restore them."
         />
       )}
 
@@ -231,7 +231,7 @@ export function HomePage() {
                     type="button"
                     class="btn small ghost btn-icon"
                     aria-pressed={pinned}
-                    aria-label={pinned ? "Bỏ ghim phiên này" : "Ghim phiên lên đầu danh sách"}
+                    aria-label={pinned ? "Unpin this session" : "Pin session to top"}
                     onClick={(e) => {
                       e.stopPropagation(); // nếu không, SwipeRow coi là tap -> mở phiên
                       togglePin(ws, session);

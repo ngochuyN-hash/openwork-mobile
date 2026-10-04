@@ -43,37 +43,37 @@ export function parseShareResponse(payload, { unshare = false } = {}) {
   if (unshare) {
     // DELETE trả Session mà `share` đã bị gỡ — thành công khi không còn link.
     return url
-      ? { ok: false, url, error: "Máy tính vẫn còn link chia sẻ, chưa huỷ được." }
+      ? { ok: false, url, error: "The computer still has the share link; it could not be revoked." }
       : { ok: true, url: "", error: "" };
   }
   if (!url) {
     return {
       ok: false,
       url: "",
-      error: "Máy tính không trả về link chia sẻ cho phiên này. Thử tắt rồi bật lại chia sẻ.",
+      error: "The computer did not return a share link for this session. Try turning sharing off and on again.",
     };
   }
   return { ok: true, url, error: "" };
 }
 
 /** Lỗi của endpoint share -> một câu tiếng Việt đọc được (không lộ HTTP thô). */
-export function shareErrorVi(error) {
+export function shareError(error) {
   const message = String(error?.message ?? error ?? "");
   if (message === "UNPAIRED") {
-    return "Chưa ghép máy tính — mở App trên máy anh để ghép rồi thử lại.";
+    return "Computer not paired yet — open the app on your computer to pair, then try again.";
   }
   const status = Number(error?.status ?? 0);
   if (message === "AbortError" || error?.name === "AbortError") {
-    return "Bạn đã huỷ chia sẻ.";
+    return "You have revoked sharing.";
   }
-  if (status === 400) return "Máy tính từ chối yêu cầu chia sẻ phiên này.";
-  if (status === 401) return "Chìa kết nối hết hạn — ghép lại máy tính rồi thử.";
-  if (status === 403) return "Chìa này chỉ xem được, không chia sẻ được phiên.";
-  if (status === 404) return "Không tìm thấy phiên này trên máy tính (có thể đã bị xoá).";
-  if (status >= 500) return "Máy tính đang lỗi, thử lại sau ít phút.";
+  if (status === 400) return "The computer rejected the share request for this session.";
+  if (status === 401) return "Connection key expired — pair your computer again and retry.";
+  if (status === 403) return "This key is read-only; it cannot share sessions.";
+  if (status === 404) return "Session not found on the computer (it may have been deleted).";
+  if (status >= 500) return "The computer is having errors — try again in a few minutes.";
   // Lỗi mạng không có status: fetch reject. Câu chung, không đoán bừa.
   if (!message || message === "Failed to fetch" || /network|load failed/i.test(message)) {
-    return "Không nối được tới máy tính — kiểm tra mạng rồi thử lại.";
+    return "Could not reach your computer — check your network and try again.";
   }
   return message;
 }
@@ -87,15 +87,15 @@ export function canWebShare(nav) {
 export function buildShareData(session, url) {
   const title = String(session?.title ?? "").trim();
   const link = String(url ?? "").trim();
-  const data = { title: title || "Phiên trên OpenWork", url: link };
-  if (title) data.text = `Xem phiên "${title}" trên OpenWork:`;
+  const data = { title: title || "Session on OpenWork", url: link };
+  if (title) data.text = `View session "${title}" on OpenWork:`;
   return data;
 }
 
 /**
  * Chuẩn hoá một lần bấm "Chia sẻ": có `navigator.share` thì mở sheet của máy,
  * không có thì chép link vào clipboard (bỏ hẳn việc tự mở tab — người dùng
- * chỉ muốn lấy link để dán). Ném lỗi có status thì lỗi sẽ qua `shareErrorVi`.
+ * chỉ muốn lấy link để dán). Ném lỗi có status thì lỗi sẽ qua `shareError`.
  *
  * Trả { via, url, error } với via ∈ share | copy | cancelled | unsupported |
  * error. `share` bị lỗi KHÔNG phải huỷ (khác AbortError) thì rơi tiếp xuống
@@ -103,7 +103,7 @@ export function buildShareData(session, url) {
  */
 export async function shareLink({ nav, clipboard, session, url } = {}) {
   const link = String(url ?? "").trim();
-  if (!link) return { via: "error", url: "", error: "Chưa có link để chia sẻ." };
+  if (!link) return { via: "error", url: "", error: "No link to share yet." };
   const data = buildShareData(session, link);
   if (canWebShare(nav)) {
     try {
@@ -114,31 +114,31 @@ export async function shareLink({ nav, clipboard, session, url } = {}) {
     }
   }
   if (typeof clipboard?.writeText !== "function") {
-    return { via: "unsupported", url: link, error: "Máy này không hỗ trợ chia sẻ, và không chép được link." };
+    return { via: "unsupported", url: link, error: "This device does not support sharing, and the link could not be copied." };
   }
   try {
     await clipboard.writeText(link);
     return { via: "copy", url: link, error: "" };
   } catch {
-    return { via: "error", url: link, error: "Không chép được link — bấm vào link rồi chép tay." };
+    return { via: "error", url: link, error: "Could not copy the link — tap the link and copy it manually." };
   }
 }
 
 /** Câu báo lại cho người dùng sau khi `shareLink` chạy (rỗng = không cần báo). */
-export function shareResultVi(result) {
+export function shareResult(result) {
   switch (result?.via) {
     case "share":
       return "";
     case "copy":
-      return "Máy này không có sheet chia sẻ — đã chép link, bạn dán thoải mái.";
+      return "This device has no share sheet — the link was copied, paste it wherever you like.";
     case "cancelled":
       return "";
     default:
-      return String(result?.error ?? "") || "Chia sẻ không được.";
+      return String(result?.error ?? "") || "Sharing failed.";
   }
 }
 
 /** Nhãn nút: đang bật link thì đổi sang huỷ chia sẻ. */
 export function shareButtonLabel(session) {
-  return isShared(session) ? "Huỷ chia sẻ" : "Chia sẻ";
+  return isShared(session) ? "Revoke share" : "Share";
 }

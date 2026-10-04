@@ -140,9 +140,9 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
 
   async function revoke(device) {
     askConfirm({
-      title: "Thu hồi thiết bị?",
-      body: `"${device.label}" sẽ mất quyền truy cập vĩnh viễn (phải ghép lại bằng mã mới).`,
-      confirmLabel: "Thu hồi",
+      title: "Revoke this device?",
+      body: `"${device.label}" will permanently lose access (it must be paired again with a new code).`,
+      confirmLabel: "Revoke",
       onConfirm: async () => {
         setDevicesErr(false);
         try {
@@ -176,8 +176,8 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       // Tunnel chết / 401 phải báo rõ, không im lặng trả nút về trạng thái cũ.
       setCheckMsg(
         e.message === "UNPAIRED"
-          ? "Chìa hết hiệu lực (401) — máy đã thu hồi khóa này, hãy ghép lại."
-          : `Kiểm tra lỗi: ${String(e.message || e)}`
+          ? "Key is no longer valid (401) — that device revoked this key. Pair again."
+          : `Check failed: ${String(e.message || e)}`
       );
     } finally {
       setBusy(false);
@@ -193,7 +193,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
         await apiRecheck();
         onRecheck();
       } else {
-        setWakeMsg("Đã gửi lệnh mở OpenWork — đợi ~20s rồi bấm Kiểm tra lại.");
+        setWakeMsg("Launch command sent to OpenWork — wait ~20s then tap Recheck.");
       }
     } catch (e) {
       setWakeMsg(String(e.message || e));
@@ -250,7 +250,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       // Lỗi này đi qua `pathErr` (Banner đỏ), KHÔNG phải `pathMsg` (Banner
       // xanh): băng xanh nói "Đã lưu nhưng bridge vẫn không thấy file" đọc như
       // thành công có ngoặt.
-      setPathErr("Đã lưu nhưng bridge vẫn không thấy file này — kiểm tra lại đường dẫn.");
+      setPathErr("Saved, but bridge still cannot find this file — check the path.");
       // Throw để `submit` GIỮ NGUYÊN ô gõ: đường dẫn này người dùng vừa gõ tay
       // hoặc vừa bấm "Dùng", xoá đi thì phải làm lại từ đầu đúng lúc app chưa
       // thấy exe. Giữ cả danh sách ứng viên vì còn giá trị để bấm tiếp.
@@ -261,7 +261,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     // Không lặp lại "bấm Mở OpenWork…" ở đây: điều kiện hiện nút đó đã tự
     // dựng từ `openworkRunning` ngay phía trên, và chỉ hiện đúng lúc app chưa
     // mở. Nhánh app đang mở không cần hướng dẫn mở app.
-    setPathMsg("Đã chỉ xong.");
+    setPathMsg("Path set.");
   }
 
   /** Chép đường dẫn để dán chỗ khác. Clipboard API cần ngữ cảnh an toàn (https);
@@ -273,10 +273,10 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     // "Đã chép" dù chưa chép gì — người dùng sang chỗ khác dán ra chuỗi rỗng.
     if (await tryCopyText(navigator?.clipboard, path)) {
       setPathErr("");
-      setPathMsg(`Đã chép: ${path}`);
+      setPathMsg(`Copied: ${path}`);
     } else {
       setPathMsg("");
-      setPathErr("Trình duyệt chặn chép tự động — bôi đen đường dẫn rồi copy tay.");
+      setPathErr("Browser blocked automatic copy — select the path and copy it manually.");
     }
   }
 
@@ -293,7 +293,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
 
   async function saveMachineName() {
     if (!machineName.trim()) {
-      setMachineErr("Tên máy trống.");
+      setMachineErr("Machine name is empty.");
       return;
     }
     setMachineBusy(true);
@@ -304,7 +304,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       // /api/state về là dòng tên máy tự đổi — không cần banner xác nhận thêm.
       onRecheck();
     } catch (e) {
-      setMachineErr(e.message === "UNPAIRED" ? "Chìa hết hiệu lực (401) — ghép lại để tiếp tục." : String(e.message || e));
+      setMachineErr(e.message === "UNPAIRED" ? "Key is no longer valid (401) — pair again to continue." : String(e.message || e));
     } finally {
       setMachineBusy(false);
     }
@@ -315,9 +315,9 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     setTunnelMsg("");
     try {
       await apiRestartTunnel();
-      setTunnelMsg("Đã xin tunnel mới — chờ ~30 giây rồi bấm Kiểm tra lại để thấy URL mới.");
+      setTunnelMsg("New tunnel requested — wait ~30 seconds then tap Recheck to see the new URL.");
     } catch (e) {
-      setTunnelMsg(e.message === "UNPAIRED" ? "Chìa hết hiệu lực (401) — ghép lại để tiếp tục." : String(e.message || e));
+      setTunnelMsg(e.message === "UNPAIRED" ? "Key is no longer valid (401) — pair again to continue." : String(e.message || e));
     } finally {
       setTunnelBusy(false);
     }
@@ -335,7 +335,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       });
       setPairingLeft(p.secondsLeft ?? 0);
     } catch (e) {
-      setPairingErr(e.message === "UNPAIRED" ? "Chìa hết hiệu lực (401) — ghép lại để tiếp tục." : String(e.message || e));
+      setPairingErr(e.message === "UNPAIRED" ? "Key is no longer valid (401) — pair again to continue." : String(e.message || e));
     } finally {
       setPairingBusy(false);
     }
@@ -349,7 +349,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     } else {
       // Trình duyệt chặn clipboard (không https/chưa cấp quyền): lộ link ra
       // banner để bôi đen tự chép — vẫn hơn chết im.
-      setPairingErr(`Trình duyệt chặn chép tự động — chép tay: ${pairing?.pairUrl ?? ""}`);
+      setPairingErr(`Browser blocked automatic copy — copy manually: ${pairing?.pairUrl ?? ""}`);
     }
   }
 
@@ -363,7 +363,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       const payload = await ow("/workspaces");
       const wss = unwrap(payload)?.workspaces ?? payload?.workspaces ?? [];
       if (!wss.length) {
-        setReloadMsg("Không có workspace nào để nạp.");
+        setReloadMsg("No workspaces to reload.");
         return;
       }
       const results = await owEngineReloadAll(wss.map((w) => w?.id));
@@ -371,8 +371,8 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       const failed = results.filter((r) => !r.ok);
       setReloadMsg(
         failed.length
-          ? `Nạp lại được ${okCount}/${results.length} workspace — lỗi: ${failed.map((f) => `${f.wsId}: ${f.error}`).join("; ")}.`
-          : `Đã nạp lại engine ${okCount} workspace.`
+          ? `Reloaded ${okCount}/${results.length} workspaces — errors: ${failed.map((f) => `${f.wsId}: ${f.error}`).join("; ")}.`
+          : `Reloaded the engine of ${okCount} workspaces.`
       );
     } catch (e) {
       setReloadMsg(String(e.message || e));
@@ -386,9 +386,9 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
   function unpair() {
     const tenant = getTenant();
     askConfirm({
-      title: "Gỡ pairing?",
-      body: "Điện thoại này sẽ quên máy đang kết nối. Vào lại bằng cách lấy mã ghép mới trong OpenPocket trên máy tính.",
-      confirmLabel: "Gỡ pairing",
+      title: "Unpair?",
+      body: "This phone will forget the connected computer. To connect again, get a new pairing code in OpenPocket on your computer.",
+      confirmLabel: "Unpair",
       onConfirm: () => {
         removeKey(tenant); // dọn khóa khỏi chùm, hết chùm thì dọn luôn token
         notifyKeysChanged();
@@ -408,14 +408,14 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
   // được, dù nút "Khởi động lại tunnel" nằm ngay phía trên.
   const tunnel = tunnelStatusLabel(state?.tunnel);
   const rows = [
-    ["Máy đang kết nối", getTenantName() || "máy chính (không phòng)"],
-    ["openwork-server", state?.server ? `${state.server.baseUrl} (v${state.server.version})` : "chưa tìm thấy"],
+    ["Connected machine", getTenantName() || "main machine (no room)"],
+    ["openwork-server", state?.server ? `${state.server.baseUrl} (v${state.server.version})` : "not found"],
     ["opencode", state?.server?.opencodeVersion ?? "—"],
-    ["Token", state?.tokenActive ? "đang hoạt động" : state?.restartRequired ? "chờ restart OpenWork" : "đang kiểm tra…"],
+    ["Token", state?.tokenActive ? "active" : state?.restartRequired ? "waiting for OpenWork restart" : "checking…"],
     ["Engine", state?.engine ? `pid ${state.engine.pid} (port ${state.engine.enginePort})` : "—"],
     ["Tunnel", `${tunnel.label}${state?.tunnel?.url ? ` · ${state.tunnel.url}` : ""}`],
-    ["URL từ xa", state?.publicUrl ?? "—"],
-    ["Tự mở OpenWork", state?.autoLaunchOpenWork ? "bật (bridge khởi động là mở)" : "tắt"],
+    ["Public URL", state?.publicUrl ?? "—"],
+    ["Auto-launch OpenWork", state?.autoLaunchOpenWork ? "on (bridge start launches it)" : "off"],
     ["Bridge", `v${state?.bridgeVersion ?? "?"} · ${state?.dataDir ?? ""}`],
   ];
 
@@ -443,17 +443,17 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     openworkStatusLabel(openworkInfo, {
       foundFallback: openworkFound,
       runningFallback: openworkRunning,
-    }) || "chưa tìm thấy exe";
+    }) || "exe not found";
 
   return (
     <>
       {confirmDialog}
       <div class="card">
-        <h3>Máy của tôi</h3>
+        <h3>My machine</h3>
 
         <div class="row-between" style="margin-bottom:var(--sp-3)">
           <b style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-            {getTenantName() || "máy chính"}
+            {getTenantName() || "main machine"}
           </b>
           {/* Trạng thái là câu, không phải bảng: đây là thứ người dùng thật sự
               cần biết. Bảng kỹ thuật nằm gập trong <details> bên dưới. */}
@@ -473,25 +473,25 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
                 maxLength={60}
                 autocomplete="off"
                 spellcheck={false}
-                aria-label="Tên máy"
+                aria-label="Machine name"
                 onInput={(e) => setMachineName(e.currentTarget.value)}
               />
               <span class="page-actions" style="margin:0;flex-shrink:0">
                 <button type="button" class="btn small" disabled={machineBusy || !machineName.trim()} onClick={saveMachineName}>
-                  {machineBusy ? "Đang lưu…" : "Lưu"}
+                  {machineBusy ? "Saving…" : "Save"}
                 </button>
                 <button type="button" class="btn small ghost" onClick={() => setMachineEditing(false)}>
-                  Đóng
+                  Close
                 </button>
               </span>
             </>
           ) : (
             <>
               <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-                Tên máy: <b>{currentMachineName || "—"}</b>
+                Machine name: <b>{currentMachineName || "—"}</b>
               </span>
               <button type="button" class="btn small ghost" style="flex-shrink:0" onClick={startEditMachine}>
-                Sửa
+                Edit
               </button>
             </>
           )}
@@ -502,11 +502,11 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
             trước đây là HAI tên cho cùng một lệnh apiRecheck — gộp lại một. */}
         <div class="page-actions">
           <button type="button" class="btn small" disabled={busy} onClick={recheck}>
-            {busy ? "Đang kiểm tra…" : "Kiểm tra lại"}
+            {busy ? "Checking…" : "Recheck"}
           </button>
           {!openworkRunning && (
             <button type="button" class="btn small" disabled={waking} onClick={wake}>
-              {waking ? "Đang bật…" : "Mở OpenWork"}
+              {waking ? "Launching…" : "Launch OpenWork"}
             </button>
           )}
           {/* Restart tunnel = thay cloudflared, GIỮ bridge — khác restart bridge
@@ -517,9 +517,9 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
             class="btn small ghost"
             disabled={tunnelBusy}
             onClick={restartTunnel}
-            title="Xin tunnel mới khi đường về máy kẹt. Nếu tunnel đã chết hẳn (máy mất nối hoàn toàn) thì lệnh không tới được máy — phải bấm nút ↻ trên GUI máy tính."
+            title="Request a new tunnel when the route back to your computer is stuck. If the tunnel is completely dead (computer fully offline) this command cannot reach it — tap the ↻ button in the desktop GUI instead."
           >
-            {tunnelBusy ? "Đang khởi động lại…" : "Khởi động lại tunnel"}
+            {tunnelBusy ? "Restarting…" : "Restart tunnel"}
           </button>
         </div>
         {checkMsg && <p class="field-error" style="margin-top:10px" role="alert">{checkMsg}</p>}
@@ -539,11 +539,11 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
         {openworkFound && (
           <div class="page-actions" style="margin-top:12px">
             <button type="button" class="btn small" onClick={() => setEditing(!editing)}>
-              {editing ? "Đóng" : "Đổi đường dẫn"}
+              {editing ? "Close" : "Change path"}
             </button>
             {openworkInfo?.exe && (
               <button type="button" class="btn small ghost" onClick={() => copyExePath(openworkInfo.exe)}>
-                Chép đường dẫn
+                Copy path
               </button>
             )}
           </div>
@@ -553,7 +553,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
             không phải thứ người dùng cần hằng ngày — mở sẵn nó chỉ làm màn
             Settings nặng nề và khiến những dòng quan trọng bị chôn. */}
         <details class="tech-details">
-          <summary>Chi tiết kỹ thuật</summary>
+          <summary>Technical details</summary>
           <table class="kv-table">
             <tbody>
               {rows.map(([k, v]) => (
@@ -570,15 +570,15 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
                   lặp. */}
               {openworkFound && (
                 <tr>
-                  <th scope="row">Phiên bản</th>
+                  <th scope="row">Version</th>
                   <td class="mono">
-                    {openworkInfo?.version ? `v${openworkInfo.version}` : "không đọc được phiên bản"}
+                    {openworkInfo?.version ? `v${openworkInfo.version}` : "version unavailable"}
                   </td>
                 </tr>
               )}
               {openworkInfo?.exe && (
                 <tr>
-                  <th scope="row">Đường dẫn</th>
+                  <th scope="row">Path</th>
                   <td class="mono">{openworkInfo.exe}</td>
                 </tr>
               )}
@@ -594,9 +594,9 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
               class="btn small ghost"
               disabled={reloading}
               onClick={reloadEngine}
-              title="Nạp lại engine của các workspace — dùng sau khi đổi MCP/plugin trên máy hoặc khi engine dựng dở"
+              title="Reload the engine of each workspace — use after changing MCP/plugins on the computer, or when the engine fails to start"
             >
-              {reloading ? "Đang nạp lại…" : "Nạp lại engine"}
+              {reloading ? "Reloading…" : "Reload engine"}
             </button>
           </div>
           {reloadMsg && <p class="sheet-body" style="margin:8px 0 0">{reloadMsg}</p>}
@@ -606,14 +606,14 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
             (skill ux-layout-rules: nút phá hủy phải ra khỏi cụm). */}
         <div class="page-actions" style="margin-top:var(--sp-4);padding-top:var(--sp-3);border-top:1px solid var(--border)">
           <button type="button" class="btn small danger" onClick={unpair}>
-            Gỡ pairing
+            Unpair
           </button>
         </div>
       </div>
 
       <div class="card">
-        <h3>Thiết bị đã ghép</h3>
-        <p class="sheet-body">Thiết bị này: <b>{thisDeviceLabel || "—"}</b></p>
+        <h3>Paired devices</h3>
+        <p class="sheet-body">This device: <b>{thisDeviceLabel || "—"}</b></p>
 
         {/* Ghép thiết bị KHÁC ngay từ điện thoại: hiện mã one-time đang sống
             trên bridge cho máy mới nhập ở màn Đăng nhập (hoặc mở link mời).
@@ -624,32 +624,32 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
         <div style="margin-top:var(--sp-2);padding-top:var(--sp-3);border-top:1px solid var(--border)">
           {!pairing ? (
             <button type="button" class="btn small" disabled={pairingBusy} onClick={loadPairingCode}>
-              {pairingBusy ? "Đang lấy mã…" : "Ghép thiết bị khác"}
+              {pairingBusy ? "Getting code…" : "Pair another device"}
             </button>
           ) : (
             <div>
               <div class="row-between" style="margin-bottom:4px">
                 <span class="mono pair-code">{pairing.codeFormatted}</span>
                 <span class={`badge ${pairingLeft > 0 ? "busy" : "err"}`}>
-                  {pairingLeft > 0 ? `còn ${formatPairingCountdown(pairingLeft)}` : "hết hạn"}
+                  {pairingLeft > 0 ? `${formatPairingCountdown(pairingLeft)} left` : "expired"}
                 </span>
               </div>
               <p class="sheet-body">
-                Trên thiết bị mới: mở app → màn Đăng nhập → nhập mã trên, hoặc mở link mời. Mã dùng đúng 1 lần.
+                On the new device: open the app → Login screen → enter the code above, or open the invite link. The code works exactly once.
               </p>
               <div class="page-actions">
                 <button type="button" class="btn small ghost" onClick={copyPairUrl}>
-                  Sao chép link mời
+                  Copy invite link
                 </button>
                 {/* Khi mã còn sống bridge trả đúng mã cũ (ensureCode) — nút
                     "lấy mã khác" lúc này là nút vô nghĩa, chỉ hiện khi hết hạn. */}
                 {pairingLeft <= 0 && (
                   <button type="button" class="btn small" disabled={pairingBusy} onClick={loadPairingCode}>
-                    Lấy mã mới
+                    Get new code
                   </button>
                 )}
                 <button type="button" class="btn small ghost" onClick={() => setPairing(null)}>
-                  Đóng
+                  Close
                 </button>
               </div>
             </div>
@@ -662,16 +662,16 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
             người dùng tưởng máy không có thiết bị nào trong khi thực ra ta
             chưa đọc được danh sách. */}
         {devices === null ? (
-          <p class="sheet-body">Đang tải…</p>
+          <p class="sheet-body">Loading…</p>
         ) : devicesErr && devices.length === 0 ? (
-          <p class="sheet-body">Không đọc được danh sách thiết bị (lỗi mạng hoặc chìa hết hiệu lực). Bấm Kiểm tra lại ở trên.</p>
+          <p class="sheet-body">Could not read the device list (network error or expired key). Tap Recheck above.</p>
         ) : devices.length === 0 ? (
-          <p class="sheet-body">Chưa có thiết bị nào dùng mã ghép.</p>
+          <p class="sheet-body">No devices have used a pairing code yet.</p>
         ) : (
           <div>
             {devicesErr && (
               <p class="field-error" style="margin:0 0 8px" role="alert">
-                Danh sách dưới đây có thể đã cũ — vừa có lỗi khi tải/thu hồi.
+                The list below may be out of date — an error just occurred while loading or revoking.
               </p>
             )}
             {devices.map((d) => (
@@ -680,11 +680,11 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
                 <span class="name">
                   {d.label}
                   <span class="pair-hint" style="display:block">
-                    ghép {formatDeviceTime(d.createdAt)} · hoạt động {d.lastSeenAt ? formatDeviceTime(d.lastSeenAt) : "—"}
+                    paired {formatDeviceTime(d.createdAt)} · active {d.lastSeenAt ? formatDeviceTime(d.lastSeenAt) : "—"}
                   </span>
                 </span>
-                <button type="button" class="btn small danger" aria-label={`Thu hồi thiết bị ${d.label}`} onClick={() => revoke(d)}>
-                  Thu hồi
+                <button type="button" class="btn small danger" aria-label={`Revoke device ${d.label}`} onClick={() => revoke(d)}>
+                  Revoke
                 </button>
               </div>
             ))}

@@ -179,7 +179,7 @@ test("drop phải trừ bytes để trần đo đúng", async () => {
 
 test("make trả URL rỗng thì ném, không cache rỗng", async () => {
   const cache = createBlobCache({ create: async () => "" });
-  await assert.rejects(() => cache.load("k"), /rỗng/);
+  await assert.rejects(() => cache.load("k"), /empty/);
   assert.equal(cache.size, 0);
 });
 

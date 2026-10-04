@@ -45,13 +45,13 @@
 export const MAX_SESSION_TITLE_LENGTH = 120;
 
 /** Nhãn hiện khi phiên chưa có tên (trùng với home.jsx:127 + sessions.jsx:122). */
-export const UNTITLED_SESSION_LABEL = "Không tiêu đề";
+export const UNTITLED_SESSION_LABEL = "Untitled";
 
 /** Lỗi hiển thị được cho người dùng (tiếng Việt, dùng thẳng trong Banner). */
 export const RENAME_ERRORS = {
-  empty: "Tên phiên không được để trống.",
-  tooLong: `Tên phiên dài tối đa ${MAX_SESSION_TITLE_LENGTH} ký tự.`,
-  notText: "Tên phải là chữ, không phải số hay danh sách.",
+  empty: "Session name cannot be empty.",
+  tooLong: `Session name can be at most ${MAX_SESSION_TITLE_LENGTH} characters.`,
+  notText: "Name must be text, not a number or list.",
 };
 
 /**

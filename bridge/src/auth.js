@@ -18,7 +18,7 @@ export function isAuthorized(req, mobileToken) {
 // phải đúng cho cả hai: điện thoại đọc thấy cũng hiểu, và không rò đường dẫn.
 export function deny(res) {
   res.writeHead(401, { "content-type": "application/json" });
-  res.end(JSON.stringify({ code: "unauthorized", message: "Không hợp lệ — thiếu hoặc sai mã kết nối." }));
+  res.end(JSON.stringify({ code: "unauthorized", message: "Unauthorized — missing or wrong connection key." }));
 }
 
 /** So sánh token đã trích (header hoặc ?_t=) với master token. */

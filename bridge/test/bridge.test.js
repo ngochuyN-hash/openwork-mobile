@@ -171,7 +171,7 @@ test("listDirs: chỉ trả thư mục, bỏ ẩn/rác hệ thống, sắp A→Z
 });
 
 test("listDirs: lỗi rõ ràng khi thư mục không tồn tại", async () => {
-  await assert.rejects(() => listDirs(join(tmpdir(), "ow-khong-ton-tai-xyz-123")), /không tồn tại/);
+  await assert.rejects(() => listDirs(join(tmpdir(), "ow-khong-ton-tai-xyz-123")), /does not exist/);
 });
 
 test("makeDir: tạo thư mục con, chặn ký tự cấm, báo rõ khi trùng tên", async () => {
@@ -180,8 +180,8 @@ test("makeDir: tạo thư mục con, chặn ký tự cấm, báo rõ khi trùng 
     const made = await makeDir(root, "Project Moi 2026");
     assert.equal(existsSync(join(root, "Project Moi 2026")), true);
     assert.match(made.path, /Project Moi 2026$/);
-    await assert.rejects(() => makeDir(root, "a/b"), /ký tự/);
-    await assert.rejects(() => makeDir(root, "Project Moi 2026"), /Đã có thư mục/);
+    await assert.rejects(() => makeDir(root, "a/b"), /cannot contain/);
+    await assert.rejects(() => makeDir(root, "Project Moi 2026"), /already exists/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

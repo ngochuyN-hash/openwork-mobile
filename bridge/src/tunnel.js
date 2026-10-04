@@ -71,12 +71,12 @@ async function ensureCloudflared(log) {
   });
   if (fromPath) return fromPath;
 
-  log(`[tunnel] tải cloudflared về ${target} (chỉ lần đầu, ~50MB)...`);
+  log(`[tunnel] downloading cloudflared to ${target} (first run only, ~50MB)...`);
   // Hard deadline: a hung GitHub download used to leave this promise unsettled
   // forever — bridge alive with phase "starting" and no tunnel, ever. 60s is
   // plenty for ~50MB, and the same signal aborts a stalled body read.
   const response = await fetch(DOWNLOAD_URL, { redirect: "follow", signal: AbortSignal.timeout(60_000) });
-  if (!response.ok || !response.body) throw new Error(`Tải cloudflared lỗi: HTTP ${response.status}`);
+  if (!response.ok || !response.body) throw new Error(`Failed to download cloudflared: HTTP ${response.status}`);
   const buffer = Buffer.from(await response.arrayBuffer());
   const { writeFileSync } = await import("node:fs");
   writeFileSync(target, buffer);
@@ -116,7 +116,7 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
   const runOnce = async () => {
     attempt += 1;
     phase = "starting";
-    log(`[tunnel] chạy cloudflared (đợt ${attempt})...`);
+    log(`[tunnel] running cloudflared (attempt ${attempt})...`);
     let sawRateLimit = false;
 
     // Mỗi đợt chạy chỉ được hẹn đúng MỘT lần chạy lại: exit và error cùng firing
@@ -125,10 +125,10 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
     const scheduleRetry = (delay, reason) => {
       if (respawnScheduled || stopped) return;
       respawnScheduled = true;
-      log(`[tunnel] ${reason} - chờ ${Math.round(delay / 1000)}s...`);
+      log(`[tunnel] ${reason} - waiting ${Math.round(delay / 1000)}s...`);
       pendingRetryTimer = setTimeout(() => {
         pendingRetryTimer = null;
-        if (!stopped) runOnce().catch((e) => log(`[tunnel] lỗi: ${e.message}`));
+        if (!stopped) runOnce().catch((e) => log(`[tunnel] error: ${e.message}`));
       }, delay);
     };
 
@@ -141,7 +141,7 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
     // spawn hụt (exe bị khoá/ENOENT...) KHÔNG phát exit — không bắt error thì
     // vòng retry lặng lẽ chết, bridge tưởng còn tunnel mãi (bệnh đêm 13/09:
     // im re hơn 2 tiếng không một dòng log, worker báo bridge_offline).
-    child.on("error", (err) => scheduleRetry(60_000, `lỗi spawn cloudflared: ${err.message}`));
+    child.on("error", (err) => scheduleRetry(60_000, `failed to spawn cloudflared: ${err.message}`));
 
     let announced = false;
     const scan = (chunk) => {
@@ -185,9 +185,9 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
         nextRetryAt = Date.now() + delay;
         phase = "backoff";
         saveTunnelState({ phase: "backoff", url: "", streak: rateLimitStreak, nextAttemptAt: nextRetryAt });
-        scheduleRetry(delay, "Cloudflare đang giới hạn tạo tunnel (429)");
+        scheduleRetry(delay, "Cloudflare is rate-limiting tunnel creation (429)");
       } else {
-        scheduleRetry(plainRetryDelayMs(attempt), `cloudflared thoát (code ${code}) - chạy lại`);
+        scheduleRetry(plainRetryDelayMs(attempt), `cloudflared exited (code ${code}) - restarting`);
       }
     });
   };
@@ -200,13 +200,13 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
     phase = "backoff";
     nextRetryAt = Date.now() + bootWait;
     log(
-      `[tunnel] lần trước còn dính 429 (streak ${rateLimitStreak}) — chờ ${Math.round(
+      `[tunnel] previous attempt still hit 429 (streak ${rateLimitStreak}) - waiting ${Math.round(
         bootWait / 1000
-      )}s nữa mới thử lại (không gõ cửa sớm)...`
+      )}s before retrying (do not knock early)...`
     );
   }
   setTimeout(() => {
-    if (!stopped) runOnce().catch((error) => log(`[tunnel] không khởi động được: ${error.message}`));
+    if (!stopped) runOnce().catch((error) => log(`[tunnel] could not start: ${error.message}`));
   }, bootWait);
 
   return {
@@ -222,7 +222,7 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
     restart() {
       if (stopped || restarting) return false;
       restarting = true;
-      log("[tunnel] restart thủ công — bỏ bộ đếm chờ, xin tunnel mới ngay...");
+      log("[tunnel] manual restart - clearing the wait counter, requesting a new tunnel right away...");
       if (pendingRetryTimer) {
         clearTimeout(pendingRetryTimer);
         pendingRetryTimer = null;
@@ -237,7 +237,7 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
         if (!restarting) return; // exit thật + fallback timeout cùng firing — cái trước thắng
         restarting = false;
         if (stopped) return;
-        runOnce().catch((error) => log(`[tunnel] lỗi restart: ${error.message}`));
+        runOnce().catch((error) => log(`[tunnel] restart error: ${error.message}`));
       };
       if (child && child.exitCode === null) {
         // Con cũ còn sống: giết rồi đợi nó chết hẳn mới chạy lại — hai

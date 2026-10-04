@@ -151,12 +151,11 @@ function assertNotRateLimited(res) {
 // riêng của tiếng Việt (đ/ă/â/ê/ô/ơ/ư + nguyên âm tổ hợp) chứ không phải " có
 // ký tự Latin-Extended", vì ký tự đó lọt vào cả tên đường dẫn rò ra (ví dụ
 // C:SERS<USER>\...). Vì vậy cấm thêm đường dẫn thô trong message.
-const VIETNAMESE_LETTER = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i;
 
-function assertVietnameseMessage(body) {
+function assertErrorMessage(body) {
   assert.ok(body && typeof body.message === "string", "phải có message");
   assert.ok(body.message.trim().length > 0, "message không được rỗng");
-  assert.match(body.message, VIETNAMESE_LETTER, `message phải là tiếng Việt có dấu: ${JSON.stringify(body.message)}`);
+  assert.match(body.message, /[a-z]/i, `message phải là câu tiếng Anh đọc được: ${JSON.stringify(body.message)}`);
   assert.doesNotMatch(body.message, /[A-Za-z]:\\/, `message không được rò đường dẫn thô: ${JSON.stringify(body.message)}`);
 }
 
@@ -201,28 +200,28 @@ test(
       const noAuth = await postJson(bridge.url, "/api/openwork/path", { path: sandbox.exe });
       assert.equal(noAuth.status, 401);
       assert.equal(noAuth.body.code, "unauthorized");
-      assertVietnameseMessage(noAuth.body);
+      assertErrorMessage(noAuth.body);
 
       // (2) path rỗng -> invalid_path
       const empty = await postJson(bridge.url, "/api/openwork/path", { path: "   " }, auth);
       assertNotRateLimited(empty);
       assert.equal(empty.status, 400);
       assert.equal(empty.body.code, "invalid_path");
-      assertVietnameseMessage(empty.body);
+      assertErrorMessage(empty.body);
 
       // (3) path không tồn tại -> not_found
       const missing = await postJson(bridge.url, "/api/openwork/path", { path: join(sandbox.apps, "khong-ton-tai.exe") }, auth);
       assertNotRateLimited(missing);
       assert.equal(missing.status, 400);
       assert.equal(missing.body.code, "not_found");
-      assertVietnameseMessage(missing.body);
+      assertErrorMessage(missing.body);
 
       // (4) path là một thư mục thật -> not_a_file (existsSync true, isFile false)
       const dir = await postJson(bridge.url, "/api/openwork/path", { path: sandbox.apps }, auth);
       assertNotRateLimited(dir);
       assert.equal(dir.status, 400);
       assert.equal(dir.body.code, "not_a_file");
-      assertVietnameseMessage(dir.body);
+      assertErrorMessage(dir.body);
     } finally {
       await stopBridge(bridge);
       rmSync(sandbox.root, { recursive: true, force: true });
@@ -251,7 +250,7 @@ test(
       assertNotRateLimited(wrongExe);
       assert.equal(wrongExe.status, 400);
       assert.equal(wrongExe.body.code, "not_openwork_exe");
-      assertVietnameseMessage(wrongExe.body);
+      assertErrorMessage(wrongExe.body);
       assert.equal(readConfig(sandbox.data).openworkExe, "", "calc.exe không được lọt vào config.openworkExe");
 
       // (6) Dán nguyên xi output "Copy as path" của PowerShell (có dấu nháy kép)
@@ -316,7 +315,7 @@ test(
       assertNotRateLimited(res);
       assert.equal(res.status, 404);
       assert.equal(res.body.code, "openwork_exe_not_found");
-      assertVietnameseMessage(res.body);
+      assertErrorMessage(res.body);
       // Danh sách ứng viên để điện thoại hiện "chọn 1 trong N" cho user.
       assert.ok(Array.isArray(res.body.candidates), "phải kèm mảng candidates");
       assert.ok(res.body.candidates.length > 0, "candidates không được rỗng");

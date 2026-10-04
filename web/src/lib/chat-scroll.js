@@ -118,10 +118,10 @@ export function newMessagesSince(prevList, nextList) {
 }
 
 /** Chữ trên nút nhảy về đáy. */
-export function jumpLabelVi(count) {
+export function jumpLabel(count) {
   const n = Math.max(0, Number(count) || 0);
-  if (!n) return "Tin mới nhất";
-  return `${n} tin mới`;
+  if (!n) return "Latest message";
+  return `${n} new messages`;
 }
 
 /** Nút có hiện không: chỉ khi đang LỊCH SỬ và đã có tin để cuộn tới. */

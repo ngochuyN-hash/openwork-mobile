@@ -36,16 +36,16 @@ export const MAX_GROUP_LABEL_LENGTH = 120;
 export const MAX_GROUP_ID_LENGTH = 128;
 
 /** Nhãn khối "chưa xếp nhóm nào" — hiện ra khi phiên chưa được gán. */
-export const UNGROUPED_LABEL = "Chưa nhóm";
+export const UNGROUPED_LABEL = "Ungrouped";
 
 /** Giá trị `groupId` giả dành cho bộ lọc "phiên chưa nhóm" (id thật không thể
  *  bằng vì engine tự sinh). */
 export const UNGROUPED_ID = "__none__";
 
 export const GROUP_ERRORS = {
-  empty: "Tên nhóm không được để trống.",
-  tooLong: `Tên nhóm dài tối đa ${MAX_GROUP_LABEL_LENGTH} ký tự.`,
-  notText: "Tên nhóm phải là chữ, không phải số hay danh sách.",
+  empty: "Group name cannot be empty.",
+  tooLong: `Group name can be at most ${MAX_GROUP_LABEL_LENGTH} characters.`,
+  notText: "Group name must be text, not a number or list.",
 };
 
 export const FLAG_KINDS = ["pinned", "archived"];
@@ -355,7 +355,7 @@ export function makeGroupId(label, existingIds = []) {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
-      .slice(0, MAX_GROUP_ID_LENGTH) || "nhom";
+      .slice(0, MAX_GROUP_ID_LENGTH) || "group";
   if (!taken.has(base)) return base;
   for (let i = 2; i < 1000; i += 1) {
     const candidate = `${base.slice(0, MAX_GROUP_ID_LENGTH - String(i).length - 1)}-${i}`;
@@ -375,7 +375,7 @@ export function addGroup(state, rawLabel, { id } = {}) {
   const clean = normalizeGroupLabel(rawLabel);
   if (!clean.ok) return { ok: false, error: clean.error, state: st };
   const gid = String(id ?? "").trim() || makeGroupId(clean.label, st.groups.map((g) => g.id));
-  if (st.groups.some((g) => g.id === gid)) return { ok: false, error: "Nhóm này đã có.", state: st };
+  if (st.groups.some((g) => g.id === gid)) return { ok: false, error: "This group already exists.", state: st };
   return {
     ok: true,
     id: gid,

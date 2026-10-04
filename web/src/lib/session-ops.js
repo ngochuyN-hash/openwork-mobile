@@ -138,20 +138,20 @@ export function buildQuestionAnswers(selections) {
 // ---- Tool row: tiêu đề ngắn + tiền tố xem nhanh thay vì đổ JSON thô ----
 
 const TOOL_VI = {
-  bash: "Lệnh",
-  read: "Đọc file",
+  bash: "Command",
+  read: "Read file",
   write: "Ghi file",
-  edit: "Sửa file",
-  patch: "Sửa file",
-  multiedit: "Sửa file",
-  grep: "Tìm trong file",
-  glob: "Tìm file",
-  list: "Liệt kê thư mục",
-  webfetch: "Tải trang",
-  websearch: "Tìm web",
-  todowrite: "Danh sách việc",
-  question: "Hỏi bạn",
-  skill: "Kỹ năng",
+  edit: "Edit file",
+  patch: "Edit file",
+  multiedit: "Edit file",
+  grep: "Search in file",
+  glob: "Find file",
+  list: "List directory",
+  webfetch: "Fetch page",
+  websearch: "Web search",
+  todowrite: "Todo list",
+  question: "Ask you",
+  skill: "Skill",
 };
 
 export function toolLabel(tool) {
@@ -209,10 +209,10 @@ export function toolRowView(part) {
 }
 
 const STATUS_VI = {
-  pending: "đang chờ",
-  running: "đang chạy",
+  pending: "pending",
+  running: "running",
   completed: "xong",
-  error: "lỗi",
+  error: "error",
 };
 
 export function toolStatusVi(status) {

@@ -199,35 +199,35 @@ export function SearchPage({ route }) {
         <input
           type="search"
           value={query}
-          placeholder={wsId ? "Tìm trong workspace này…" : "Tìm trên mọi phiên…"}
-          aria-label="Tìm phiên theo tên và nội dung"
+          placeholder={wsId ? "Search in this workspace…" : "Search across all sessions…"}
+          aria-label="Search sessions by title and content"
           onInput={(e) => setQuery(e.currentTarget.value)}
         />
       </div>
 
       <div class="page-head">
         <span class="hint" aria-live="polite">{phase.hint}</span>
-        <button type="button" class="btn small ghost" onClick={load}>Tải lại</button>
+        <button type="button" class="btn small ghost" onClick={load}>Reload</button>
       </div>
 
-      {error && <Banner kind="err" actionLabel="Thử lại" onAction={load}>{error}</Banner>}
+      {error && <Banner kind="err" actionLabel="Retry" onAction={load}>{error}</Banner>}
 
       {rows === null && !error && <SkeletonList rows={3} />}
 
       {rows !== null && phase.phase === "idle" && (
         <Empty
           icon={SearchIcon}
-          title="Tìm phiên nào đó?"
-          hint="Gõ tên phiên, hoặc một cụm từ nằm trong hội thoại. Kết quả khớp tên luôn đứng trước."
+          title="Search for a session?"
+          hint="Type a session title or a phrase from the conversation. Title matches appear first."
         />
       )}
 
       {rows !== null && phase.phase === "scanning" && (
-        <Empty icon={SearchIcon} title="Chưa thấy phiên nào khớp ở tên" hint={phase.hintText} />
+        <Empty icon={SearchIcon} title="No matching sessions by title yet" hint={phase.hintText} />
       )}
 
       {rows !== null && phase.phase === "empty" && (
-        <Empty icon={SearchIcon} title={`Không tìm thấy “${debounced.trim()}”`} hint={phase.hintText} />
+        <Empty icon={SearchIcon} title={`No results for “${debounced.trim()}”`} hint={phase.hintText} />
       )}
 
       {/* Chỉ vẽ danh sách khi phase = "none" (có kết quả). `searchSessions` với
@@ -258,7 +258,7 @@ export function SearchPage({ route }) {
             <div class="row-between">
               <h3>{r.title}</h3>
               <span class={`badge ${r.matchIn === "title" ? "ok" : ""}`}>
-                {r.matchIn === "title" ? "khớp tên" : "khớp nội dung"}
+                {r.matchIn === "title" ? "title match" : "content match"}
               </span>
             </div>
             {r.snippet && (

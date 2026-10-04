@@ -130,7 +130,7 @@ test("toolRowView ưu tiên input đặc trưng, không dùng title bash dài", 
     tool: "bash",
     state: { status: "completed", input: { command: "npm test\nnpm run build" }, output: "ok", title: "npm test npm run build" },
   });
-  assert.equal(v.label, "Lệnh");
+  assert.equal(v.label, "Command");
   assert.equal(v.title, "npm test"); // chỉ dòng đầu
   assert.equal(v.body, "ok");
   assert.equal(toolStatusVi("completed"), "xong");
@@ -138,7 +138,7 @@ test("toolRowView ưu tiên input đặc trưng, không dùng title bash dài", 
 
 test("toolRowView rút gọn đường dẫn dài của edit/read", () => {
   const v = toolRowView({ tool: "edit", state: { status: "completed", input: { filePath: "C:\\a\\b\\c\\deep\\file.ts" } } });
-  assert.equal(v.label, "Sửa file");
+  assert.equal(v.label, "Edit file");
   assert.equal(v.title, "…/deep/file.ts");
 });
 

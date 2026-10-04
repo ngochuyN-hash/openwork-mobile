@@ -47,9 +47,9 @@ export function startLookup({
     blockedUntil = now() + delay;
     if (failStreak === 1 || status !== lastFailStatus) {
       log(
-        `[lookup] worker từ chối đăng ký (HTTP ${status}) — phòng/mật khẩu lệch? Kiểm tra lookupTenant + lookupSecret trong config khớp với KV worker chưa. Tạm nghỉ ${Math.round(
+        `[lookup] worker rejected the registration (HTTP ${status}) - wrong room/password? Check that lookupTenant + lookupSecret in config match the KV worker. Pausing ${Math.round(
           delay / 1000
-        )}s rồi thử lại.`
+        )}s before retrying.`
       );
     }
     lastFailStatus = status;
@@ -71,13 +71,13 @@ export function startLookup({
         if (payload.tunnelDown) {
           const key = `down:${Math.round((Number(payload.retryAt) || 0) / heartbeatMs)}`;
           if (key !== lastDownKey) {
-            log("[lookup] đã báo worker: máy sống, tunnel đang chờ Cloudflare mở lại (bridge tự thử theo lịch).");
+            log("[lookup] told the worker: machine alive, tunnel is waiting for Cloudflare to reopen (bridge retries on a schedule).");
           }
           lastSent = ""; // tunnel sống lại sẽ đăng ký lại URL ngay, kể URL cũ
           lastDownKey = key;
         } else {
           if (payload.url !== lastSent) {
-            log(`[lookup] đã đăng ký địa chỉ mới${tenantKey ? ` (phòng ${tenantKey})` : ""}: ${payload.url}`);
+            log(`[lookup] registered a new address${tenantKey ? ` (room ${tenantKey})` : ""}: ${payload.url}`);
           }
           lastSent = payload.url;
           lastDownKey = "";
@@ -86,7 +86,7 @@ export function startLookup({
         noteAuthFailure(response.status);
       }
     } catch (error) {
-      log(`[lookup] không đăng ký được: ${error.message}`);
+      log(`[lookup] could not register: ${error.message}`);
     }
   }
 

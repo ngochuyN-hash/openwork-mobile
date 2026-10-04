@@ -52,20 +52,20 @@ export async function listRoots() {
  */
 export async function listDirs(dir) {
   const clean = normalize(String(dir ?? "").trim());
-  if (!clean) throw fsError("ENOENT", "Chưa chọn đường dẫn.");
+  if (!clean) throw fsError("ENOENT", "No path selected.");
 
   let entries;
   try {
     entries = await fs.readdir(clean, { withFileTypes: true });
   } catch (error) {
     if (error?.code === "ENOENT") {
-      throw fsError("ENOENT", "Thư mục không tồn tại (có thể đã bị xóa hoặc đổi tên).");
+      throw fsError("ENOENT", "Folder does not exist (it may have been deleted or renamed).");
     }
     if (error?.code === "ENOTDIR") {
-      throw fsError("ENOTDIR", "Đây là file, không phải thư mục.");
+      throw fsError("ENOTDIR", "This is a file, not a folder.");
     }
     if (error?.code === "EACCES" || error?.code === "EPERM") {
-      throw fsError("EACCES", "Không có quyền xem thư mục này.");
+      throw fsError("EACCES", "No permission to view this folder.");
     }
     throw error;
   }
@@ -107,17 +107,17 @@ function fsError(code, message) {
 export async function makeDir(dir, name) {
   const clean = normalize(String(dir ?? "").trim());
   const label = String(name ?? "").trim();
-  if (!clean) throw fsError("ENOENT", "Chưa chọn thư mục cha.");
-  if (!label) throw fsError("EINVAL", "Chưa nhập tên thư mục.");
+  if (!clean) throw fsError("ENOENT", "No parent folder selected.");
+  if (!label) throw fsError("EINVAL", "No folder name entered.");
   if (/[\\/:*?\"<>|]/.test(label) || label === "." || label === "..") {
-    throw fsError("EINVAL", 'Tên thư mục không được chứa ký tự \\ / : * ? " < > |');
+    throw fsError("EINVAL", 'Folder name cannot contain \\ / : * ? " < > |');
   }
   const target = join(clean, label);
   try {
     await fs.mkdir(target, { recursive: false });
   } catch (error) {
-    if (error?.code === "EEXIST") throw fsError("EEXIST", "Đã có thư mục tên này rồi — hãy chạm vào nó trong danh sách.");
-    if (error?.code === "EACCES" || error?.code === "EPERM") throw fsError("EACCES", "Không có quyền tạo thư mục ở đây.");
+    if (error?.code === "EEXIST") throw fsError("EEXIST", "A folder with this name already exists — tap it in the list.");
+    if (error?.code === "EACCES" || error?.code === "EPERM") throw fsError("EACCES", "No permission to create a folder here.");
     throw error;
   }
   return { path: target, name: label, ok: true };

@@ -79,9 +79,9 @@ function ChevronUpIcon({ size }) {
 
 /** Ba ô lọc: tất cả (ẩn mục đã lưu trữ) · ghim · lưu trữ. */
 const SCOPES = [
-  { id: "all", label: "Tất cả" },
-  { id: "pinned", label: "Ghim" },
-  { id: "archived", label: "Lưu trữ" },
+  { id: "all", label: "All" },
+  { id: "pinned", label: "Pinned" },
+  { id: "archived", label: "Archived" },
 ];
 
 export function SessionsPage({ route }) {
@@ -256,7 +256,7 @@ export function SessionsPage({ route }) {
       // nếu có thì danh sách mới đã đúng hơn, giữ nguyên nó.
       if (sessionsRef.current === afterDrop) setSessions(beforeSessions);
       if (statusesRef.current === afterStatuses) setStatuses(beforeStatuses);
-      setError(`Không xoá được phiên này: ${e?.message || e}`);
+      setError(`Failed to delete this session: ${e?.message || e}`);
     } finally {
       deletingRef.current.delete(id);
     }
@@ -280,7 +280,7 @@ export function SessionsPage({ route }) {
       setError("");
     } catch (e) {
       setGroupState(previous);
-      setError(`Không lưu được nhóm phiên. ${String(e.message || e)}`);
+      setError(`Failed to save session group. ${String(e.message || e)}`);
     } finally {
       // Đếm chứ không bật/tắt cờ: hai thao tác chồng nhau (bấm nhanh hai nút
       // Lên/Xuống) thì lệnh thứ nhất về sớm không được tắt busy của lệnh sau.
@@ -337,9 +337,9 @@ export function SessionsPage({ route }) {
 
   function doRemoveGroup(g) {
     askConfirm({
-      title: `Xoá nhóm “${g.label}”?`,
-      body: "Các phiên trong nhóm sẽ chuyển sang “Chưa nhóm”, không phiên nào bị xoá.",
-      confirmLabel: "Xoá nhóm",
+      title: `Delete group “${g.label}”?`,
+      body: "Sessions in this group will become “Ungrouped”; no sessions will be deleted.",
+      confirmLabel: "Delete group",
       onConfirm: () => {
         // Nhóm đang lọc mà bị xoá thì bỏ luôn bộ lọc, không để màn trống vô lý
         if (groupId === g.id) setGroupId(null);
@@ -360,16 +360,16 @@ export function SessionsPage({ route }) {
 
   return (
     <>
-      {error && <Banner kind="err" actionLabel="Thử lại" onAction={load}>{error}</Banner>}
+      {error && <Banner kind="err" actionLabel="Retry" onAction={load}>{error}</Banner>}
 
       {sessions === null && !error && <SkeletonList rows={3} />}
 
       {sessions?.length === 0 && (
         <Empty
           icon
-          title="Chưa có session nào"
-          hint="Bấm nút (+) để bắt đầu trò chuyện với agent."
-          actionLabel="Tạo session mới"
+          title="No sessions yet"
+          hint="Tap (+) to start chatting with the agent."
+          actionLabel="New session"
           onAction={newSession}
         />
       )}
@@ -378,7 +378,7 @@ export function SessionsPage({ route }) {
         <>
           {/* Một hàng chip làm hết: lọc cờ + lọc nhóm + mở quản lý nhóm.
               Chip là <span> trạng thái, nhưng ở đây bấm đổi bộ lọc nên là nút. */}
-          <div class="fs-chips" role="group" aria-label="Lọc danh sách phiên">
+          <div class="fs-chips" role="group" aria-label="Filter sessions">
             {SCOPES.map((sc) => (
               <button
                 key={sc.id}
@@ -416,14 +416,14 @@ export function SessionsPage({ route }) {
               </button>
             )}
             <button type="button" class="btn small ghost" onClick={() => setSheet({ mode: "manage" })}>
-              <FolderIcon size={16} /> Nhóm phiên
+              <FolderIcon size={16} /> Session groups
             </button>
             <button
               type="button"
               class="btn small ghost"
               onClick={() => navigate(`#/ws/${encodeURIComponent(wsId)}/search`)}
             >
-              <SearchIcon size={16} /> Tìm trong workspace
+              <SearchIcon size={16} /> Search in workspace
             </button>
           </div>
 
@@ -432,17 +432,17 @@ export function SessionsPage({ route }) {
               icon={scope === "archived" ? ArchiveIcon : scope === "pinned" ? PinIcon : undefined}
               title={
                 scope === "archived"
-                  ? "Chưa lưu trữ phiên nào"
+                  ? "No archived sessions"
                   : scope === "pinned"
-                    ? "Chưa ghim phiên nào"
+                    ? "No pinned sessions"
                     : groupId
-                      ? "Nhóm này chưa có phiên"
-                      : "Không còn phiên nào ở mục này"
+                      ? "This group has no sessions"
+                      : "No sessions in this category"
               }
               hint={
                 scope === "all" && groupId
-                  ? "Nhóm vẫn còn trên máy tính — thêm phiên vào nhóm bằng nút nhóm trên từng phiên."
-                  : "Ghim để lên đầu danh sách, lưu trữ để dọn chỗ. Cả hai chỉ lưu trên máy này."
+                  ? "The group still exists on your computer — add sessions using the group button on each session."
+                  : "Pin to keep at top, archive to tidy up. Both are saved on this device only."
               }
             />
           )}
@@ -479,7 +479,7 @@ export function SessionsPage({ route }) {
                         type="button"
                         class="btn small ghost btn-icon"
                         aria-pressed={pinned}
-                        aria-label={pinned ? "Bỏ ghim phiên này" : "Ghim phiên lên đầu danh sách"}
+                        aria-label={pinned ? "Unpin this session" : "Pin session to top"}
                         onClick={(e) => {
                           e.stopPropagation(); // nếu không, SwipeRow coi là tap -> mở phiên
                           flipFlag("pinned", s);
@@ -499,7 +499,7 @@ export function SessionsPage({ route }) {
                       <button
                         type="button"
                         class="btn small ghost btn-icon"
-                        aria-label={`Xếp phiên này vào nhóm (đang ở: ${gLabel || UNGROUPED_LABEL})`}
+                        aria-label={`Assign session to group (current: ${gLabel || UNGROUPED_LABEL})`}
                         onClick={(e) => {
                           e.stopPropagation();
                           setSheet({ mode: "assign", session: s });
@@ -510,7 +510,7 @@ export function SessionsPage({ route }) {
                       <button
                         type="button"
                         class="btn small ghost btn-icon"
-                        aria-label="Lưu trữ phiên này"
+                        aria-label="Archive this session"
                         onClick={(e) => {
                           e.stopPropagation();
                           flipFlag("archived", s);
@@ -556,7 +556,7 @@ export function SessionsPage({ route }) {
 
       {confirmDialog}
 
-      <button class="fab" aria-label="Tạo session mới" onClick={newSession}>
+      <button class="fab" aria-label="New session" onClick={newSession}>
         <PlusIcon size={24} />
       </button>
     </>
@@ -579,11 +579,11 @@ function AssignSheet({ session, groupState, busy, onPick, onCreate, onManage, on
         class="card sheet model-sheet"
         role="dialog"
         aria-modal="true"
-        aria-label="Chọn nhóm cho phiên"
+        aria-label="Select group for session"
         onClick={(e) => e.stopPropagation()}
       >
         <div class="sheet-grabber" />
-        <div class="sheet-body">“{sessionTitleOf(session)}” — chọn nhóm để xếp phiên này vào.</div>
+        <div class="sheet-body">“{sessionTitleOf(session)}” — select a group for this session.</div>
         <div class="model-list" style="flex:1;min-height:0">
           <button type="button" class="model-option" onClick={() => onPick("")}>
             <span class="model-option-text">
@@ -605,8 +605,8 @@ function AssignSheet({ session, groupState, busy, onPick, onCreate, onManage, on
             type="text"
             value={label}
             maxLength={MAX_GROUP_LABEL_LENGTH}
-            placeholder="Tên nhóm mới"
-            aria-label="Tên nhóm mới"
+            placeholder="New group name"
+            aria-label="New group name"
             disabled={busy}
             style="flex:1;min-width:0"
             onInput={(e) => setLabel(e.currentTarget.value)}
@@ -649,12 +649,12 @@ function ManageGroupsSheet({ groupState, busy, onCreate, onRename, onMove, onRem
         class="card sheet model-sheet"
         role="dialog"
         aria-modal="true"
-        aria-label="Quản lý nhóm phiên"
+        aria-label="Manage session groups"
         onClick={(e) => e.stopPropagation()}
       >
         <div class="sheet-grabber" />
         <div class="sheet-body">
-          Nhóm lưu trên máy tính, nên điện thoại này và máy khác thấy giống nhau.
+          Groups are saved on your computer, so this phone and other devices see the same ones.
         </div>
 
         <form class="sheet-actions" onSubmit={submitNew} style="align-items:center">
@@ -662,8 +662,8 @@ function ManageGroupsSheet({ groupState, busy, onCreate, onRename, onMove, onRem
             type="text"
             value={label}
             maxLength={MAX_GROUP_LABEL_LENGTH}
-            placeholder="Tên nhóm mới"
-            aria-label="Tên nhóm mới"
+            placeholder="New group name"
+            aria-label="New group name"
             disabled={busy}
             style="flex:1;min-width:0"
             onInput={(e) => setLabel(e.currentTarget.value)}
@@ -676,7 +676,7 @@ function ManageGroupsSheet({ groupState, busy, onCreate, onRename, onMove, onRem
         {/* Mỗi nhóm là HAI dòng: tên ở trên, dải nút ở dưới — bốn nút 44px đứng
             cạnh nhau tràn ngang ở 360px. Dải nút có wrap nên không vỡ bố cục. */}
         <div class="model-list" style="flex:1;min-height:0">
-          {groupState.groups.length === 0 && <p class="model-empty">Chưa có nhóm nào. Tạo một cái ở ô trên.</p>}
+          {groupState.groups.length === 0 && <p class="model-empty">No groups yet. Create one in the input above.</p>}
           {groupState.groups.map((g, i) => (
             <div key={g.id} style="padding:10px 6px;border-bottom:1px solid var(--border)">
               {editing === g.id ? (
@@ -685,7 +685,7 @@ function ManageGroupsSheet({ groupState, busy, onCreate, onRename, onMove, onRem
                     type="text"
                     value={draft}
                     maxLength={MAX_GROUP_LABEL_LENGTH}
-                    aria-label={`Đổi tên nhóm ${g.label}`}
+                    aria-label={`Rename group ${g.label}`}
                     style="flex:1;min-width:0"
                     onInput={(e) => setDraft(e.currentTarget.value)}
                   />
@@ -707,20 +707,20 @@ function ManageGroupsSheet({ groupState, busy, onCreate, onRename, onMove, onRem
                     <button
                       type="button"
                       class="btn small ghost"
-                      aria-label={`Đưa nhóm ${g.label} lên trên`}
+                      aria-label={`Move group ${g.label} up`}
                       disabled={busy || i === 0}
                       onClick={() => onMove(g.id, -1)}
                     >
-                      <ChevronUpIcon size={14} /> Lên
+                      <ChevronUpIcon size={14} /> Up
                     </button>
                     <button
                       type="button"
                       class="btn small ghost"
-                      aria-label={`Đưa nhóm ${g.label} xuống dưới`}
+                      aria-label={`Move group ${g.label} down`}
                       disabled={busy || i === groupState.groups.length - 1}
                       onClick={() => onMove(g.id, 1)}
                     >
-                      <ChevronDownIcon size={14} /> Xuống
+                      <ChevronDownIcon size={14} /> Down
                     </button>
                     <button
                       type="button"

@@ -105,7 +105,7 @@ test("sessionTitleOf có nhãn thay thế và tự dẹp chuỗi engine trả v�
   assert.equal(sessionTitleOf({ title: "   " }), UNTITLED_SESSION_LABEL);
   assert.equal(sessionTitleOf({ title: "sửa\nbug" }), "sửa bug");
   // Nhãn phải khớp đúng chỗ home.jsx:127 + sessions.jsx:122 đang dùng.
-  assert.equal(UNTITLED_SESSION_LABEL, "Không tiêu đề");
+  assert.equal(UNTITLED_SESSION_LABEL, "Untitled");
 });
 
 // ---- So sánh tên để khỏi gửi PATCH thừa ----

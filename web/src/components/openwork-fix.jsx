@@ -111,11 +111,11 @@ export function OpenWorkFix({ candidates, onChoose, saving, title }) {
               <button
                 type="button"
                 class="btn small"
-                aria-label={`Dùng đường dẫn ${p}`}
+                aria-label={`Use path ${p}`}
                 disabled={saving}
                 onClick={() => submit(p)}
               >
-                Dùng
+                Use
               </button>
             </div>
           ))}
@@ -128,8 +128,8 @@ export function OpenWorkFix({ candidates, onChoose, saving, title }) {
           mình đang bỏ sót danh sách nào. */}
       <label class="field" for={inputId}>
         {list.length > 0
-          ? "Hoặc gõ đường dẫn OpenWork.exe trên máy tính"
-          : "Gõ đường dẫn OpenWork.exe trên máy tính"}
+          ? "Or enter path to OpenWork.exe on computer"
+          : "Enter path to OpenWork.exe on computer"}
       </label>
       <div style="display:flex;gap:8px">
         <input
@@ -159,11 +159,11 @@ export function OpenWorkFix({ candidates, onChoose, saving, title }) {
           disabled={saving || !manualPath.trim()}
           onClick={() => submit(manualPath)}
         >
-          {saving ? "Đang lưu…" : "Chỉ đường dẫn"}
+          {saving ? "Saving…" : "Set path"}
         </button>
       </div>
       <p class="pair-hint" style="display:block;margin-top:6px">
-        Mở File Explorer, chuột phải OpenWork.exe → Copy as path, rồi dán vào đây.
+        Open File Explorer, right-click OpenWork.exe → Copy as path, then paste here.
       </p>
     </div>
   );

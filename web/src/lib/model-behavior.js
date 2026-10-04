@@ -23,11 +23,11 @@ export const EFFORT_NONE = "none";
  * trên nút. "none" đứng đầu và luôn tồn tại trong mọi danh sách.
  */
 export const EFFORT_LEVELS = [
-  { id: EFFORT_NONE, vi: "Mặc định" },
-  { id: "minimal", vi: "Tối thiểu" },
-  { id: "low", vi: "Thấp" },
-  { id: "medium", vi: "Vừa" },
-  { id: "high", vi: "Cao" },
+  { id: EFFORT_NONE, label: "Default" },
+  { id: "minimal", label: "Minimal" },
+  { id: "low", label: "Low" },
+  { id: "medium", label: "Medium" },
+  { id: "high", label: "High" },
 ];
 
 const EFFORT_ALIASES = {
@@ -57,9 +57,9 @@ export function normalizeEffort(value) {
   return key || EFFORT_NONE;
 }
 
-export function effortLabelVi(effort) {
+export function effortLabel(effort) {
   const id = normalizeEffort(effort);
-  return EFFORT_LEVELS.find((l) => l.id === id)?.vi ?? String(effort ?? "");
+  return EFFORT_LEVELS.find((l) => l.id === id)?.label ?? String(effort ?? "");
 }
 
 /** Thứ tự tăng dần; id lạ (vd "extreme") nằm ngoài bảng thì đẩy xuống cuối. */
@@ -168,10 +168,10 @@ export function pickVariantId(variants, effort) {
  *   OpenAI, vì nhánh đó đi qua `reasoning_effort` chứ không qua `variant`.
  */
 export function effortOptionsFor(model, variants) {
-  const options = [{ id: EFFORT_NONE, vi: EFFORT_LEVELS[0].vi, viCodex: false }];
+  const options = [{ id: EFFORT_NONE, label: EFFORT_LEVELS[0].label, codexOnly: false }];
   if (usesReasoningEffortField(model)) {
     for (const level of EFFORT_LEVELS.slice(1)) {
-      options.push({ id: level.id, vi: level.vi, viCodex: true });
+      options.push({ id: level.id, label: level.label, codexOnly: true });
     }
     return options;
   }
@@ -179,7 +179,7 @@ export function effortOptionsFor(model, variants) {
     .filter((id) => id.toLowerCase() !== EFFORT_NONE)
     .sort((a, b) => effortRank(a) - effortRank(b) || a.localeCompare(b));
   for (const id of ids) {
-    options.push({ id, vi: effortLabelVi(id), viCodex: false });
+    options.push({ id, label: effortLabel(id), codexOnly: false });
   }
   return options;
 }

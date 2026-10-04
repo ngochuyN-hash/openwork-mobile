@@ -98,8 +98,8 @@ test("textTooLarge: dưới trần thì rỗng, trên trần thì báo kèm dung
   assert.equal(textTooLarge(TEXT_PREVIEW_MAX_BYTES), "");
   const msg = textTooLarge(TEXT_PREVIEW_MAX_BYTES + 1);
   assert.ok(msg.length > 0, "phải có lời giải thích");
-  assert.match(msg, /quá lớn/);
-  assert.match(msg, /Tải về|tải về/);
+  assert.match(msg, /too large/);
+  assert.match(msg, /Download it/);
   // size không xác định -> KHÔNG đoán thừa (chặn oan file bình thường)
   assert.equal(textTooLarge(undefined), "");
   assert.equal(textTooLarge(null), "");
@@ -129,10 +129,10 @@ test("uploadSummary: lỗi một phần thì note VÀ error CÙNG có (bug cũ m
   assert.match(r.error, /a\.zip/, "phải nêu TÊN file hỏng");
 });
 
-test("uploadSummary: hỏng hết thì note không được nói 'đã tải lên'", () => {
+test("uploadSummary: when all fail, note must not say 'Uploaded'", () => {
   const r = uploadSummary(0, ["a.bin", "b.bin"]);
-  assert.equal(r.note.includes("Đã tải lên"), false);
-  assert.match(r.note, /0\/2|Không tải được/);
+  assert.equal(r.note.includes("Uploaded"), false);
+  assert.match(r.note, /0\/2|Could not upload/);
   assert.match(r.error, /a\.bin/);
   assert.match(r.error, /b\.bin/);
 });
@@ -141,7 +141,7 @@ test("uploadSummary: hơn 3 file lỗi thì cắt bớt nhưng vẫn nói còn b
   const failed = ["1", "2", "3", "4", "5"];
   const r = uploadSummary(0, failed);
   assert.match(r.error, /1, 2, 3/);
-  assert.match(r.error, /2 file khác/);
+  assert.match(r.error, /and 2 more/);
   assert.equal(r.error.includes("4"), false, "không liệt kê quá dài");
 });
 

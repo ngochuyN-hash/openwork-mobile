@@ -289,7 +289,7 @@ namespace OpenPocket.Desktop
             bool isAdmin = new System.Security.Principal.WindowsPrincipal(
                 System.Security.Principal.WindowsIdentity.GetCurrent()
             ).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
-            lblAdminBadge.Text = isAdmin ? "ADMIN (ELEVATED)" : "THIẾU QUYỀN ADMIN";
+            lblAdminBadge.Text = isAdmin ? "ADMIN (ELEVATED)" : "ADMIN RIGHTS MISSING";
             lblAdminBadge.ForeColor = isAdmin ? Color.FromArgb(21, 128, 61) : ColorAmber;
             badgeTint = isAdmin ? Color.FromArgb(220, 252, 231) : Color.FromArgb(254, 243, 199);
             pnlHeader.Invalidate(); // pill vẽ ở parent — phải vẽ lại header
@@ -301,11 +301,11 @@ namespace OpenPocket.Desktop
             // chuột lên là biết thiếu quyền thì hỏng gì và lấy lại bằng cách nào.
             tipAdmin = new ToolTip();
             tipAdmin.SetToolTip(lblAdminBadge, isAdmin
-                ? "Đang chạy quyền Administrator — điều khiển được mọi cửa sổ, kể cả cửa sổ đang chạy Admin."
-                : "Thiếu quyền Admin: các cửa sổ đang chạy quyền Admin sẽ không điều khiển được. Thoát hẳn (icon khay) rồi mở lại OpenPocket.exe bằng tay, chấp nhận UAC là đủ.");
+                ? "Running with Administrator rights — can control every window, including ones running as Admin."
+                : "Missing Admin rights: windows running as Admin cannot be controlled. Quit completely (tray icon) and relaunch OpenPocket.exe manually, accepting the UAC prompt.");
             // Icon ↻ thay chữ — nghĩa của nút chuyển sang tooltip
-            tipAdmin.SetToolTip(btnTunnelRestart, "Mở lại đường hầm Cloudflare ngay — không đợi bộ đếm 429");
-            tipAdmin.SetToolTip(btnProvisionRetry, "Tạo lại định danh máy (room + mật khẩu ngầm) — dùng khi lần tạo đầu thất bại");
+            tipAdmin.SetToolTip(btnTunnelRestart, "Reopen the Cloudflare tunnel right away — without waiting for the 429 counter");
+            tipAdmin.SetToolTip(btnProvisionRetry, "Recreate the machine identity (room + hidden password) — use when the first attempt failed");
 
             refreshTimer = new System.Windows.Forms.Timer();
             refreshTimer.Interval = 3500;
@@ -342,7 +342,7 @@ namespace OpenPocket.Desktop
 
         private void InitializeComponent()
         {
-            this.Text = "OpenPocket — Điều khiển OpenWork từ điện thoại";
+            this.Text = "OpenPocket - Control OpenWork from your phone";
             // MỘT cột, nền trắng toàn phần: TRẠNG THÁI (đèn kết nối) → tự khởi
             // động (cấu hình duy nhất còn lại) → hành động. Client 496x396 =
             // header 48 + trạng thái 188 + kẽ 8 + hàng tự-khởi-động 24 + kẽ 8
@@ -375,17 +375,17 @@ namespace OpenPocket.Desktop
 
             int yL = 0;
             cardStatus = CreateCard(0, ref yL, 496, 188, pnlContent);
-            CreateCardTitle("TRẠNG THÁI KẾT NỐI", cardStatus);
+            CreateCardTitle("CONNECTION STATUS", cardStatus);
 
-            lblStatusBridge = CreateStatusLabel("● Bridge: Đang kiểm tra...", 16, 39, cardStatus);
+            lblStatusBridge = CreateStatusLabel("● Bridge: Checking...", 16, 39, cardStatus);
             lblStatusBridge.Size = new Size(448, 22);
             lblStatusBridge.Font = new Font("Segoe UI", 9.75f);
 
-            lblStatusTunnel = CreateStatusLabel("● Cloudflare Tunnel: Đang kiểm tra...", 16, 71, cardStatus);
+            lblStatusTunnel = CreateStatusLabel("● Cloudflare Tunnel: Checking...", 16, 71, cardStatus);
             lblStatusTunnel.Size = new Size(448, 22);
             lblStatusTunnel.Font = new Font("Segoe UI", 9.75f);
             lblStatusTunnelUrl = new Label();
-            lblStatusTunnelUrl.Text = "(đang lấy địa chỉ công khai...)";
+            lblStatusTunnelUrl.Text = "(fetching the public address...)";
             lblStatusTunnelUrl.Font = new Font("Consolas", 9f);
             lblStatusTunnelUrl.ForeColor = ColorText;
             lblStatusTunnelUrl.Location = new Point(32, 97);
@@ -410,7 +410,7 @@ namespace OpenPocket.Desktop
             // nút lên đỉnh để không bao giờ bị nền label che
             btnTunnelRestart.BringToFront();
 
-            lblStatusOpenWork = CreateStatusLabel("● OpenWork Desktop: Đang kiểm tra...", 16, 127, cardStatus);
+            lblStatusOpenWork = CreateStatusLabel("● OpenWork Desktop: Checking...", 16, 127, cardStatus);
             lblStatusOpenWork.Size = new Size(448, 22);
             lblStatusOpenWork.Font = new Font("Segoe UI", 9.75f);
 
@@ -418,7 +418,7 @@ namespace OpenPocket.Desktop
             // đèn Bridge vẫn xanh nhưng máy không bao giờ hiện trên điện thoại.
             // Lỗi giờ hiện chữ đỏ + nút ↻ thử lại ngay trên thẻ trạng thái;
             // máy đã ghép ngon thì hàng này tự ẩn (UpdateProvisionStatus).
-            lblProvision = CreateStatusLabel("● Định danh máy: đang kiểm tra…", 16, 159, cardStatus);
+            lblProvision = CreateStatusLabel("● Machine identity: checking...", 16, 159, cardStatus);
             lblProvision.Size = new Size(424, 20);
             lblProvision.AutoEllipsis = true;
             btnProvisionRetry = CreateButton("\uE72C", ButtonKind.InlineIcon, 456, 157, 24, 24, cardStatus);
@@ -435,7 +435,7 @@ namespace OpenPocket.Desktop
             yL += 8;
             cardConfig = CreateCard(0, ref yL, 496, 24, pnlContent);
             chkAutostart = new CheckBox();
-            chkAutostart.Text = "Tự khởi động cùng Windows (ngầm, quyền Admin)";
+            chkAutostart.Text = "Start with Windows (hidden, Admin rights)";
             chkAutostart.ForeColor = ColorText;
             chkAutostart.Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
             chkAutostart.Location = new Point(16, 3);
@@ -451,23 +451,23 @@ namespace OpenPocket.Desktop
             // viền đỏ chữ đỏ trên nền trắng, khoá thì về xám như mọi nút.
             cardPair = CreateCard(0, ref yL, 496, 120, pnlContent);
 
-            btnStartBridge = CreateButton("Bật Bridge", ButtonKind.SuccessGhost, 16, 14, 149, 40, cardPair);
+            btnStartBridge = CreateButton("Start Bridge", ButtonKind.SuccessGhost, 16, 14, 149, 40, cardPair);
             btnStartBridge.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
             btnStartBridge.Click += delegate { ActionStartBridge(); };
 
-            btnRestartBridge = CreateButton("Khởi động lại", ButtonKind.Ghost, 173, 14, 149, 40, cardPair);
+            btnRestartBridge = CreateButton("Restart", ButtonKind.Ghost, 173, 14, 149, 40, cardPair);
             btnRestartBridge.Font = new Font("Segoe UI", 10f);
             btnRestartBridge.Click += delegate { ActionRestartBridge(); };
 
-            btnStopBridge = CreateButton("Dừng", ButtonKind.DangerGhost, 330, 14, 150, 40, cardPair);
+            btnStopBridge = CreateButton("Stop", ButtonKind.DangerGhost, 330, 14, 150, 40, cardPair);
             btnStopBridge.Font = new Font("Segoe UI", 10f);
             btnStopBridge.Click += delegate { ActionStopBridge(); };
 
-            btnShowQr = CreateButton("Xem mã ghép (QR)", ButtonKind.Primary, 16, 66, 304, 40, cardPair);
+            btnShowQr = CreateButton("View pairing code (QR)", ButtonKind.Primary, 16, 66, 304, 40, cardPair);
             btnShowQr.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
             btnShowQr.Click += delegate { ActionShowPairingDialog(); };
 
-            btnOpenLogs = CreateButton("Xem nhật ký", ButtonKind.Ghost, 328, 66, 152, 40, cardPair);
+            btnOpenLogs = CreateButton("View logs", ButtonKind.Ghost, 328, 66, 152, 40, cardPair);
             btnOpenLogs.Font = new Font("Segoe UI", 10f);
             btnOpenLogs.Click += delegate { ActionOpenLogs(); };
 
@@ -533,11 +533,11 @@ namespace OpenPocket.Desktop
             this.Icon = AppIcon;
             trayIcon = new NotifyIcon();
             trayIcon.Icon = AppIcon;
-            trayIcon.Text = "OpenPocket — điều khiển OpenWork từ điện thoại";
+            trayIcon.Text = "OpenPocket - Control OpenWork from your phone";
             trayIcon.Visible = true;
             ContextMenuStrip trayMenu = new ContextMenuStrip();
-            trayMenu.Items.Add("Mở OpenPocket", null, delegate { ShowFromTray(); });
-            trayMenu.Items.Add("Thoát hẳn", null, delegate {
+            trayMenu.Items.Add("Open OpenPocket", null, delegate { ShowFromTray(); });
+            trayMenu.Items.Add("Quit completely", null, delegate {
                 reallyExit = true;
                 // Log không giữ ở máy (owner 13/09): bridge vẫn chạy nền nên chỉ
                 // truncate được — mấy dòng nó ghi sau đó là của ngày mới.
@@ -555,8 +555,8 @@ namespace OpenPocket.Desktop
                     if (!balloonShown)
                     {
                         balloonShown = true;
-                        trayIcon.BalloonTipTitle = "OpenPocket vẫn đang chạy";
-                        trayIcon.BalloonTipText = "Đã ẩn xuống khay hệ thống — bấm đôi icon để mở lại, chuột phải chọn Thoát hẳn để tắt.";
+                        trayIcon.BalloonTipTitle = "OpenPocket is still running";
+                        trayIcon.BalloonTipText = "Hidden to the system tray - double-click the icon to reopen, right-click and choose Quit completely to exit.";
                         trayIcon.ShowBalloonTip(4000);
                     }
                 }
@@ -870,7 +870,7 @@ namespace OpenPocket.Desktop
                 }
                 catch (Exception ex) { ok = false; provisionError = ex.Message; }
                 if (!ok && provisionError == "")
-                    provisionError = "Máy chủ định danh từ chối (kiểm tra mạng / lookupUrl)";
+                    provisionError = "The identity server rejected the request (check network / lookupUrl)";
                 if (ok) provisionError = "";
 
                 SafeInvoke(delegate {
@@ -909,22 +909,22 @@ namespace OpenPocket.Desktop
             if (bridgeDir == "" || !File.Exists(Path.Combine(bridgeDir, "src", "index.js")))
             {
                 MessageBox.Show(this,
-                    "Không tìm thấy thư mục bridge (cần bridge\\src\\index.js nằm cạnh OpenPocket.exe).\nLấy lại bản zip đúng bố cục rồi bấm Bật Bridge lại.",
-                    "Thiếu thành phần", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    "Bridge folder not found (bridge\\src\\index.js must sit next to OpenPocket.exe).\nGet the zip with the correct layout again, then tap Start Bridge.",
+                    "Missing component", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
             if (!File.Exists(nodeExe))
             {
                 MessageBox.Show(this,
-                    "Không tìm thấy Node.js (node.exe).\nCài Node.js 20+ (nodejs.org) rồi bấm Bật Bridge lại.",
-                    "Thiếu thành phần", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    "Node.js (node.exe) not found.\nInstall Node.js 20+ (nodejs.org), then tap Start Bridge again.",
+                    "Missing component", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
             if (!Directory.Exists(Path.Combine(bridgeDir, "node_modules")))
             {
                 MessageBox.Show(this,
-                    "Thiếu bridge\\node_modules — bản zip bị đóng gói thiếu dependency.\nLấy lại bản zip đầy đủ (node_modules được vendor sẵn) rồi bấm Bật Bridge lại.",
-                    "Thiếu thành phần", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    "bridge\\node_modules is missing - the packaged zip lacks dependencies.\nGet the full zip (node_modules is vendored in), then tap Start Bridge again.",
+                    "Missing component", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
             return true;
@@ -948,8 +948,8 @@ namespace OpenPocket.Desktop
 
             if (isBridgeRunning)
             {
-                lblStatusBridge.Text = string.Format("● Bridge: Đang chạy (Cổng {0})", port) +
-                    (provisioning ? " (đang tạo định danh lần đầu…)" : "");
+                lblStatusBridge.Text = string.Format("● Bridge: Running (Port {0})", port) +
+                    (provisioning ? " (creating the machine identity first time...)" : "");
                 lblStatusBridge.ForeColor = ColorSuccess;
                 SetBridgeButton(btnStartBridge, false);
                 SetBridgeButton(btnStopBridge, true);
@@ -958,7 +958,7 @@ namespace OpenPocket.Desktop
             }
             else
             {
-                lblStatusBridge.Text = "○ Bridge: Đã dừng";
+                lblStatusBridge.Text = "○ Bridge: Stopped";
                 lblStatusBridge.ForeColor = ColorDanger;
                 SetBridgeButton(btnStartBridge, true);
                 SetBridgeButton(btnStopBridge, false);
@@ -977,10 +977,10 @@ namespace OpenPocket.Desktop
             tunnelUrl = ReadTunnelUrlFromLog();
             if (backoffMin > 0)
             {
-                lblStatusTunnel.Text = "● Cloudflare: đang chờ mở lại đường hầm (429)";
+                lblStatusTunnel.Text = "● Cloudflare: waiting to reopen the tunnel (429)";
                 // Bỏ đuôi "bấm [Restart tunnel]" — nút thật đang đứng kế bên,
                 // ghi lại tên nút là chữ thừa (audit 13/09).
-                lblStatusTunnelUrl.Text = "Tự thử lại sau ~" + backoffMin + " phút.";
+                lblStatusTunnelUrl.Text = "Will retry automatically in ~" + backoffMin + " min.";
                 lblStatusTunnel.ForeColor = ColorAmber;
             }
             else if (!string.IsNullOrEmpty(tunnelUrl))
@@ -991,13 +991,13 @@ namespace OpenPocket.Desktop
             }
             else if (isBridgeRunning)
             {
-                lblStatusTunnel.Text = "● Cloudflare Tunnel: Đang thiết lập kết nối...";
+                lblStatusTunnel.Text = "● Cloudflare Tunnel: Connecting...";
                 lblStatusTunnelUrl.Text = "";
                 lblStatusTunnel.ForeColor = ColorAmber;
             }
             else
             {
-                lblStatusTunnel.Text = "○ Cloudflare Tunnel: Chưa kết nối";
+                lblStatusTunnel.Text = "○ Cloudflare Tunnel: Not connected";
                 lblStatusTunnelUrl.Text = "";
                 lblStatusTunnel.ForeColor = ColorMuted;
             }
@@ -1013,12 +1013,12 @@ namespace OpenPocket.Desktop
             }
             if (openworkRunning)
             {
-                lblStatusOpenWork.Text = "● OpenWork Desktop: Đang mở";
+                lblStatusOpenWork.Text = "● OpenWork Desktop: Launching";
                 lblStatusOpenWork.ForeColor = ColorSuccess;
             }
             else
             {
-                lblStatusOpenWork.Text = "○ OpenWork Desktop: Chưa mở (Sẽ tự mở khi điện thoại kết nối)";
+                lblStatusOpenWork.Text = "○ OpenWork Desktop: Not running (will start when your phone connects)";
                 lblStatusOpenWork.ForeColor = ColorMuted;
             }
 
@@ -1049,25 +1049,25 @@ namespace OpenPocket.Desktop
             btnProvisionRetry.Visible = true;
             if (provisioning)
             {
-                lblProvision.Text = "● Định danh máy: đang tạo lần đầu…";
+                lblProvision.Text = "● Machine identity: creating first time...";
                 lblProvision.ForeColor = ColorAmber;
                 btnProvisionRetry.Enabled = false;
             }
             else if (provisionError != "")
             {
-                lblProvision.Text = "● Định danh máy: THẤT BẠI — " + provisionError;
+                lblProvision.Text = "● Machine identity: FAILED - " + provisionError;
                 lblProvision.ForeColor = ColorDanger;
                 btnProvisionRetry.Enabled = true;
             }
             else if (provisionHintRestart)
             {
-                lblProvision.Text = "● Định danh máy: đã có — bấm Khởi động lại Bridge để máy hiện trên điện thoại";
+                lblProvision.Text = "● Machine identity: exists - tap Restart Bridge to show it on your phone";
                 lblProvision.ForeColor = ColorSuccess;
                 btnProvisionRetry.Enabled = false;
             }
             else
             {
-                lblProvision.Text = "○ Định danh máy: chưa có — bấm ↻ để tạo";
+                lblProvision.Text = "○ Machine identity: none yet - tap the retry icon to create it";
                 lblProvision.ForeColor = ColorMuted;
                 btnProvisionRetry.Enabled = true;
             }
@@ -1181,7 +1181,7 @@ namespace OpenPocket.Desktop
             // rồi chết EADDRINUSE — chỉ thêm rác vào log. Chặn luôn.
             if (isBridgeRunning)
             {
-                MessageBox.Show(this, "Bridge đang chạy rồi (đèn xanh phía trên). Không cần bật lại.", "Đang chạy", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "The Bridge is already running (green light above). No need to start it again.", "Already running", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -1190,14 +1190,14 @@ namespace OpenPocket.Desktop
             if (!EnsureBridgeDepsPresent()) return;
 
             SetBridgeButton(btnStartBridge, false);
-            btnStartBridge.Text = "Đang chuẩn bị…";
+            btnStartBridge.Text = "Preparing...";
             ThreadPool.QueueUserWorkItem(delegate {
                 // Định danh máy (lần đầu, qua mạng) phải xong TRƯỚC khi boot —
                 // bridge đọc config một lúc mở, thiếu là đăng ký không được.
                 for (int i = 0; i < 30 && provisioning; i++) Thread.Sleep(500);
                 SafeInvoke(delegate {
                     SetBridgeButton(btnStartBridge, true);
-                    btnStartBridge.Text = "Bật Bridge";
+                    btnStartBridge.Text = "Start Bridge";
                     try
                     {
                         if (IsAutostartTaskExisting())
@@ -1215,7 +1215,7 @@ namespace OpenPocket.Desktop
                                 bool exited = p.WaitForExit(10000);
                                 if (!exited)
                                 {
-                                    MessageBox.Show(this, "Không bật được bridge: lệnh schtasks /run không thoát sau 10 giây.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                    MessageBox.Show(this, "Could not start the bridge: the schtasks /run command did not exit after 10 seconds.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                                     return;
                                 }
                                 if (p.ExitCode != 0)
@@ -1223,7 +1223,7 @@ namespace OpenPocket.Desktop
                                     string err = "";
                                     try { err = p.StandardError.ReadToEnd().Trim(); } catch { }
                                     if (err == "") { try { err = p.StandardOutput.ReadToEnd().Trim(); } catch { } }
-                                    MessageBox.Show(this, "Không bật được bridge — task OpenPocketBridge chạy thất bại (schtasks exit " + p.ExitCode + "): " + err, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                    MessageBox.Show(this, "Could not start the bridge - the OpenPocketBridge task failed (schtasks exit " + p.ExitCode + "): " + err, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                                     return;
                                 }
                             }
@@ -1241,7 +1241,7 @@ namespace OpenPocket.Desktop
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show(this, "Không khởi động được bridge: " + ex.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        MessageBox.Show(this, "Could not start the bridge: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     }
                 });
             });
@@ -1335,7 +1335,7 @@ namespace OpenPocket.Desktop
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "Lỗi khi dừng: " + ex.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, "Error while stopping: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -1425,15 +1425,15 @@ namespace OpenPocket.Desktop
         {
             if (!isBridgeRunning) return;
             btnTunnelRestart.Enabled = false;
-            btnTunnelRestart.Text = "Đang restart…";
-            lblStatusTunnel.Text = "Cloudflare: đang xin đường hầm mới...";
+            btnTunnelRestart.Text = "Restarting...";
+            lblStatusTunnel.Text = "Cloudflare: requesting a new tunnel...";
             lblStatusTunnel.ForeColor = ColorAmber;
             PostBridgeJson("/api/tunnel/restart", null, (dict, err) => {
                 btnTunnelRestart.Text = "Restart tunnel";
                 btnTunnelRestart.Enabled = isBridgeRunning;
                 if (dict == null)
                 {
-                    lblStatusTunnel.Text = "Cloudflare: không restart được (" + err + ")";
+                    lblStatusTunnel.Text = "Cloudflare: could not restart (" + err + ")";
                     lblStatusTunnel.ForeColor = ColorDanger;
                 }
                 // dict != null: bridge đã nhận — poll sắp tới tự hiện trạng thái mới
@@ -1444,7 +1444,7 @@ namespace OpenPocket.Desktop
         {
             if (!isBridgeRunning)
             {
-                MessageBox.Show(this, "Bridge chưa chạy. Vui lòng bấm [Bật Bridge] trước khi xem mã ghép.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this, "The Bridge is not running. Please tap [Start Bridge] before viewing the pairing code.", "Notice", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -1465,7 +1465,7 @@ namespace OpenPocket.Desktop
             }
             else
             {
-                MessageBox.Show(this, "Chưa có file log. Hãy khởi động Bridge trước.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "No log file yet. Start the Bridge first.", "Notice", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
 
@@ -1519,7 +1519,7 @@ namespace OpenPocket.Desktop
                 string bridgeEntry = Path.Combine(bridgeDir, "src", "index.js");
                 if (!File.Exists(bridgeEntry))
                 {
-                    MessageBox.Show(this, "Không tìm thấy file bridge/src/index.js", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show(this, "File bridge/src/index.js not found", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
 
@@ -1550,7 +1550,7 @@ namespace OpenPocket.Desktop
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "Không thể tạo task tự khởi động: " + ex.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, "Could not create the autostart task: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -1636,7 +1636,7 @@ namespace OpenPocket.Desktop
 
         public PairingQrDialog(Dictionary<string, object> config, string bridgeDataDir)
         {
-            this.Text = "Mã ghép điện thoại — OpenPocket";
+            this.Text = "Phone pairing code - OpenPocket";
             this.ClientSize = new Size(520, 700);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -1657,7 +1657,7 @@ namespace OpenPocket.Desktop
 
             // Title
             Label lblTitle = new Label();
-            lblTitle.Text = "📱 GHÉP ĐIỆN THOẠI — QUÉT MÃ";
+            lblTitle.Text = "📱 PHONE PAIRING - SCAN THE CODE";
             lblTitle.Font = new Font("Segoe UI", 12f, FontStyle.Bold);
             lblTitle.ForeColor = ColorText;
             lblTitle.Location = new Point(20, 14);
@@ -1666,7 +1666,7 @@ namespace OpenPocket.Desktop
 
             // Pair Code
             lblPairCode = new Label();
-            lblPairCode.Text = "Đang lấy mã...";
+            lblPairCode.Text = "Getting the code...";
             lblPairCode.Font = new Font("Segoe UI", 15f, FontStyle.Bold);
             lblPairCode.ForeColor = ColorPrimary;
             lblPairCode.Location = new Point(20, 46);
@@ -1676,7 +1676,7 @@ namespace OpenPocket.Desktop
 
             // Expiry
             lblExpiry = new Label();
-            lblExpiry.Text = "Đang hỏi bridge lấy mã sống...";
+            lblExpiry.Text = "Asking the bridge for the live code...";
             lblExpiry.Font = new Font("Segoe UI", 8.5f);
             lblExpiry.ForeColor = ColorMuted;
             lblExpiry.Location = new Point(20, 78);
@@ -1686,14 +1686,14 @@ namespace OpenPocket.Desktop
 
             // Toggle: QR mã 1 lần (30 phút) hay QR master (vĩnh viễn)
             btnShowLive = new MainForm.RoundedButton(MainForm.ButtonKind.Primary);
-            btnShowLive.Text = "Mã 1 lần";
+            btnShowLive.Text = "One-time code";
             btnShowLive.Location = new Point(120, 102);
             btnShowLive.Size = new Size(130, 26);
             btnShowLive.Click += delegate { ShowQr(false); };
             this.Controls.Add(btnShowLive);
 
             btnShowMaster = new MainForm.RoundedButton(MainForm.ButtonKind.Ghost);
-            btnShowMaster.Text = "⭐ Mã vĩnh viễn";
+            btnShowMaster.Text = "⭐ Permanent code";
             btnShowMaster.Location = new Point(258, 102);
             btnShowMaster.Size = new Size(142, 26);
             btnShowMaster.Click += delegate { ShowQr(true); };
@@ -1705,7 +1705,7 @@ namespace OpenPocket.Desktop
             // cứng x=95 → mã lệch trái, cả khối link dưới bị ghim y=496 dù QR chỉ
             // cao ~330px → hụt một mảng trống lớn giữa QR và link)
             lblQrRender = new Label();
-            lblQrRender.Text = "\n\n   Đang tải QR từ bridge...";
+            lblQrRender.Text = "\n\n   Loading QR from the bridge...";
             lblQrRender.Font = new Font("Consolas", 7.5f);
             lblQrRender.BackColor = Color.White;
             lblQrRender.ForeColor = Color.Black;
@@ -1715,7 +1715,7 @@ namespace OpenPocket.Desktop
 
             // Link ghép 1 lần
             lblPairUrlNote = new Label();
-            lblPairUrlNote.Text = "Link ghép 1 lần (gửi Zalo cũng được — bấm là vào):";
+            lblPairUrlNote.Text = "One-time pairing link (safe to send over any app - tapping it signs you in):";
             lblPairUrlNote.Font = new Font("Segoe UI", 8.5f);
             lblPairUrlNote.ForeColor = ColorMuted;
             lblPairUrlNote.Location = new Point(24, 496);
@@ -1732,7 +1732,7 @@ namespace OpenPocket.Desktop
             this.Controls.Add(txtPairUrl);
 
             btnCopyUrl = new MainForm.RoundedButton(MainForm.ButtonKind.Primary);
-            btnCopyUrl.Text = "📋 Sao chép link ghép";
+            btnCopyUrl.Text = "📋 Copy pairing link";
             btnCopyUrl.Location = new Point(24, 544);
             btnCopyUrl.Size = new Size(200, 30);
             btnCopyUrl.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
@@ -1740,14 +1740,14 @@ namespace OpenPocket.Desktop
                 if (!string.IsNullOrEmpty(livePairUrl))
                 {
                     Clipboard.SetText(livePairUrl);
-                    MessageBox.Show(this, "Đã sao chép link ghép vào bộ nhớ tạm!", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show(this, "Pairing link copied to the clipboard!", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             };
             this.Controls.Add(btnCopyUrl);
 
             // Master token
             lblMasterNote = new Label();
-            lblMasterNote.Text = "⭐ Mã vĩnh viễn — KHÔNG chia sẻ, chỉ quét tại máy này:";
+            lblMasterNote.Text = "⭐ Permanent code - DO NOT share, scan it only on this computer:";
             lblMasterNote.Font = new Font("Segoe UI", 8.5f);
             lblMasterNote.ForeColor = ColorMuted;
             lblMasterNote.Location = new Point(24, 586);
@@ -1764,21 +1764,21 @@ namespace OpenPocket.Desktop
             this.Controls.Add(txtMasterUrl);
 
             btnCopyMaster = new MainForm.RoundedButton(MainForm.ButtonKind.Ghost);
-            btnCopyMaster.Text = "📋 Sao chép link master";
+            btnCopyMaster.Text = "📋 Copy master link";
             btnCopyMaster.Location = new Point(24, 634);
             btnCopyMaster.Size = new Size(200, 30);
             btnCopyMaster.Click += delegate {
                 if (!string.IsNullOrEmpty(liveMasterUrl))
                 {
                     Clipboard.SetText(liveMasterUrl);
-                    MessageBox.Show(this, "Đã sao chép link master!", "Thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show(this, "Master link copied!", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             };
             this.Controls.Add(btnCopyMaster);
 
             // Close Button
             btnClose = new MainForm.RoundedButton(MainForm.ButtonKind.Ghost);
-            btnClose.Text = "Đóng";
+            btnClose.Text = "Close";
             btnClose.Location = new Point(200, 668);
             btnClose.Size = new Size(120, 28);
             btnClose.Click += delegate { this.Close(); };
@@ -1824,7 +1824,7 @@ namespace OpenPocket.Desktop
         {
             showingMaster = master;
             string qrText = master ? masterQr : liveQr;
-            lblQrRender.Text = string.IsNullOrEmpty(qrText) ? "\n\n   (chưa có QR)" : qrText;
+            lblQrRender.Text = string.IsNullOrEmpty(qrText) ? "\n\n   (no QR yet)" : qrText;
             // Viên ĐANG CHỌN = nền đen chữ trắng; viên còn lại = nền trắng chữ đen
             // RoundedButton tự vẽ màu theo kind — toggle bằng SetKind: nút ĐANG chọn là
             // Primary (đen), nút còn lại Ghost (trắng viền nhạt)
@@ -1859,7 +1859,7 @@ namespace OpenPocket.Desktop
 
                         MainForm.SafeInvoke(this, delegate {
                             lblPairCode.Text = codeFormatted;
-                            lblExpiry.Text = string.Format("Mã 1 lần sống ~{0} phút — quét bằng camera điện thoại", Math.Ceiling(secondsLeft / 60.0));
+                            lblExpiry.Text = string.Format("The one-time code lives ~{0} minutes - scan it with your phone camera", Math.Ceiling(secondsLeft / 60.0));
                             txtPairUrl.Text = livePairUrl;
                             txtMasterUrl.Text = liveMasterUrl;
                             ShowQr(false);
@@ -1869,8 +1869,8 @@ namespace OpenPocket.Desktop
                 catch (Exception ex)
                 {
                     MainForm.SafeInvoke(this, delegate {
-                        lblPairCode.Text = "Không đọc được mã";
-                        lblExpiry.Text = "Bridge trả lỗi: " + ex.Message;
+                        lblPairCode.Text = "Could not read the code";
+                        lblExpiry.Text = "Bridge returned an error: " + ex.Message;
                     });
                 }
             });

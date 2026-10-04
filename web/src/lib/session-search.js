@@ -128,7 +128,7 @@ export function searchSessions(sessions, query, { contents = {}, limit = 30 } = 
 
   for (const s of list) {
     const id = String(s?.id ?? "");
-    const title = String(s?.title ?? "").trim() || "Không tiêu đề";
+    const title = String(s?.title ?? "").trim() || "Untitled";
     const wsId = String(s?.wsId ?? "");
     const updatedAt = Number(s?.time?.updated ?? s?.time?.created ?? 0) || 0;
     // Chưa gõ gì: xếp theo phiên vừa sửa, không tạo kết quả "khớp".

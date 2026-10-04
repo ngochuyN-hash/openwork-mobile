@@ -43,13 +43,13 @@ export function withTimeoutSignal(parent, ms) {
  * - hủy: không phải lỗi
  */
 export function networkErrorMessage(error) {
-  if (isAbortError(error)) return "Đã hủy.";
+  if (isAbortError(error)) return "Cancelled.";
   const message = String(error?.message ?? "");
   if (error?.name === "TimeoutError" || /timeout|timed out/i.test(message)) {
-    return "Máy tính không phản hồi (hết thời gian chờ) — đường hầm có thể đang treo.";
+    return "Computer not responding (timed out) — the tunnel may be hanging.";
   }
   if (error instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(message)) {
-    return "Không nối được tới máy tính — kiểm tra mạng/Wi-Fi rồi thử lại.";
+    return "Could not reach your computer — check your network/Wi-Fi and try again.";
   }
-  return message || "Lỗi mạng không xác định.";
+  return message || "Unknown network error.";
 }

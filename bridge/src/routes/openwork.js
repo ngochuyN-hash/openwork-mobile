@@ -18,7 +18,7 @@ export function createOpenWorkRoutes(ctx) {
         await ctx.refreshDiscovery({ force: true });
         return sendJson(res, 200, { ok: true, alreadyRunning: true, server: ctx.state.server });
       }
-      sendJson(res, 200, { ok: true, launched: true, hint: "OpenWork đang mở — đợi ~20s rồi bấm Kiểm tra lại." });
+      sendJson(res, 200, { ok: true, launched: true, hint: "OpenWork is launching — wait ~20s then tap Recheck." });
     } catch (error) {
       const code = error?.code === "openwork_exe_not_found" ? "openwork_exe_not_found" : "wake_failed";
       sendJson(res, code === "wake_failed" ? 500 : 404, { code, message: String(error?.message ?? error), candidates: error?.candidates ?? undefined });
@@ -40,36 +40,36 @@ export function createOpenWorkRoutes(ctx) {
       const body = await readJsonBody(req);
       const raw = body?.path;
       if (typeof raw !== "string" || !raw.trim()) {
-        return bad("invalid_path", "Chưa nhận đường dẫn file OpenWork.exe.");
+        return bad("invalid_path", "No path to the OpenWork.exe file was provided.");
       }
       // Bóc dấu nháy trước khi đo độ dài: "Copy as path" trong PowerShell cho ra
       // "C:\...\OpenWork.exe" CÓ dấu nháy kép, dán nguyên xi thì không bao giờ
       // khớp file thật.
       const path = normalizeExePathInput(raw);
       if (!path) {
-        return bad("invalid_path", "Chưa nhận đường dẫn file OpenWork.exe.");
+        return bad("invalid_path", "No path to the OpenWork.exe file was provided.");
       }
       if (path.length > 400) {
-        return bad("invalid_path", "Đường dẫn quá dài (tối đa 400 ký tự).");
+        return bad("invalid_path", "Path is too long (max 400 characters).");
       }
       if (!existsSync(path)) {
-        return bad("not_found", "Không có file nào ở đường dẫn này — kiểm tra lại hoặc copy đường dẫn từ File Explorer.");
+        return bad("not_found", "No file at this path — check again or copy the path from File Explorer.");
       }
       if (!statSync(path).isFile()) {
-        return bad("not_a_file", "Đường dẫn này là thư mục — cần trỏ tới file OpenWork.exe.");
+        return bad("not_a_file", "This path is a folder — point it at the OpenWork.exe file.");
       }
       if (!isOpenWorkExeName(path)) {
-        return bad("not_openwork_exe", "Chỉ nhận đúng file OpenWork.exe — file này tên khác, không phải OpenWork.");
+        return bad("not_openwork_exe", "Only OpenWork.exe is accepted — this file has a different name, it is not OpenWork.");
       }
       ctx.config.openworkExe = path;
       saveConfig(ctx.config);
-      console.log(`[openwork] user chỉ đường dẫn OpenWork.exe: ${path}`);
+      console.log(`[openwork] user set the OpenWork.exe path: ${path}`);
       sendJson(res, 200, { ok: true, openwork: ctx.openworkStateInfo() });
     } catch (error) {
       // Body JSON hỏng (SyntaxError / "body too large" từ readJsonBody) khác
       // hẳn với path không đọc được (existsSync/statSync ném lỗi fs).
       const bodyBroken = error instanceof SyntaxError || error?.message === "body too large";
-      sendJson(res, 400, bodyBroken ? { code: "invalid_body", message: "Body JSON không hợp lệ" } : { code: "fs_error", message: "Không đọc được đường dẫn này — kiểm tra lại, hoặc thử copy từ ổ đĩa local." });
+      sendJson(res, 400, bodyBroken ? { code: "invalid_body", message: "Invalid JSON body" } : { code: "fs_error", message: "Could not read this path — check again, or try copying it from a local drive." });
     }
   }
 

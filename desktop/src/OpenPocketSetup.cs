@@ -36,11 +36,11 @@ namespace OpenPocket.Setup
             if (!HasNode())
             {
                 DialogResult openNode = MessageBox.Show(
-                    "Máy chưa có Node.js — OpenPocket vẫn được cài bình thường.\n\n" +
-                    "Nhưng để bấm \"Bật Bridge\" (mở phiên làm việc, chat, file từ " +
-                    "điện thoại), máy cần Node.js 20 trở lên.\n\n" +
-                    "Mở trang tải Node.js (nodejs.org) bây giờ không?",
-                    "OpenPocket — nên cài Node.js", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                    "This computer has no Node.js - OpenPocket will still install normally.\n\n" +
+                    "But to use \"Start Bridge\" (open work sessions, chat and files from your " +
+                    "phone), the computer needs Node.js 20 or newer.\n\n" +
+                    "Open the Node.js download page (nodejs.org) now?",
+                    "OpenPocket - Node.js is recommended", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
                 if (openNode == DialogResult.Yes)
                 {
                     try { Process.Start("https://nodejs.org"); } catch { }
@@ -57,14 +57,14 @@ namespace OpenPocket.Setup
             {
                 CloseProgress();
                 MessageBox.Show(
-                    "OpenPocket đang mở — hãy đóng app (cửa sổ OpenPocket) rồi chạy Setup lại nhé.",
+                    "OpenPocket is running - close the app (the OpenPocket window) and run Setup again.",
                     "OpenPocket", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return 2;
             }
             catch (Exception ex)
             {
                 CloseProgress();
-                MessageBox.Show("Cài không thành công: " + ex.Message,
+                MessageBox.Show("Install failed: " + ex.Message,
                     "OpenPocket", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return 3;
             }
@@ -83,7 +83,7 @@ namespace OpenPocket.Setup
                 }
                 catch (Exception ex)
                 {
-                    warn = AppendWarn(warn, "không tạo được shortcut nào: " + ex.Message);
+                    warn = AppendWarn(warn, "could not create any shortcut: " + ex.Message);
                 }
                 if (shell != null)
                 {
@@ -93,7 +93,7 @@ namespace OpenPocket.Setup
                     }
                     catch (Exception ex)
                     {
-                        warn = AppendWarn(warn, "chưa tạo được shortcut Start Menu: " + ex.Message);
+                        warn = AppendWarn(warn, "could not create the Start Menu shortcut: " + ex.Message);
                     }
                     try
                     {
@@ -101,7 +101,7 @@ namespace OpenPocket.Setup
                     }
                     catch (Exception ex)
                     {
-                        warn = AppendWarn(warn, "chưa tạo được shortcut Desktop: " + ex.Message);
+                        warn = AppendWarn(warn, "could not create the Desktop shortcut: " + ex.Message);
                     }
                 }
                 try
@@ -110,12 +110,12 @@ namespace OpenPocket.Setup
                 }
                 catch (Exception ex)
                 {
-                    warn = AppendWarn(warn, "chưa tự mở được app — hãy mở: " + exePath +
+                    warn = AppendWarn(warn, "could not launch the app automatically - open it yourself: " + exePath +
                         " (" + ex.Message + ")");
                 }
                 if (warn.Length > 0)
                 {
-                    MessageBox.Show("Đã cài xong, nhưng có việc chưa xong:\n\n" + warn,
+                    MessageBox.Show("Install finished, but some steps did not complete:\n\n" + warn,
                         "OpenPocket", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             }
@@ -157,7 +157,7 @@ namespace OpenPocket.Setup
             {
                 if (name.EndsWith("package.zip")) { resName = name; break; }
             }
-            if (resName == "") throw new Exception("gói cài không tìm thấy trong exe");
+            if (resName == "") throw new Exception("install package not found inside the exe");
 
             if (!Directory.Exists(finalDir)) Directory.CreateDirectory(finalDir);
             using (Stream rs = asm.GetManifestResourceStream(resName))
@@ -200,7 +200,7 @@ namespace OpenPocket.Setup
             progressForm.MinimizeBox = false;
             progressForm.TopMost = true;
             Label lbl = new Label();
-            lbl.Text = "Đang cài OpenPocket — đợi chút nhé...";
+            lbl.Text = "Installing OpenPocket - this takes a moment...";
             lbl.Font = new Font("Segoe UI", 10f);
             lbl.AutoSize = true;
             lbl.Location = new Point(24, 28);

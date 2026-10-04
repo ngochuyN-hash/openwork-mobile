@@ -7,11 +7,11 @@ import {
   shareUrlOf,
   isShared,
   parseShareResponse,
-  shareErrorVi,
+  shareError,
   canWebShare,
   buildShareData,
   shareLink,
-  shareResultVi,
+  shareResult,
   shareButtonLabel,
 } from "../src/lib/session-share.js";
 
@@ -53,7 +53,7 @@ test("200 mà không có link -> KHÔNG báo thành công, có lời tiếng Vi�
   const r = parseShareResponse(session());
   assert.equal(r.ok, false);
   assert.equal(r.url, "");
-  assert.match(r.error, /không trả về link/i);
+  assert.match(r.error, /did not return a share link/i);
 });
 
 test("DELETE share: thành công khi link đã mất khỏi Session", () => {
@@ -65,26 +65,26 @@ test("DELETE share mà link còn -> báo chưa huỷ được, không nói thàn
   const r = parseShareResponse(session({ share: { url: "https://s/abc" } }), { unshare: true });
   assert.equal(r.ok, false);
   assert.equal(r.url, "https://s/abc");
-  assert.match(r.error, /chưa huỷ được/i);
+  assert.match(r.error, /could not be revoked/i);
 });
 
 // ---- Lỗi -> tiếng Việt ----
 
-test("shareErrorVi dịch 400/401/403/404/5xx của endpoint", () => {
-  const at = (status) => shareErrorVi({ status, message: "HTTP " + status });
-  assert.match(at(400), /từ chối/i);
-  assert.match(at(401), /hết hạn/i);
-  assert.match(at(403), /chỉ xem được/i);
-  assert.match(at(404), /Không tìm thấy phiên/i);
-  assert.match(at(503), /đang lỗi/i);
+test("shareError dịch 400/401/403/404/5xx của endpoint", () => {
+  const at = (status) => shareError({ status, message: "HTTP " + status });
+  assert.match(at(400), /rejected/i);
+  assert.match(at(401), /expired/i);
+  assert.match(at(403), /read-only/i);
+  assert.match(at(404), /not found/i);
+  assert.match(at(503), /having errors/i);
 });
 
-test("shareErrorVi hiểu UNPAIRED và lỗi mạng, không lộ HTTP thô", () => {
-  assert.match(shareErrorVi(new Error("UNPAIRED")), /Chưa ghép máy tính/);
-  assert.match(shareErrorVi(new TypeError("Failed to fetch")), /Không nối được tới máy tính/);
-  assert.doesNotMatch(shareErrorVi(new TypeError("Failed to fetch")), /Failed to fetch/);
+test("shareError hiểu UNPAIRED và lỗi mạng, không lộ HTTP thô", () => {
+  assert.match(shareError(new Error("UNPAIRED")), /Computer not paired yet/);
+  assert.match(shareError(new TypeError("Failed to fetch")), /Could not reach your computer/);
+  assert.doesNotMatch(shareError(new TypeError("Failed to fetch")), /Failed to fetch/);
   // Message lạ của bridge thì trả nguyên văn, không bịa thêm.
-  assert.equal(shareErrorVi(new Error("Session is running")), "Session is running");
+  assert.equal(shareError(new Error("Session is running")), "Session is running");
 });
 
 // ---- Web Share API hay không ----
@@ -101,7 +101,7 @@ test("buildShareData lấy tiêu đề phiên và link, không rỗng", () => {
   assert.equal(d.url, "https://s/abc");
   assert.match(d.text, /Sửa link/);
   // Phiên không tên -> vẫn phải có title để sheet khỏi trống
-  assert.equal(buildShareData({ id: "ses_1" }, "https://s/abc").title, "Phiên trên OpenWork");
+  assert.equal(buildShareData({ id: "ses_1" }, "https://s/abc").title, "Session on OpenWork");
 });
 
 // ---- Chia sẻ: có sheet thì dùng sheet, không có thì chép link ----
@@ -131,7 +131,7 @@ test("không có Web Share API -> chép link, báo lại bằng tiếng Việt",
   });
   assert.equal(r.via, "copy");
   assert.equal(written, "https://s/abc");
-  assert.match(shareResultVi(r), /đã chép link/);
+  assert.match(shareResult(r), /link was copied/);
 });
 
 test("bấm Huỷ trên sheet = AbortError, KHÔNG phải lỗi (không banner đỏ)", async () => {
@@ -144,7 +144,7 @@ test("bấm Huỷ trên sheet = AbortError, KHÔNG phải lỗi (không banner �
   });
   assert.equal(r.via, "cancelled");
   assert.equal(r.error, "");
-  assert.equal(shareResultVi(r), "");
+  assert.equal(shareResult(r), "");
 });
 
 test("share hỏng kiểu khác (không phải huỷ) -> rơi tiếp xuống chép link", async () => {
@@ -162,8 +162,8 @@ test("share hỏng kiểu khác (không phải huỷ) -> rơi tiếp xuống ch�
 test("không có cả sheet lẫn clipboard -> nói thẳng, không crash", async () => {
   const r = await shareLink({ nav: {}, session: session(), url: "https://s/abc" });
   assert.equal(r.via, "unsupported");
-  assert.match(r.error, /không hỗ trợ chia sẻ/);
-  assert.match(shareResultVi(r), /không hỗ trợ chia sẻ/);
+  assert.match(r.error, /does not support sharing/);
+  assert.match(shareResult(r), /does not support sharing/);
 });
 
 test("clipboard bị chặn (không HTTPS) -> hướng dẫn chép tay", async () => {
@@ -174,7 +174,7 @@ test("clipboard bị chặn (không HTTPS) -> hướng dẫn chép tay", async (
     url: "https://s/abc",
   });
   assert.equal(r.via, "error");
-  assert.match(r.error, /chép tay/);
+  assert.match(r.error, /copy it manually/);
 });
 
 test("không có link thì không gọi sheet, không gọi clipboard", async () => {
@@ -190,6 +190,6 @@ test("không có link thì không gọi sheet, không gọi clipboard", async ()
 });
 
 test("nhãn nút đổi theo trạng thái link", () => {
-  assert.equal(shareButtonLabel(session()), "Chia sẻ");
-  assert.equal(shareButtonLabel(session({ share: { url: "https://s/a" } })), "Huỷ chia sẻ");
+  assert.equal(shareButtonLabel(session()), "Share");
+  assert.equal(shareButtonLabel(session({ share: { url: "https://s/a" } })), "Revoke share");
 });

@@ -44,7 +44,7 @@ export function createStatusRoutes(ctx) {
     if (!ctx.tunnel.restart()) {
       return sendJson(res, 409, {
         code: "tunnel_inactive",
-        message: "Tunnel không chạy (OPENWORK_BRIDGE_TUNNEL=0 hoặc đang restart dở).",
+        message: "Tunnel is not running (OPENWORK_BRIDGE_TUNNEL=0 or a restart is half-finished).",
       });
     }
     sendJson(res, 200, { ok: true, tunnel: ctx.tunnel.getState() });
@@ -61,14 +61,14 @@ export function createStatusRoutes(ctx) {
         .trim()
         .slice(0, 60);
       if (!name) {
-        return sendJson(res, 400, { code: "invalid_name", message: "Tên máy trống." });
+        return sendJson(res, 400, { code: "invalid_name", message: "Machine name is empty." });
       }
       ctx.config.machineName = name;
       saveConfig(ctx.config);
-      console.log(`[bridge] tên máy mới: ${name}`);
+      console.log(`[bridge] new machine name: ${name}`);
       sendJson(res, 200, { ok: true, machineName: name });
     } catch {
-      sendJson(res, 400, { code: "invalid_body", message: "Body JSON không hợp lệ" });
+      sendJson(res, 400, { code: "invalid_body", message: "Invalid JSON body" });
     }
   }
 

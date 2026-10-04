@@ -163,15 +163,15 @@ test("parseHashParam: key rỗng không dựng được RegExp ngu ngầm", () =
 
 test("networkErrorMessage dịch lỗi mạng/không nối được sang tiếng Việt", () => {
   // Chrome/Safari: TypeError "Failed to fetch"; Firefox: "NetworkError ...".
-  assert.match(networkErrorMessage(new TypeError("Failed to fetch")), /không nối được/i);
-  assert.match(networkErrorMessage(new TypeError("NetworkError when attempting to fetch")), /không nối được/i);
-  assert.match(networkErrorMessage(new TypeError("Load failed")), /không nối được/i);
+  assert.match(networkErrorMessage(new TypeError("Failed to fetch")), /could not reach/i);
+  assert.match(networkErrorMessage(new TypeError("NetworkError when attempting to fetch")), /could not reach/i);
+  assert.match(networkErrorMessage(new TypeError("Load failed")), /could not reach/i);
 });
 
 test("networkErrorMessage phân biệt hết thời gian chờ với mất mạng", () => {
   const timeout = new Error("Timeout");
   timeout.name = "TimeoutError";
-  assert.match(networkErrorMessage(timeout), /hết thời gian chờ/i);
+  assert.match(networkErrorMessage(timeout), /timed out/i);
   assert.notEqual(networkErrorMessage(timeout), networkErrorMessage(new TypeError("Failed to fetch")));
 });
 
@@ -179,7 +179,7 @@ test("networkErrorMessage: hủy không phải lỗi, lỗi lạ thì giữ nguy
   const abort = new Error("The user aborted a request.");
   abort.name = "AbortError";
   assert.equal(isAbortError(abort), true);
-  assert.equal(networkErrorMessage(abort), "Đã hủy.");
+  assert.equal(networkErrorMessage(abort), "Cancelled.");
   assert.equal(networkErrorMessage(new Error("Workspace không tồn tại")), "Workspace không tồn tại");
   assert.ok(networkErrorMessage(null).length > 0);
 });

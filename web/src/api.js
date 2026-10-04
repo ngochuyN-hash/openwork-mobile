@@ -315,7 +315,7 @@ export async function apiRestartTunnel() {
  * client cho khỏi tốn một round-trip về máy. */
 export async function apiSetMachineName(name) {
   const clean = String(name ?? "").trim();
-  if (!clean) throw new Error("Tên máy trống.");
+  if (!clean) throw new Error("Machine name is empty.");
   const res = await fetch("/api/machine/name", {
     method: "POST",
     headers: authHeaders({ "content-type": "application/json" }),
@@ -389,7 +389,7 @@ export async function ow(
     try {
       return JSON.parse(text);
     } catch {
-      const error = new Error("Máy tính trả về dữ liệu lỗi thay vì JSON (kiểm tra lại tunnel).");
+      const error = new Error("Computer returned error data instead of JSON (check the tunnel).");
       error.status = res.status;
       throw error;
     }
@@ -534,7 +534,7 @@ export async function owPrompt(wsId, sid, { text, model = "", agent = "", effort
  */
 export async function owSummarize(wsId, sid, model) {
   const body = buildSummarizeBody(model);
-  if (!body) throw new Error("Chọn model trước khi nén hội thoại.");
+  if (!body) throw new Error("Select a model before compacting the conversation.");
   // `timeoutMs: 0` = không đặt timeout. `/summarize` và `/command` đều gọi LLM,
   // chạy hàng chục giây tới vài phút; engine cũng miễn timeout cho đúng hai
   // endpoint này (apps/app/src/app/lib/opencode.ts, SESSION_LONG_RUNNING_URL_RE
@@ -709,10 +709,10 @@ export function unwrap(payload) {
 export function timeAgo(ts) {
   if (!ts) return "";
   const delta = Date.now() - ts;
-  if (delta < 60_000) return "vừa xong";
-  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} phút trước`;
-  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} giờ trước`;
-  return `${Math.floor(delta / 86_400_000)} ngày trước`;
+  if (delta < 60_000) return "just now";
+  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} min ago`;
+  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} hr ago`;
+  return `${Math.floor(delta / 86_400_000)} days ago`;
 }
 
 // ---- File hai chiều (điện thoại <-> workspace) ----
@@ -755,7 +755,7 @@ function fileToBase64(file) {
       const dataUrl = String(reader.result ?? "");
       resolve(dataUrl.slice(dataUrl.indexOf(",") + 1));
     };
-    reader.onerror = () => reject(reader.error ?? new Error("Không đọc được file"));
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read file"));
     reader.readAsDataURL(file);
   });
 }
@@ -764,7 +764,7 @@ function fileToBase64(file) {
 export async function owUploadFile(wsId, dir, file) {
   if (file.size > MAX_UPLOAD_BYTES) {
     throw new Error(
-      `File ${file.name} quá lớn (${formatBytes(file.size)}). Giới hạn ${formatBytes(MAX_UPLOAD_BYTES)} — hãy nén hoặc chia nhỏ file rồi gửi lại.`
+      `File ${file.name} is too large (${formatBytes(file.size)}). The limit is ${formatBytes(MAX_UPLOAD_BYTES)} — compress it or split it, then send again.`
     );
   }
   const dataBase64 = await fileToBase64(file);

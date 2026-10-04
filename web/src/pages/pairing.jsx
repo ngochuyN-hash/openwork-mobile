@@ -7,7 +7,7 @@ import { OpenWorkMark } from "../components/logo.jsx";
 // 400 tenant_required — the message must only name paths that still exist
 // (a full link with &m=, or the room box below).
 const TENANT_HINT =
-  "Khóa/QR không kèm phòng — dùng lại link ghép/master đầy đủ có &m= từ máy tính, hoặc gõ tên phòng vào ô Phòng rồi thử lại.";
+  "Key/QR code missing room parameter — use the full pairing/master link with &m= from your computer, or enter the room name in the Room field and try again.";
 
 // Màn vào app kiểu 9remote với 2 đường, mỗi hàng đúng một nhãn ngắn (owner
 // call: bỏ hết chỉ dẫn dài — hàng nào mã tạm thời, hàng nào mã vĩnh viễn là
@@ -23,7 +23,7 @@ export function PairingScreen({ onPaired }) {
   async function pairWithCode(codeValue) {
     setBusy(true);
     setError("");
-    setStatus("Đang ghép…");
+    setStatus("Pairing…");
     try {
       const { token } = await apiPair(codeValue, "");
       setToken(token);
@@ -60,7 +60,7 @@ export function PairingScreen({ onPaired }) {
   async function loginWithKey() {
     const parsed = parsePermanentKey(key);
     if (!parsed) {
-      setError("Khóa không đúng — copy link master hoặc khóa trong OpenPocket.");
+      setError("Invalid key — copy master link or key from OpenPocket.");
       return;
     }
     // The room box only backfills a BARE key (no &m=): a full master link
@@ -72,7 +72,7 @@ export function PairingScreen({ onPaired }) {
     if (!parsed.tenant && typedRoom) parsed.tenant = typedRoom;
     setBusy(true);
     setError("");
-    setStatus("Đang mở khóa…");
+    setStatus("Unlocking…");
     try {
       if (!parsed.tenant) {
         // Still roomless: the worker answers 400 tenant_required (it never
@@ -82,7 +82,7 @@ export function PairingScreen({ onPaired }) {
         if (payload?.code === "tenant_required") throw new Error(TENANT_HINT);
         if (!res.ok) throw new Error(payload?.message ?? `HTTP ${res.status}`);
         parsed.tenant = String(payload?.edge?.tenant ?? "").trim().toLowerCase();
-        if (!parsed.tenant) throw new Error("Máy này chưa có phòng — dùng mã ghép 8 ký tự.");
+        if (!parsed.tenant) throw new Error("This machine has no room configured — use the 8-character pairing code.");
       }
       setToken(parsed.token);
       setTenant(parsed.tenant);
@@ -109,7 +109,7 @@ export function PairingScreen({ onPaired }) {
       </div>
 
       <div class="card">
-        <label class="field" for="pair-code">Mã tạm thời (8 ký tự)</label>
+        <label class="field" for="pair-code">Temporary code (8 chars)</label>
         <input
           id="pair-code"
           class="pair-code-input"
@@ -123,13 +123,13 @@ export function PairingScreen({ onPaired }) {
         />
         <div class="sheet-actions">
           <button class="btn pair-btn" disabled={busy || !code.trim()} onClick={submit}>
-            {busy ? status || "Đang ghép…" : "Vào"}
+            {busy ? status || "Pairing…" : "Connect"}
           </button>
         </div>
 
-        <div class="pair-or"><span>hoặc</span></div>
+        <div class="pair-or"><span>or</span></div>
 
-        <label class="field" for="pair-key">Mã vĩnh viễn</label>
+        <label class="field" for="pair-key">Permanent key</label>
         <input
           id="pair-key"
           class="pair-key-input"
@@ -141,7 +141,7 @@ export function PairingScreen({ onPaired }) {
           onInput={(e) => setKey(e.currentTarget.value)}
           onKeyDown={(e) => e.key === "Enter" && loginWithKey()}
         />
-        <label class="field" for="pair-room" style="margin-top:10px">Phòng (nếu khóa không kèm)</label>
+        <label class="field" for="pair-room" style="margin-top:10px">Room (if key doesn't include it)</label>
         <input
           id="pair-room"
           class="pair-key-input"
@@ -155,7 +155,7 @@ export function PairingScreen({ onPaired }) {
         />
         <div class="sheet-actions">
           <button class="btn pair-btn" disabled={busy || !key.trim()} onClick={loginWithKey}>
-            {busy ? status || "Đang mở khóa…" : "Vào bằng khóa"}
+            {busy ? status || "Unlocking…" : "Connect with key"}
           </button>
         </div>
 

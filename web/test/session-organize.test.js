@@ -132,7 +132,7 @@ test("selectSessions mặc định VẪN thấy phiên đã ghim, và ghim đứ
 });
 
 test("selectSessions lọc theo nhóm, có ô riêng cho phiên chưa nhóm", () => {
-  const state = { groups: [{ id: "g1", label: "Việc A" }], assignments: { a: "g1", b: "" } };
+  const state = { groups: [{ id: "g1", label: "Work A" }], assignments: { a: "g1", b: "" } };
   const list = [ses("a", 100), ses("b", 200)];
   const flags = emptyFlags();
   const opts = { flags, groupState: state };
@@ -152,7 +152,7 @@ test("sortByUpdated không sửa mảng gốc, chịu thiếu time", () => {
 // ==================== NHÓM PHIÊN — chuẩn hoá state ====================
 
 test("normalizeGroupState nhận được cả response {state}, state thô, và rác", () => {
-  const raw = { groups: [{ id: "g1", label: "Việc A" }], assignments: { a: "g1" } };
+  const raw = { groups: [{ id: "g1", label: "Work A" }], assignments: { a: "g1" } };
   assert.deepEqual(normalizeGroupState({ state: raw, updatedAt: 1 }), raw);
   assert.deepEqual(normalizeGroupState(raw), raw);
   assert.deepEqual(groupStateFromResponse({ state: raw, updatedAt: 5 }), raw);
@@ -170,7 +170,7 @@ test("normalizeGroupState dọn nhóm thiếu id, id trùng và assignment trỏ
 });
 
 test("groupIdOf: nhóm đã xoá trả rỗng chứ không giữ assignment rác", () => {
-  const state = { groups: [{ id: "g1", label: "Việc A" }], assignments: { a: "g1", b: "g_x" } };
+  const state = { groups: [{ id: "g1", label: "Work A" }], assignments: { a: "g1", b: "g_x" } };
   assert.equal(groupIdOf(state, "a"), "g1");
   assert.equal(groupIdOf(state, "b"), ""); // g_x không còn trong groups
 });
@@ -196,9 +196,9 @@ test("setAssignment không sửa state cũ", () => {
 // ==================== NHÓM — tên / tạo / đổi tên ====================
 
 test("normalizeGroupLabel dẹp khoảng trắng, chặn rỗng và chặn quá trần", () => {
-  assert.deepEqual(normalizeGroupLabel("  Việc\n  A  "), { ok: true, label: "Việc A" });
-  assert.equal(normalizeGroupLabel("   ").error, "Tên nhóm không được để trống.");
-  assert.equal(normalizeGroupLabel("Việc".repeat(200)).error, `Tên nhóm dài tối đa ${MAX_GROUP_LABEL_LENGTH} ký tự.`);
+  assert.deepEqual(normalizeGroupLabel("  Work\n  A  "), { ok: true, label: "Work A" });
+  assert.equal(normalizeGroupLabel("   ").error, "Group name cannot be empty.");
+  assert.equal(normalizeGroupLabel("Work".repeat(200)).error, `Group name can be at most ${MAX_GROUP_LABEL_LENGTH} characters.`);
   // không cắt âm thầm: quá trần thì báo lỗi, người dùng giữ nguyên ô nhập
   assert.equal(normalizeGroupLabel("a".repeat(MAX_GROUP_LABEL_LENGTH + 1)).ok, false);
   const atLimit = normalizeGroupLabel("a".repeat(MAX_GROUP_LABEL_LENGTH));
@@ -215,26 +215,26 @@ test("normalizeGroupLabel cắt theo code point, không cắt đôi emoji", () =
 });
 
 test("makeGroupId slug không dấu tiếng Việt, trùng thì thêm hậu tố", () => {
-  assert.equal(makeGroupId("Việc A"), "viec-a");
+  assert.equal(makeGroupId("Work A"), "work-a");
   assert.equal(makeGroupId("  Đ  "), "d");
-  assert.equal(makeGroupId("!!!"), "nhom"); // không còn ký tự nào dùng được
-  assert.equal(makeGroupId("Việc A", ["viec-a"]), "viec-a-2");
-  assert.equal(makeGroupId("Việc A", ["viec-a", "viec-a-2"]), "viec-a-3");
-  assert.equal(makeGroupId("Việc A").length <= 128, true);
+  assert.equal(makeGroupId("!!!"), "group"); // không còn ký tự nào dùng được
+  assert.equal(makeGroupId("Work A", ["work-a"]), "work-a-2");
+  assert.equal(makeGroupId("Work A", ["work-a", "work-a-2"]), "work-a-3");
+  assert.equal(makeGroupId("Work A").length <= 128, true);
 });
 
 test("addGroup thêm nhóm mới với id tự sinh, tên trùng vẫn tạo được (id có hậu tố)", () => {
-  const out = addGroup(emptyGroupState(), "Việc A");
+  const out = addGroup(emptyGroupState(), "Work A");
   assert.equal(out.ok, true);
-  assert.equal(out.id, "viec-a");
-  assert.deepEqual(out.state.groups, [{ id: "viec-a", label: "Việc A" }]);
+  assert.equal(out.id, "work-a");
+  assert.deepEqual(out.state.groups, [{ id: "work-a", label: "Work A" }]);
   // hai nhóm cùng tên: id tự sinh phải khác, không được sinh id trùng
-  const again = addGroup(out.state, "Việc A");
+  const again = addGroup(out.state, "Work A");
   assert.equal(again.ok, true);
-  assert.equal(again.id, "viec-a-2");
-  assert.deepEqual(again.state.groups.map((g) => g.id), ["viec-a", "viec-a-2"]);
+  assert.equal(again.id, "work-a-2");
+  assert.deepEqual(again.state.groups.map((g) => g.id), ["work-a", "work-a-2"]);
   // chỉ khi id trùng mới báo lỗi — không tạo nhóm ma
-  const clash = addGroup(out.state, "Khác", { id: "viec-a" });
+  const clash = addGroup(out.state, "Other", { id: "work-a" });
   assert.equal(clash.ok, false);
   assert.equal(addGroup(emptyGroupState(), "  ").ok, false);
 });

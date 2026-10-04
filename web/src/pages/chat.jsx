@@ -21,21 +21,21 @@ import {
   isSameSessionTitle, normalizeSessionTitle, sessionTitleOf,
 } from "../lib/session-rename.js";
 import {
-  compactBlockReason, compactHintVi, shouldSuggestCompact, summaryView,
+  compactBlockReason, compactHint, shouldSuggestCompact, summaryView,
 } from "../lib/session-compact.js";
 // Cuộn màn chat: quyết định "cuộn không / cuộn kiểu nào" và đếm tin mới nằm ở
 // lib/chat-scroll.js (thuần, có test) — chat.jsx chỉ đo vị trí và gọi.
 import {
-  distanceFromBottom, isAtBottom, jumpLabelVi,
+  distanceFromBottom, isAtBottom, jumpLabel,
   keepsAutoScroll, leftBottomBy, newMessagesSince, scrollPlan, shouldShowJump,
 } from "../lib/chat-scroll.js";
 import {
-  createQueue, isRetryableSendError, pendingStatusVi,
+  createQueue, isRetryableSendError, pendingStatus,
   planSteerBatches, queueAdd, queueFor, queueRestore, queueSet, sendDecision,
   sessionBusyFromMap, shouldRestoreComposer, statusLineIsBusy, permissionReplyBody,
 } from "../lib/session-steer.js";
 import {
-  isShared, parseShareResponse, shareButtonLabel, shareErrorVi, shareLink, shareResultVi,
+  isShared, parseShareResponse, shareButtonLabel, shareError, shareLink, shareResult,
 } from "../lib/session-share.js";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
 import {
@@ -356,7 +356,7 @@ export function ChatPage({ route }) {
     // engine không có thì engine VẪN nhận và lưu message rồi không chạy gì —
     // người dùng thấy "đã gửi" mà không ai trả lời. Chặn ở đây và nói rõ.
     if (!isModelUsable(modelRef.current, modelsRef.current)) {
-      setError("Model đã chọn không còn trong danh sách của máy. Bấm nút model để chọn lại.");
+      setError("The selected model is no longer in your computer's list. Tap the model button to pick another.");
       return;
     }
     // Chốt phiên như mọi loader: người dùng bấm sang phiên khác giữa lúc đang
@@ -869,7 +869,7 @@ export function ChatPage({ route }) {
       await navigator.clipboard.writeText(text);
       setMenu(null);
     } catch {
-      setError("Không chép được vào bộ nhớ tạm của trình duyệt.");
+      setError("Could not copy to the browser clipboard.");
     }
   }
 
@@ -919,7 +919,7 @@ export function ChatPage({ route }) {
       setSession((prev) => ({ ...(prev ?? {}), title: clean.title }));
       setRenaming(false);
       setError("");
-      setNotice(`Đã đổi tên phiên thành “${clean.title}”.`);
+      setNotice(`Renamed the session to “${clean.title}”.`);
       loadSession(); // nguồn chân lý từ máy, độ trễ SSE nên nạp luôn
     } catch (e) {
       setRenameErr(String(e.message || e));
@@ -949,7 +949,7 @@ export function ChatPage({ route }) {
       setSession(next);
       setError("");
       if (wasShared) {
-        setNotice("Đã tắt link chia sẻ của phiên này.");
+        setNotice("Share link for this session is now off.");
         return;
       }
       // Có navigator.share thì mở sheet của máy, không có thì chép link —
@@ -960,9 +960,9 @@ export function ChatPage({ route }) {
         session: next,
         url: result.url,
       });
-      setNotice(shareResultVi(outcome));
+      setNotice(shareResult(outcome));
     } catch (e) {
-      setError(shareErrorVi(e));
+      setError(shareError(e));
     } finally {
       shareLockRef.current = false;
       setShareBusy(false);
@@ -991,12 +991,12 @@ export function ChatPage({ route }) {
     setError("");
     try {
       await owSummarize(wsId, sessionId, model);
-      setNotice("Đã nén hội thoại — agent sẽ bắt đầu từ phần tóm tắt.");
+      setNotice("Conversation compacted — the agent will start from the summary.");
       loadSession();
       loadMessages();
       loadStatus();
     } catch (e) {
-      setError(`Không nén được hội thoại: ${e.message || e}`);
+      setError(`Could not compact the conversation: ${e.message || e}`);
     } finally {
       setCompacting(false);
     }
@@ -1043,7 +1043,7 @@ export function ChatPage({ route }) {
           // mới nối ở CUỐI mảng. Nên nhảy con trỏ khi tin mới đã hiện.
           revertForNewMessageRef.current = true;
         } catch (e) {
-          setError(`Không hoàn tác được tin cũ (${e.message || e}) — tin mới sẽ nối sau.`);
+          setError(`Could not revert to that message (${e.message || e}) — the new message will follow after.`);
         }
         loadMessages();
       }
@@ -1066,15 +1066,15 @@ export function ChatPage({ route }) {
         }
       }
       const fileBlock = uploaded.length
-        ? `File đính kèm từ điện thoại (đã lưu trong workspace):\n${uploaded.map((p) => `- ${p}`).join("\n")}\n`
+        ? `Files attached from the phone (saved in the workspace):\n${uploaded.map((p) => `- ${p}`).join("\n")}\n`
         : "";
       // Chỉ nối bằng xuống dòng KHI có khối file đứng trước — không thì prompt
       // thường bị thừa một dòng trống ở đầu, agent đọc lệch nội dung.
       const fullText = fileBlock
-        ? fileBlock + (text ? `\n${text}` : "\nHãy đọc các file đính kèm trên và xử lý.")
+        ? fileBlock + (text ? `\n${text}` : "\nPlease read the attached files above and process them.")
         : text;
       const optimisticText = uploaded.length && !text
-        ? `Đã gửi ${uploaded.length} file đính kèm.`
+        ? `Sent ${uploaded.length} attached files.`
         : fullText;
       setDraft("");
       setAttached([]);
@@ -1142,12 +1142,12 @@ export function ChatPage({ route }) {
           const list = (messagesRef.current ?? []).filter((m) => messageIdOf(m) !== localId);
           if (list.length !== (messagesRef.current ?? []).length) commitMessages(list);
           if (shouldRestoreComposer({ queued: false })) setDraft(fullText);
-          setError(`Không gửi được tin nhắn: ${e.message || e}`);
+          setError(`Could not send the message: ${e.message || e}`);
         }
       } finally {
         setSending(false);
       }
-      if (failed && sent) setError("Có file tải lên lỗi — agent chỉ thấy các file đã tải xong.");
+      if (failed && sent) setError("Some files failed to upload — the agent only sees the files that uploaded successfully.");
     } finally {
       sendLockRef.current = false;
     }
@@ -1211,7 +1211,7 @@ export function ChatPage({ route }) {
       loadMessages();
       loadStatus();
     } catch (e) {
-      setError(`Không trả lời được yêu cầu của agent: ${e.message || e}`);
+      setError(`Could not answer the agent's question: ${e.message || e}`);
     } finally {
       if (permissionBusyRef.current === pid) permissionBusyRef.current = "";
       setPermissionBusy("");
@@ -1233,7 +1233,7 @@ export function ChatPage({ route }) {
   const title = sessionTitleOf(session);
   // Dòng trạng thái dưới transcript: đang chạy + hàng đợi offline gộp làm một
   // câu (lib/session-steer) để không phải tự chuỗi ở hai chỗ khác nhau.
-  const statusLine = pendingStatusVi({ running, sending, pendingCount: queueCount });
+  const statusLine = pendingStatus({ running, sending, pendingCount: queueCount });
   const statusBusy = statusLineIsBusy({ running, sending });
 
   return (
@@ -1254,10 +1254,10 @@ export function ChatPage({ route }) {
         </span>
         <div class="page-actions">
           <button type="button" class="btn small ghost" onClick={openRename} disabled={Boolean(busyAction)}>
-            Đổi tên
+            Rename
           </button>
           <button type="button" class="btn small ghost" onClick={toggleShare} disabled={shareBusy}>
-            {shareBusy ? "Đang xử lý…" : shareButtonLabel(session)}
+            {shareBusy ? "Working…" : shareButtonLabel(session)}
           </button>
         </div>
       </div>
@@ -1265,10 +1265,10 @@ export function ChatPage({ route }) {
       {compact.suggest && (
         <Banner
           kind="warn"
-          actionLabel={compacting ? "Đang nén…" : "Nén hội thoại"}
+          actionLabel={compacting ? "Compacting…" : "Compact conversation"}
           onAction={compactNow}
         >
-          {compactHintVi(compact.level, { turnsSince: compact.turnsSince })}
+          {compactHint(compact.level, { turnsSince: compact.turnsSince })}
         </Banner>
       )}
 
@@ -1292,7 +1292,7 @@ export function ChatPage({ route }) {
         const busy = permissionBusy === pid;
         return (
         <div class="permission-card" key={pid}>
-          <b>Agent xin phép</b>
+          <b>Agent needs permission</b>
           <div style="margin-top:6px" class="mono">
             {p.title ?? p.pattern ?? JSON.stringify(p).slice(0, 160)}
           </div>
@@ -1301,13 +1301,13 @@ export function ChatPage({ route }) {
                 gộp còn hai nút và gửi field sai nên thẻ không bao giờ biến mất
                 — xem permissionReplyBody trong lib/session-steer. */}
             <button class="btn small" disabled={busy} onClick={() => replyPermission(p, "once")}>
-              Cho phép
+              Allow
             </button>
             <button class="btn small ghost" disabled={busy} onClick={() => replyPermission(p, "always")}>
-              Cho phép luôn
+              Always allow
             </button>
             <button class="btn small danger" disabled={busy} onClick={() => replyPermission(p, "reject")}>
-              Từ chối
+              Deny
             </button>
           </div>
         </div>
@@ -1321,8 +1321,8 @@ export function ChatPage({ route }) {
           <details class="fold-row reasoning">
             <summary>
               <ThoughtIcon size={14} />
-              <span class="fold-title">Tóm tắt phiên</span>
-              {summary.truncated && <span class="fold-status">cắt bớt</span>}
+              <span class="fold-title">Session summary</span>
+              {summary.truncated && <span class="fold-status">truncated</span>}
               <ChevronDownIcon size={12} />
             </summary>
             <div class="fold-body reasoning-body">{summary.text}</div>
@@ -1330,18 +1330,18 @@ export function ChatPage({ route }) {
         )}
         {hiddenCount > 0 && (
           <div class="revert-bar">
-            <span>{hiddenCount} tin nhắn phía sau đang ẩn</span>
+            <span>{hiddenCount} older messages hidden</span>
             <button class="btn small" onClick={unrevert} disabled={Boolean(busyAction)}>
-              {busyAction === "unrevert" ? "Đang hiện…" : "Hiện lại"}
+              {busyAction === "unrevert" ? "Showing…" : "Show hidden"}
             </button>
           </div>
         )}
         {messages === null && <Loading />}
         {messages?.length === 0 && (
-          <Empty title="Session trống" hint="Gửi prompt đầu tiên cho agent nhé." />
+          <Empty title="Empty session" hint="Send the first prompt to the agent." />
         )}
         {visible.length === 0 && messages?.length > 0 && (
-          <Empty title="Đã hoàn tác hết" hint="Bấm “Hiện lại” ở trên để xem lại các tin đã ẩn." />
+          <Empty title="Nothing left to revert" hint="Tap “Show hidden” above to review the hidden messages." />
         )}
         {visible.map((m, i) => (
           <MessageBubble
@@ -1368,9 +1368,9 @@ export function ChatPage({ route }) {
                   class="btn small ghost"
                   style={{ marginLeft: 8 }}
                   onClick={discardQueue}
-                  aria-label={`Bỏ ${queueCount} tin nhắn đang chờ gửi lại`}
+                  aria-label={`Discard ${queueCount} queued messages`}
                 >
-                  Bỏ
+                  Discard
                 </button>
               )}
             </>
@@ -1426,7 +1426,7 @@ export function ChatPage({ route }) {
           )}
           {editing && (
             <div class="editing-bar">
-              <span>Sửa tin đã gửi — gửi lại sẽ thay phần sau nó</span>
+              <span>Edit sent message — resending replaces everything after it</span>
               <button
                 class="btn small"
                 onClick={() => {
@@ -1434,12 +1434,12 @@ export function ChatPage({ route }) {
                   setDraft("");
                 }}
               >
-                Huỷ
+                Cancel
               </button>
             </div>
           )}
           {draft.startsWith("/") && commands.length > 0 && (
-            <div class="cmd-pop" role="listbox" aria-label="Lệnh nhanh">
+            <div class="cmd-pop" role="listbox" aria-label="Quick actions">
               {filterCommands(commands, draft).map((c) => (
                 <button
                   key={c.name}
@@ -1463,7 +1463,7 @@ export function ChatPage({ route }) {
             <button
               class="btn btn-send"
               style="background:var(--bg-raised);color:var(--text)"
-              aria-label="Đính kèm file từ điện thoại"
+              aria-label="Attach files from the phone"
               disabled={sending}
               onClick={() => attachRef.current?.click()}
             >
@@ -1482,7 +1482,7 @@ export function ChatPage({ route }) {
               }}
             />
             <textarea
-              aria-label="Nhập prompt cho agent"
+              aria-label="Enter prompt for the agent"
               rows="1"
               value={draft}
               onInput={(e) => setDraft(e.currentTarget.value)}
@@ -1499,8 +1499,8 @@ export function ChatPage({ route }) {
             {busy && (
               <button
                 class="btn btn-send stop"
-                aria-label="Dừng agent"
-                title="Dừng agent"
+                aria-label="Stop the agent"
+                title="Stop the agent"
                 disabled={aborting}
                 onClick={abort}
               >
@@ -1509,8 +1509,8 @@ export function ChatPage({ route }) {
             )}
             <button
               class="btn btn-send"
-              aria-label={busy ? "Gửi tin ngay, chèn vào lượt đang chạy" : "Gửi prompt"}
-              title={busy ? "Chèn tin này vào lượt đang chạy" : "Gửi prompt"}
+              aria-label={busy ? "Send now, insert into the running turn" : "Send prompt"}
+              title={busy ? "Insert this message into the running turn" : "Send prompt"}
               disabled={(!draft.trim() && !attached.length) || sending}
               onClick={send}
             >
@@ -1526,9 +1526,9 @@ export function ChatPage({ route }) {
                 <span class="attach-chip" key={i}>
                   <span class="name">{a.file.name}</span>
                   <span class="size">
-                    {a.status === "uploading" ? "đang tải…" : a.status === "error" ? "lỗi" : formatBytes(a.file.size)}
+                    {a.status === "uploading" ? "uploading…" : a.status === "error" ? "error" : formatBytes(a.file.size)}
                   </span>
-                  <button aria-label={`Gỡ ${a.file.name}`} onClick={() => setAttached((prev) => prev.filter((x) => x !== a))}>
+                  <button aria-label={`Remove ${a.file.name}`} onClick={() => setAttached((prev) => prev.filter((x) => x !== a))}>
                     ×
                   </button>
                 </span>
@@ -1545,13 +1545,13 @@ export function ChatPage({ route }) {
             type="button"
             class="jump-latest"
             onClick={jumpToLatest}
-            aria-label={unseen > 0 ? `Về tin mới nhất — ${unseen} tin mới` : "Về tin mới nhất"}
+            aria-label={unseen > 0 ? `Jump to the latest message — ${unseen} new` : "Jump to the latest message"}
           >
             <ChevronDownIcon size={14} />
             {/* aria-live: số "N tin mới" tăng lên là thông tin duy nhất báo
                 cho người đọc bằng screen reader rằng có tin mới — không có nó
                 thì nút đổi accessible name mà không ai được báo. */}
-            <span aria-live="polite">{jumpLabelVi(unseen)}</span>
+            <span aria-live="polite">{jumpLabel(unseen)}</span>
           </button>
         )}
       </div>
@@ -1608,28 +1608,28 @@ function RenameSheet({ initial, error, busy, inputRef, onSave, onClose }) {
         class="card sheet"
         role="dialog"
         aria-modal="true"
-        aria-label="Đổi tên phiên"
+        aria-label="Rename session"
         onClick={(e) => e.stopPropagation()}
       >
         <div class="sheet-grabber" />
-        <h3>Đổi tên phiên</h3>
-        <label class="field" for="owm-session-title">Tên mới</label>
+        <h3>Rename session</h3>
+        <label class="field" for="owm-session-title">New name</label>
         <input
           id="owm-session-title"
           ref={inputRef}
           type="text"
           value={draft}
           maxLength={MAX_SESSION_TITLE_LENGTH}
-          placeholder="Ví dụ: sửa lỗi đăng nhập"
+          placeholder="e.g. fix login bug"
           onInput={(e) => setDraft(e.currentTarget.value)}
         />
         {error && <p class="field-error">{error}</p>}
         <div class="sheet-actions">
           <button type="button" class="btn ghost" onClick={onClose} disabled={busy}>
-            Huỷ
+            Cancel
           </button>
           <button type="button" class="btn primary" onClick={onSave} disabled={busy}>
-            {busy ? "Đang lưu…" : "Lưu tên"}
+            {busy ? "Saving…" : "Save name"}
           </button>
         </div>
       </div>
@@ -1649,11 +1649,11 @@ function MessageActionSheet({ message, busy, onClose, onCopy, onEdit, onFork, on
   // tác ghi xuống máy đều bỏ qua được, nên không cho bấm.
   const real = isRealMessageId(id);
   const items = [
-    text && { id: "copy", label: "Chép nội dung", onSelect: () => onCopy(message) },
-    role === "user" && text && { id: "edit", label: "Sửa & gửi lại", onSelect: () => onEdit(message) },
-    real && { id: "fork", label: "Tạo nhánh mới từ tin này", onSelect: () => onFork(id) },
-    real && { id: "revert", label: "Hoàn tác từ tin này", onSelect: () => onRevert(id) },
-    real && { id: "delete", label: "Xoá tin nhắn", danger: true, onSelect: () => onDelete(id) },
+    text && { id: "copy", label: "Copy content", onSelect: () => onCopy(message) },
+    role === "user" && text && { id: "edit", label: "Edit & resend", onSelect: () => onEdit(message) },
+    real && { id: "fork", label: "Branch from this message", onSelect: () => onFork(id) },
+    real && { id: "revert", label: "Revert to this message", onSelect: () => onRevert(id) },
+    real && { id: "delete", label: "Delete message", danger: true, onSelect: () => onDelete(id) },
   ].filter(Boolean);
 
   return (
@@ -1662,13 +1662,13 @@ function MessageActionSheet({ message, busy, onClose, onCopy, onEdit, onFork, on
         class="card sheet"
         role="dialog"
         aria-modal="true"
-        aria-label="Thao tác với tin nhắn"
+        aria-label="Message actions"
         onClick={(e) => e.stopPropagation()}
       >
         <div class="sheet-grabber" />
-        <p class="sheet-body menu-preview">{text ? text.slice(0, 160) : "(tin nhắn không có chữ)"}</p>
+        <p class="sheet-body menu-preview">{text ? text.slice(0, 160) : "(message has no text)"}</p>
         <div class="sheet-actions menu-actions">
-          {items.length === 0 && <p class="sheet-body">Tin này chưa lưu trên máy.</p>}
+          {items.length === 0 && <p class="sheet-body">This message is not saved on the computer yet.</p>}
           {items.map((item) => (
             <button
               key={item.id}
@@ -1679,7 +1679,7 @@ function MessageActionSheet({ message, busy, onClose, onCopy, onEdit, onFork, on
                 item.onSelect();
               }}
             >
-              {busy === item.id ? "Đang làm…" : item.label}
+              {busy === item.id ? "Working…" : item.label}
             </button>
           ))}
         </div>
@@ -1697,17 +1697,17 @@ function AgentPicker({ agents, value, open, onToggle, onClose, onChange }) {
         class="model-pill agent-pill"
         type="button"
         aria-haspopup="dialog"
-        aria-label={`Agent đang dùng: ${current?.name ?? "mặc định"}. Bấm để đổi agent`}
+        aria-label={`Current agent: ${current?.name ?? "default"}. Tap to change agent`}
         onClick={onToggle}
       >
-        <span class="model-pill-label">{current?.name ?? "Agent mặc định"}</span>
+        <span class="model-pill-label">{current?.name ?? "Default agent"}</span>
         <ChevronDownIcon size={14} />
       </button>
       {open && (
         <div class="sheet-backdrop" onClick={onClose}>
-          <div class="card sheet model-sheet" role="dialog" aria-modal="true" aria-label="Chọn agent" onClick={(e) => e.stopPropagation()}>
+          <div class="card sheet model-sheet" role="dialog" aria-modal="true" aria-label="Select agent" onClick={(e) => e.stopPropagation()}>
             <div class="sheet-grabber" />
-            <div class="model-list" role="listbox" aria-label="Danh sách agent">
+            <div class="model-list" role="listbox" aria-label="Agent list">
               <button
                 type="button"
                 role="option"
@@ -1719,8 +1719,8 @@ function AgentPicker({ agents, value, open, onToggle, onClose, onChange }) {
                 }}
               >
                 <span class="model-option-text">
-                  <span class="model-option-name">Mặc định (không chỉ định)</span>
-                  <span class="model-option-sub">Engine tự chọn theo cấu hình máy</span>
+                  <span class="model-option-name">Default (not specified)</span>
+                  <span class="model-option-sub">The engine picks one based on the computer config</span>
                 </span>
                 {!value && <CheckIcon size={18} />}
               </button>
@@ -1773,8 +1773,8 @@ function QuestionCard({ request, onAnswer, onReject, busy }) {
 
   return (
     <div class="permission-card q-card">
-      <b>Agent cần bạn trả lời</b>
-      {empty && <p class="sheet-body">Agent hỏi nhưng không kèm lựa chọn nào.</p>}
+      <b>The agent needs your answer</b>
+      {empty && <p class="sheet-body">The agent asked a question but offered no choices.</p>}
       {view.items.map((item, i) => (
         <div key={i} class="q-item">
           <div class="q-text">{item.question}</div>
@@ -1798,8 +1798,8 @@ function QuestionCard({ request, onAnswer, onReject, busy }) {
             <input
               type="text"
               class="q-custom"
-              aria-label="Hoặc tự nhập câu trả lời"
-              placeholder="Hoặc tự nhập…"
+              aria-label="Or type your own answer"
+              placeholder="Or type your own…"
               value={custom[i] ?? ""}
               onInput={(e) => {
                 const v = e.currentTarget.value;
@@ -1819,15 +1819,15 @@ function QuestionCard({ request, onAnswer, onReject, busy }) {
             ))
           }
         >
-          {busy ? "Đang gửi…" : "Trả lời"}
+          {busy ? "Sending…" : "Answer"}
         </button>
         <button
           class="btn small"
           disabled={busy}
           onClick={onReject}
-          title="Bỏ qua — agent tự đi tiếp với giả định của nó"
+          title="Skip — the agent continues with its own assumption"
         >
-          Bỏ qua
+          Skip
         </button>
       </div>
     </div>
@@ -1859,7 +1859,7 @@ function MessageBubble({ message, wsId, onMenu }) {
     <div class={`msg ${role}`} onClick={openMenu}>
       {errorText && (
         <div class="msg-error" role="alert">
-          <strong>Agent báo lỗi</strong>
+          <strong>The agent reported an error</strong>
           <span>{errorText}</span>
         </div>
       )}
@@ -1906,7 +1906,7 @@ function ToolRow({ part }) {
       </summary>
       <div class="fold-body">
         {v.input && <pre>{safeJson(v.input).slice(0, MAX)}</pre>}
-        {v.body && <pre>{v.body.slice(0, MAX)}{v.body.length > MAX ? "\n… (cắt bớt)" : ""}</pre>}
+        {v.body && <pre>{v.body.slice(0, MAX)}{v.body.length > MAX ? "\n… (truncated)" : ""}</pre>}
       </div>
     </details>
   );
@@ -1918,8 +1918,8 @@ function ThoughtRow({ part }) {
     <details class="fold-row reasoning">
       <summary>
         <ThoughtIcon size={14} />
-        <span class="fold-title">Suy luận</span>
-        <span class={`fold-status${streaming ? " run" : ""}`}>{streaming ? "đang suy nghĩ…" : ""}</span>
+        <span class="fold-title">Reasoning</span>
+        <span class={`fold-status${streaming ? " run" : ""}`}>{streaming ? "thinking…" : ""}</span>
         <ChevronDownIcon size={12} />
       </summary>
       <div class="fold-body reasoning-body">{part.text}</div>
@@ -2064,7 +2064,7 @@ function FileRefCard({ refPath, name, wsId }) {
         class="file-row-hit"
         role="button"
         tabindex="0"
-        aria-label={`Mở ${name} trong Files`}
+        aria-label={`Open ${name} in Files`}
         onClick={open}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -2076,13 +2076,13 @@ function FileRefCard({ refPath, name, wsId }) {
         <FileIcon size={14} />
         <span class="file-row-name">{name}</span>
         {busy ? (
-          <span class="file-row-hint">đang mở…</span>
+          <span class="file-row-hint">opening…</span>
         ) : (
           <span class="file-row-chev" aria-hidden="true"><ChevronDownIcon size={12} /></span>
         )}
       </div>
       {missing && (
-        <div class="file-row-miss">Không thấy file này trong workspace (có thể agent ghi chỗ khác).</div>
+        <div class="file-row-miss">This file is not in the workspace (the agent may have written it elsewhere).</div>
       )}
     </div>
   );

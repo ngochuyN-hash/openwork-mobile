@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { CheckIcon, ChevronDownIcon, SearchIcon } from "./icons.jsx";
 import {
   EFFORT_NONE,
-  effortLabelVi,
+  effortLabel,
   effortOptionsFor,
   fastModeEffort,
   normalizeEffort,
@@ -64,7 +64,7 @@ export function ModelPicker({ models, value, onChange, loading }) {
       } catch {}
       const seen = new Set();
       push(
-        "Gần đây",
+        "Recent",
         recents
           .map((v) => models.find((m) => m.value === v))
           .filter((m) => m && !seen.has(m.value) && seen.add(m.value))
@@ -90,29 +90,29 @@ export function ModelPicker({ models, value, onChange, loading }) {
         class="model-pill"
         type="button"
         aria-haspopup="dialog"
-        aria-label={`Model đang dùng: ${current?.label ?? "đang tải"}. Bấm để chọn model khác`}
+        aria-label={`Current model: ${current?.label ?? "loading"}. Tap to select another model`}
         onClick={() => setOpen(true)}
       >
-        <span class="model-pill-label">{current ? current.label : loading ? "Đang tải model…" : "Mặc định"}</span>
+        <span class="model-pill-label">{current ? current.label : loading ? "Loading models…" : "Default"}</span>
         <ChevronDownIcon size={14} />
       </button>
 
       {open && (
         <div class="sheet-backdrop" onClick={() => setOpen(false)}>
-          <div class="card sheet model-sheet" role="dialog" aria-modal="true" aria-label="Chọn model" onClick={(e) => e.stopPropagation()}>
+          <div class="card sheet model-sheet" role="dialog" aria-modal="true" aria-label="Select model" onClick={(e) => e.stopPropagation()}>
             <div class="sheet-grabber" />
             <div class="model-search">
               <SearchIcon size={16} />
               <input
                 ref={inputRef}
                 type="search"
-                placeholder="Tìm model…"
-                aria-label="Tìm model"
+                placeholder="Search models…"
+                aria-label="Search models"
                 value={query}
                 onInput={(e) => setQuery(e.currentTarget.value)}
               />
             </div>
-            <div class="model-list" role="listbox" aria-label="Danh sách model">
+            <div class="model-list" role="listbox" aria-label="Model list">
               {loading &&
                 [0, 1, 2].map((i) => (
                   <div class="model-option" key={i} aria-hidden="true">
@@ -121,7 +121,7 @@ export function ModelPicker({ models, value, onChange, loading }) {
                   </div>
                 ))}
               {!loading && groups.length === 0 && (
-                <p class="model-empty">Không có model nào khớp “{query}”.</p>
+                <p class="model-empty">No models match “{query}”.</p>
               )}
               {groups.map((g) => (
                 <div key={g.name} role="presentation">
@@ -192,7 +192,7 @@ export function EffortPicker({ modelValue, variants, effort, onChange }) {
   const inputRef = useRef(null);
   // Đổi sang model không có mức đã chọn -> tự về Mặc định, không giữ mức ma.
   const current = resolveEffort(effort, model, variants);
-  const currentLabel = effortLabelVi(current);
+  const currentLabel = effortLabel(current);
 
   useEffect(() => {
     if (!open) return;
@@ -230,32 +230,32 @@ export function EffortPicker({ modelValue, variants, effort, onChange }) {
         class="model-pill"
         type="button"
         aria-haspopup="dialog"
-        aria-label={`Mức suy luận: ${currentLabel}. Bấm để đổi`}
+        aria-label={`Reasoning effort: ${currentLabel}. Tap to change`}
         onClick={() => setOpen(true)}
       >
-        <span class="model-pill-label">Suy luận: {currentLabel}</span>
+        <span class="model-pill-label">Reasoning: {currentLabel}</span>
         <ChevronDownIcon size={14} />
       </button>
 
       {open && (
         <div class="sheet-backdrop" onClick={() => setOpen(false)}>
-          <div class="card sheet model-sheet" role="dialog" aria-modal="true" aria-label="Chọn mức suy luận" onClick={(e) => e.stopPropagation()}>
+          <div class="card sheet model-sheet" role="dialog" aria-modal="true" aria-label="Select reasoning effort" onClick={(e) => e.stopPropagation()}>
             <div class="sheet-grabber" />
-            <div class="model-group">Mức suy luận</div>
-            <div class="model-list" role="listbox" aria-label="Mức suy luận">
+            <div class="model-group">Reasoning effort</div>
+            <div class="model-list" role="listbox" aria-label="Reasoning effort">
               {fast !== EFFORT_NONE && (
                 <button type="button" class="model-option" onClick={goFast}>
                   <span class="model-option-text">
-                    <span class="model-option-name">Chế độ nhanh</span>
-                    <span class="model-option-sub">Mức nhẹ nhất model này có</span>
+                    <span class="model-option-name">Fast mode</span>
+                    <span class="model-option-sub">Lowest level available for this model</span>
                   </span>
                 </button>
               )}
               {options.map((o) => (
                 <button key={o.id} ref={o.id === EFFORT_NONE ? inputRef : undefined} type="button" role="option" aria-selected={current === o.id} class={`model-option${current === o.id ? " selected" : ""}`} onClick={() => pick(o.id)}>
                   <span class="model-option-text">
-                    <span class="model-option-name">{o.vi}</span>
-                    {o.id === EFFORT_NONE && <span class="model-option-sub">Để model tự chọn</span>}
+                    <span class="model-option-name">{o.label}</span>
+                    {o.id === EFFORT_NONE && <span class="model-option-sub">Let model decide</span>}
                   </span>
                   {current === o.id && <CheckIcon size={18} />}
                 </button>

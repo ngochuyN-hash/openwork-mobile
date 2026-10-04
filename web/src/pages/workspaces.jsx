@@ -30,16 +30,16 @@ export function WorkspacesPage() {
         <span class="hint">{workspaces ? `${workspaces.length} workspace` : "…"}</span>
       </div>
 
-      {error && <Banner kind="err" actionLabel="Thử lại" onAction={load}>{error}</Banner>}
+      {error && <Banner kind="err" actionLabel="Retry" onAction={load}>{error}</Banner>}
 
       {workspaces === null && !error && <Loading />}
 
       {workspaces?.length === 0 && (
         <Empty
           icon
-          title="Chưa có workspace nào"
-          hint="Thêm thư mục từ máy tính để bắt đầu làm việc với agent."
-          actionLabel="Thêm workspace"
+          title="No workspaces yet"
+          hint="Add a folder from your computer to start working with the agent."
+          actionLabel="Add workspace"
           onAction={() => setShowCreate(true)}
         />
       )}
@@ -95,7 +95,7 @@ export function WorkspacesPage() {
         </div>
       ))}
 
-      <button class="fab" aria-label="Thêm workspace" onClick={() => setShowCreate(true)}>
+      <button class="fab" aria-label="Add workspace" onClick={() => setShowCreate(true)}>
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
           <path d="M12 5v14M5 12h14" />
         </svg>
@@ -131,9 +131,9 @@ function CreateWorkspaceDialog({ onClose, onCreated }) {
 
   return (
     <div class="sheet-backdrop" onClick={onClose}>
-      <div class="card sheet" role="dialog" aria-modal="true" aria-label="Tạo workspace mới" onClick={(e) => e.stopPropagation()}>
-        <h3>Tạo workspace mới</h3>
-        <label class="field" for="new-ws-path">Đường dẫn thư mục trên máy tính (vd: C:\Projects\MyApp)</label>
+      <div class="card sheet" role="dialog" aria-modal="true" aria-label="Create new workspace" onClick={(e) => e.stopPropagation()}>
+        <h3>Create new workspace</h3>
+        <label class="field" for="new-ws-path">Folder path on computer (e.g. C:\Projects\MyApp)</label>
         <div style="display:flex;gap:8px">
           <input
             id="new-ws-path"
@@ -146,10 +146,10 @@ function CreateWorkspaceDialog({ onClose, onCreated }) {
             placeholder="C:\Projects\MyApp…"
           />
           <button class="btn" style="flex:none" onClick={() => setShowPicker(true)}>
-            Duyệt…
+            Browse…
           </button>
         </div>
-        <label class="field" for="new-ws-name">Tên hiển thị (tùy chọn)</label>
+        <label class="field" for="new-ws-name">Display name (optional)</label>
         <input
           id="new-ws-name"
           type="text"
@@ -162,10 +162,10 @@ function CreateWorkspaceDialog({ onClose, onCreated }) {
         {error && <Banner kind="err">{error}</Banner>}
         <div class="sheet-actions">
           <button class="btn ghost" onClick={onClose}>
-            Đóng
+            Close
           </button>
           <button class="btn" disabled={busy || !path.trim()} onClick={create}>
-            {busy ? "Đang tạo…" : "Tạo"}
+            {busy ? "Creating…" : "Create"}
           </button>
         </div>
       </div>
@@ -252,9 +252,9 @@ function FolderPickerSheet({ onPick, onClose }) {
         onClose();
       }}
     >
-      <div class="card sheet" role="dialog" aria-modal="true" aria-label="Chọn thư mục" onClick={(e) => e.stopPropagation()}>
+      <div class="card sheet" role="dialog" aria-modal="true" aria-label="Select folder" onClick={(e) => e.stopPropagation()}>
         <div class="sheet-grabber" aria-hidden="true" />
-        <h3 style="margin-bottom:10px">Chọn thư mục</h3>
+        <h3 style="margin-bottom:10px">Select folder</h3>
 
         {quick && (
           <div class="fs-chips">
@@ -265,7 +265,7 @@ function FolderPickerSheet({ onPick, onClose }) {
             ))}
             {quick.roots?.map((r) => (
               <button key={r.path} class="btn small ghost" disabled={loading} onClick={() => goTo(r.path)}>
-                Ổ {r.name}
+                Drive {r.name}
               </button>
             ))}
           </div>
@@ -287,22 +287,22 @@ function FolderPickerSheet({ onPick, onClose }) {
                   value={newDirName}
                   autocomplete="off"
                   spellcheck={false}
-                  placeholder="Tên thư mục mới…"
+                  placeholder="New folder name…"
                   onInput={(e) => setNewDirName(e.currentTarget.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") createDir();
                   }}
                 />
                 <button class="btn" style="flex:none" disabled={creating || !newDirName.trim()} onClick={createDir}>
-                  Tạo
+                  Create
                 </button>
                 <button class="btn ghost" style="flex:none" onClick={() => { setNewDirOpen(false); setNewDirName(""); }}>
-                  Hủy
+                  Cancel
                 </button>
               </div>
             ) : (
               <button class="btn small ghost" disabled={loading} onClick={() => setNewDirOpen(true)}>
-                + Thư mục mới
+                + New folder
               </button>
             )}
           </div>
@@ -312,7 +312,7 @@ function FolderPickerSheet({ onPick, onClose }) {
           <div class="fs-list">
             <button class="fs-row" disabled={loading} onClick={goUp}>
               <span class="fs-up" aria-hidden="true">↩</span>
-              <span style="flex:1">{view.parent ? "Lên cấp trên" : "Danh sách ổ đĩa"}</span>
+              <span style="flex:1">{view.parent ? "Go up" : "Drives"}</span>
             </button>
             {view.dirs?.map((d) => (
               <button key={d.path} class="fs-row" disabled={loading} onClick={() => goTo(d.path)}>
@@ -320,7 +320,7 @@ function FolderPickerSheet({ onPick, onClose }) {
                 <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{d.name}</span>
               </button>
             ))}
-            {!loading && view.dirs?.length === 0 && <div class="hint" style="padding:8px 2px">Không có thư mục con nào.</div>}
+            {!loading && view.dirs?.length === 0 && <div class="hint" style="padding:8px 2px">No subfolders.</div>}
           </div>
         )}
 
@@ -329,7 +329,7 @@ function FolderPickerSheet({ onPick, onClose }) {
             {quick.roots?.map((r) => (
               <button key={r.path} class="fs-row" disabled={loading} onClick={() => goTo(r.path)}>
                 <FolderIcon size={18} />
-                <span style="flex:1">Ổ {r.name}</span>
+                <span style="flex:1">Drive {r.name}</span>
               </button>
             ))}
           </div>
@@ -340,10 +340,10 @@ function FolderPickerSheet({ onPick, onClose }) {
 
         <div class="sheet-actions">
           <button class="btn ghost" onClick={onClose}>
-            Đóng
+            Close
           </button>
           <button class="btn primary" disabled={loading || !canPick} onClick={() => canPick && onPick(view.path)}>
-            Chọn thư mục này
+            Select this folder
           </button>
         </div>
       </div>

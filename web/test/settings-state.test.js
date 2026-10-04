@@ -32,10 +32,10 @@ test("deviceListOf LUÔN trả mảng — payload rác không làm vỡ render (
 test("tunnelStatusLabel đọc đúng phase của bridge (up/starting/backoff)", () => {
   // bridge/src/tunnel.js:114 — getState() trả {phase, url, streak, nextRetryAt}
   assert.deepEqual(tunnelStatusLabel({ phase: "up", url: "https://x.trycloudflare.com" }), {
-    label: "đang chạy",
+    label: "running",
     ok: true,
   });
-  assert.equal(tunnelStatusLabel({ phase: "starting" }).label, "đang lên");
+  assert.equal(tunnelStatusLabel({ phase: "starting" }).label, "starting");
   assert.equal(tunnelStatusLabel({ phase: "up" }).ok, true);
   assert.equal(tunnelStatusLabel({ phase: "starting" }).ok, false);
 });
@@ -44,12 +44,12 @@ test("backoff nói rõ đã bị giới hạn bao nhiêu lần", () => {
   const r = tunnelStatusLabel({ phase: "backoff", streak: 4 });
   assert.equal(r.ok, false);
   assert.match(r.label, /4/);
-  assert.match(r.label, /giới hạn/);
+  assert.match(r.label, /rate-limited/);
 });
 
 test("thiếu/sai shape tunnel -> 'không rõ', KHÔNG đoán là chết", () => {
   for (const t of [null, undefined, {}, { phase: "" }, { phase: "wat" }, "x"]) {
-    assert.equal(tunnelStatusLabel(t).label, "không rõ");
+    assert.equal(tunnelStatusLabel(t).label, "unknown");
   }
 });
 
