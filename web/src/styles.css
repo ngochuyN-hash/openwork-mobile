@@ -799,6 +799,22 @@ label.field {
 }
 
 /* ---------- Chat ---------- */
+/* Cột chat cao đúng viewport để composer luôn nằm ở ĐÁY màn.
+   Trước đây composer chỉ có `position: sticky; bottom: 0` — sticky chỉ bám
+   mép dưới khi trang ĐÃ đủ cao để cuộn. Phiên ngắn (vài tin) thì trang
+   không cuộn, composer rơi về đúng chỗ flow của nó là GIỮA màn, để lại một
+   mảng trắng khổng lồ bên dưới. Ở đây: view là cột flex, chat-list `flex:1`
+   hút hết khoảng trống nên đẩy composer xuống đáy; nội dung dài hơn viewport
+   thì cột dài ra và sticky vẫn giữ composer dính đáy khi cuộn.
+   `padding-bottom: 0` vì composer tự giữ khoảng dưới bằng `--sab` rồi. */
+.view.chat-view {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 0;
+}
+.view.chat-view .chat-list {
+  flex: 1; /* hút phần trống, đẩy composer xuống đáy */
+}
 .chat-list {
   display: flex;
   flex-direction: column;

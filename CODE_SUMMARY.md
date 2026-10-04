@@ -22,6 +22,28 @@
 > 📌 **Rules (project owner's requirements):** every time code/structure/behavior changes,
 > BOTH this file AND `README.md` MUST be updated in the same commit — **in English**.
 
+## Chat composer floated mid-screen on short sessions — 2026-10-04 (web only)
+
+Symptom: a session with a single message put the input box just under that message,
+roughly halfway down the phone screen, with ~458px of dead space below it and nothing
+at the bottom.
+
+Cause: `.composer` relied on `position: sticky; bottom: 0` alone. Sticky only pins an
+element when the page is **taller than the viewport**. A short session is not scrollable,
+so the composer stayed at its normal-flow position — right after the transcript — and the
+unused space fell below it. The layout was correct only for long sessions, which is why it
+survived the earlier QA rounds: every one of them tested a transcript long enough to scroll.
+
+Fix: `.view.chat-view` is now a flex column and `.chat-list` gets `flex: 1`, so the
+transcript absorbs the slack and the composer lands at the bottom. Sticky is kept for the
+long-session case. Verified in a real browser at 390×844 against a replica of the chat DOM:
+gap below the composer **458px → 0px**, and with 12 messages the composer stays flush at
+all three scroll positions (top, middle, bottom).
+
+| Symptom | Implementation and regression evidence |
+| --- | --- |
+| Input box floats mid-screen, huge empty space under it | `styles.css` `.view.chat-view` + `.chat-list { flex: 1 }`; only the chat view opts in, other pages keep block flow. Measured 0px gap at 390×844 |
+
 ## Chat markdown: real GFM rendering (tables at last) — 2026-10-04 (web only)
 
 Symptom: every markdown table in an assistant reply showed up as raw text rows with `|`

@@ -168,7 +168,7 @@ export function App() {
         <span class="title">{title}</span>
         {state?.server ? <span class="sub">v{state.server.version}</span> : null}
       </div>
-      <div class={`view ${showNav ? "" : "no-nav"}${route.view === "search" ? " search-view" : ""}`}>
+      <div class={`view ${showNav ? "" : "no-nav"}${route.view === "search" ? " search-view" : ""}${route.view === "chat" ? " chat-view" : ""}`}>
         {banners}
         {view}
       </div>
