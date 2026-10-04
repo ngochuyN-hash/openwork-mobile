@@ -850,6 +850,25 @@ label.field {
 .msg-text {
   white-space: pre-wrap;
 }
+/* Lượt chạy hỏng: chữ lỗi nguyên bản của provider (tiếng Anh, có thể rất
+   dài) — bọc để URL dài không làm vỡ bố cục. */
+.msg-error {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--danger-border, #e5a3a3);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--danger-bg, #fdf2f2);
+  color: var(--danger-text, #8c2f2f);
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+.msg-error strong {
+  font-size: 0.78rem;
+  opacity: 0.85;
+}
 .msg-md p {
   margin: 0 0 var(--sp-2);
 }

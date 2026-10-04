@@ -6,6 +6,7 @@ import {
   applyRevertCursor,
   hiddenCountByRevert,
   resolveForkBoundaryId,
+  messageErrorOf,
   messageTextOf,
   isRealMessageId,
   todoProgress,
@@ -293,4 +294,30 @@ test("dropStatusById dọn luôn trạng thái, không để lại chấm của 
   assert.deepEqual(map.ses_a, { type: "busy" }, "mảng cũ không được sửa tại chỗ");
   assert.equal(dropStatusById(map, "ses_zz"), map);
   assert.deepEqual(dropStatusById(null, "ses_a"), {});
+});
+
+// ---- Lỗi của lượt chạy ----
+// Gặp thật 04/10 trên bản deploy: model được chọn không làm được tool, engine
+// trả assistant message với `parts: []` và `info.error`. UI im lặng — người
+// dùng thấy tin đã gửi rồi không có gì cả.
+
+test("đọc lỗi từ info.error (shape quan sát được của engine)", () => {
+  const failed = {
+    info: {
+      id: "msg_1",
+      role: "assistant",
+      error: { name: "APIError", data: { message: "No endpoints found that support tool use." } },
+    },
+    parts: [],
+  };
+  assert.equal(messageErrorOf(failed), "No endpoints found that support tool use.");
+  assert.equal(messageTextOf(failed), "", "lỗi không phải text nên phần chữ vẫn rỗng");
+});
+
+test("lỗi phẳng / chỉ có tên / không có lỗi", () => {
+  assert.equal(messageErrorOf({ info: { error: "đã hết thời gian" } }), "đã hết thời gian");
+  assert.equal(messageErrorOf({ info: { error: { name: "ProviderError" } } }), "ProviderError");
+  assert.equal(messageErrorOf({ info: { error: { data: {} } } }), "");
+  assert.equal(messageErrorOf({ info: { role: "assistant" }, parts: [{ type: "text", text: "ok" }] }), "");
+  assert.equal(messageErrorOf(null), "");
 });

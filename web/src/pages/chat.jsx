@@ -10,7 +10,7 @@ import { createChatStream, mergeRefetchKeepInflight } from "../lib/chat-stream.j
 import { createMarkdownStream } from "../lib/markdown.js";
 import {
   applyRevertCursor, hiddenCountByRevert, resolveForkBoundaryId, messageIdOf, messageRoleOf,
-  messageTextOf, isRealMessageId, todoProgress, questionsForSession, questionView, questionAnswered,
+  messageErrorOf, messageTextOf, isRealMessageId, todoProgress, questionsForSession, questionView, questionAnswered,
   buildQuestionAnswers, toolRowView, toolStatusVi, filterCommands, shouldClearRevertCursor,
 } from "../lib/session-ops.js";
 // Tiền phiên: đọc từ TỪNG tin assistant (lib/session-cost) chứ không đọc
@@ -1844,6 +1844,10 @@ function MessageBubble({ message, wsId, onMenu }) {
   // cả transcript quét lại file refs mỗi frame — đo được 7.4 ms/frame ở 200
   // tin, gấp ~8 lần cả phần markdown.
   const files = useMemo(() => (role === "assistant" ? collectFileRefs(parts) : []), [role, parts]);
+  // Lượt chạy hỏng: engine để `parts` rỗng và ghi lỗi ở `info.error`. Không hiện
+  // nó thì người dùng chỉ thấy tin đã gửi rồi im lặng — đúng cái kiểu lỗi
+  // khó chịu nhất, vì không có gì để báo cáo là hỏng.
+  const errorText = messageErrorOf(message);
   // Chạm vào tin để mở menu thao tác; bỏ qua bấm vào link/nút bên trong để
   // không cướp mất thao tác mở file hay bấm tool.
   const openMenu = (e) => {
@@ -1853,6 +1857,12 @@ function MessageBubble({ message, wsId, onMenu }) {
   };
   return (
     <div class={`msg ${role}`} onClick={openMenu}>
+      {errorText && (
+        <div class="msg-error" role="alert">
+          <strong>Agent báo lỗi</strong>
+          <span>{errorText}</span>
+        </div>
+      )}
       {parts.map((part, i) => {
         if (part.type === "text") {
           // Tin user giữ text thuần — không đi qua markdown, vừa đúng hành vi

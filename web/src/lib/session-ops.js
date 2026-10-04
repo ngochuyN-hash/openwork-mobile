@@ -26,6 +26,25 @@ export function messageRoleOf(message) {
   return message?.info?.role ?? message?.role ?? "";
 }
 
+/**
+ * Lỗi của một message (`info.error`), rút ra chữ đọc được.
+ *
+ * Engine đặt lỗi ở `info.error` và để `parts` RỖNG. Không đọc nó thì lượt
+ * chạy hỏng hiện ra là im lặng: người dùng thấy tin đã gửi, không có trả lời,
+ * không báo gì. Thật đã gặp 04/10: `APIError: No endpoints found that support
+ * tool use` khi model được chọn không làm được tool — UI không hiện gì.
+ *
+ * Shape quan sát được: `{name, data: {message, ...}}`, có thể chỉ có `message`
+ * phẳng. Trả "" nếu không có lỗi.
+ */
+export function messageErrorOf(message) {
+  const error = message?.info?.error ?? message?.error;
+  if (!error) return "";
+  if (typeof error === "string") return error.trim();
+  const text = String(error.data?.message ?? error.message ?? "").trim();
+  return text || String(error.name ?? "").trim();
+}
+
 /** Ghép mọi part text của 1 message (bỏ part rỗng) — dùng cho Sửa / Chép. */
 export function messageTextOf(message) {
   const parts = Array.isArray(message?.parts) ? message.parts : [];
