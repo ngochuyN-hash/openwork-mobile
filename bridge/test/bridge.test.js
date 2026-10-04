@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseListeningPorts, isOpenWorkServerHealth } from "../src/discovery.js";
-import { isProxyPathAllowed, isMethodAllowed, normalizeDotSegments, filenameFromQuery } from "../src/proxy.js";
+import { isProxyPathAllowed, isMethodAllowed, normalizeDotSegments, filenameFromQuery, shouldForceDownload } from "../src/proxy.js";
 import { isAuthorized, isTokenAuthorized, requestToken } from "../src/auth.js";
 import { hashToken } from "../src/bootstrap.js";
 import { candidateExePaths, findOpenWorkExe } from "../src/openwork-launch.js";
@@ -106,6 +106,18 @@ test("files/raw cho qua whitelist + bóc được tên file làm fallback downlo
   assert.equal(filenameFromQuery("/api/ow/workspace/ws_1/files/raw?path=docs%2Fb%C3%A1o%20c%C3%A1o.pdf"), "báo cáo.pdf");
   assert.equal(filenameFromQuery("/api/ow/workspace/ws_1/files/raw?path=clip.mp4"), "clip.mp4");
   assert.equal(filenameFromQuery("/api/ow/workspace/ws_1/files/raw"), "");
+});
+
+test("chỉ ép attachment cho file web không render được, ảnh/PDF giữ inline", () => {
+  assert.equal(shouldForceDownload("báo cáo.xlsx"), true);
+  assert.equal(shouldForceDownload("hop-hop.XLSX"), true);
+  assert.equal(shouldForceDownload("slide.pptx"), true);
+  assert.equal(shouldForceDownload("data.sqlite"), true);
+  assert.equal(shouldForceDownload("bundle.js"), false);
+  assert.equal(shouldForceDownload("báo cáo.pdf"), false, "PDF vẫn xem trước bằng iframe");
+  assert.equal(shouldForceDownload("ảnh.png"), false, "ảnh vẫn xem bằng <img>");
+  assert.equal(shouldForceDownload("clip.mp4"), false, "media thì trình duyệt tự phát, để inline");
+  assert.equal(shouldForceDownload("Dockerfile"), false, "không có đuôi thì không ép");
 });
 
 test("tìm OpenWork.exe: ưu tiên env -> config -> chỗ hay gặp", () => {

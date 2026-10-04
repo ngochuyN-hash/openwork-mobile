@@ -53,10 +53,11 @@ wired in `chat.jsx`'s `MarkdownText`, styles in `styles.css`:
   whole message each frame was O(n²).
 
 Desktop-only for now: `.xlsx` still opens as a plain download here, while the desktop opens it in a
-sheet artifact editor (`isSheetPreviewSupported` covers `csv`/`tsv`/`xlsx`). CSV/TSV in the Files
-viewer still open in a `<textarea>`. Math/KaTeX is likewise absent — `$O(n \log n)$` shows as raw
-text. That gap is deliberate for now (a KaTeX bundle is a real weight decision on mobile), not an
-oversight.
+sheet artifact editor (`isSheetPreviewSupported` covers `csv`/`tsv`/`xlsx`) — decided as acceptable:
+on a phone, downloading the sheet to view it in the real spreadsheet app beats an editor embedded in
+a web view. CSV/TSV in the Files viewer still open in a `<textarea>`. Math/KaTeX is likewise absent —
+`$O(n \log n)$` shows as raw text. That gap is deliberate for now (a KaTeX bundle is a real weight
+decision on mobile), not an oversight.
 
 ### QA round on the markdown renderer (4 independent review agents)
 
@@ -403,6 +404,32 @@ Verification commands from repository root: `npm --prefix bridge test`; `node --
 
 Broader Chat outbox and file conflict protection remain separate work, not covered by these regression tests.
 
+## Office/binary downloads on the phone — 2026-10-04 (bridge/src/proxy.js)
+
+`.xlsx`/`.docx`/`.pptx` links opened as a blank page instead of downloading. Cause chain, both halves
+found by reading the real engine source (`apps/server/src/routes/files.ts:938`):
+
+1. `GET /workspace/:id/files/raw` **always** answers `Content-Disposition: inline` — correct for the
+   desktop, which renders the file in its own viewer, meaningless to a phone browser that has no
+   viewer for a spreadsheet.
+2. The bridge's existing `attachment` fallback had been **dead code**: its regex tested
+   `upstreamPath` *with the query string*, and every real request carries `?path=`, so
+   `"/workspace/ws_1/files/raw?path=x"` never matched `/files\/raw(\/|$)/`.
+
+Fix: `rawPathOf()` strips the query before matching (revives the fallback), and a new exported
+`shouldForceDownload(name)` forces `attachment` for the extension set no browser renders as a
+document — Office, archives/installers, native binaries. Deliberately left `inline`: images (web
+previews them with `<img>`), PDF (`<iframe>`), and media the browser plays itself. The filename is
+re-encoded as `filename*=UTF-8''…` so Vietnamese names survive.
+
+The Cloudflare worker passes the header through untouched (`new Headers(response.headers)`), so no
+worker change is needed — but this only reaches the phone after the bridge restarts.
+
+Tests: `bridge/test/proxy-download.test.js` runs two real local HTTP servers — an upstream that
+answers exactly like the engine (`inline; filename=…`) and the real `proxyToOpenWork` in front — then
+asserts xlsx becomes `attachment`, png/pdf stay `inline`, and a `Báo cáo Q3.xlsx` path keeps its
+name. `bridge/test/bridge.test.js` covers the extension set. Bridge 57/57, web 309/309.
+
 ## Installer — 2026-10-03 (vendored node_modules, Node gate demoted, fresh-dist assert)
 
 Goal: "one file, double-click, it just works." `desktop/build-setup.js` now (1) **vendors `bridge/node_modules` into the installer**: the production dependency closure is walked from `bridge/package-lock.json` (the bridge has exactly one dependency — `qrcode-terminal@0.12.0`, zero transitive deps) and copied from the dev tree with a per-package version check; a missing or version-mismatched package is a hard error telling you to `cd bridge && npm install`. The dev tree's removed-but-still-present packages are not in the lockfile and are never staged. The friend machine never runs npm — `OpenPocket.cs` only verifies deps via `EnsureBridgeDepsPresent()`; only `node.exe` itself is still needed to RUN the bridge. (2) **asserts `web/dist` freshness** before staging: the newest mtime across `web/src`, `web/public`, `index.html`, `vite.config.js`, `package.json` must be ≤ the newest dist mtime, else the build aborts ("rebuild first: cd web && npm run build") instead of silently shipping a stale bundle. (3) `--stage-only` runs the stage step alone (assert + stage, no exe) for verification. `desktop/src/OpenPocketSetup.cs`: the `HasNode()` gate is DEMOTED from "block install + open nodejs.org + return 1" to a Yes/No warning — the install always proceeds, the dialog just offers to open the Node download page (node.exe is still required to run the bridge, and the GUI's "Bật Bridge" reports it if missing); post-install failures are no longer swallowed — a failed Start-Menu/Desktop shortcut or a failed app launch is collected per item and shown in a "Đã cài xong, nhưng có việc chưa xong" warning box (`MakeShortcut` no longer catches internally, `Process.Start` failure names the exe path). `desktop/swap-gui.bat` uses `%~dp0` instead of the hardcoded dev-machine path; `desktop/build-test.bat` gained the same csc.exe existence guard + errorlevel report as `build.bat`. `HUONG-DAN.txt` no longer advertises the removed remote-control feature (removed in 2a202a3) — OpenPocket controls OpenWork (sessions, chat, files), and the first-run "1–2 phút npm install" wait is gone from the text since node_modules ships inside the installer. No `bridge/VERSION` is staged (the file is gone — `bridge/package.json` is the single version source). Verified: `node desktop/build-setup.js --stage-only` stages `bridge/node_modules` with ONLY `qrcode-terminal@0.12.0` (loaded from the stage tree and rendered a QR); the fresh-dist assert first fired for real — `web/src/api.js` (edited concurrently after the last build) was newer than dist — and passed after the standard `npm --prefix web run build`.
@@ -455,7 +482,7 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | `src/config.js` | Runtime config (mobileToken `owm_`, ownerToken `owt_`, port, publicUrl, **lookupUrl + lookupSecret + lookupTenant + machineName**). Lives OUTSIDE the repo: `%APPDATA%\openwork-bridge\config.json`. Empty `lookupTenant` = the machine is NOT a room on the shared worker: the worker refuses roomless web entry (400 `tenant_required`), so **`pairingBaseUrl()`** (pure + unit-tested in `test/config.test.js`) points pairing QRs at the tunnel/public URL instead of the worker; the heartbeat still registers the tunnel under the owner's legacy `machine:main` slot (API relay only, no web login). |
 | `src/bootstrap.js` | Mints/appends the owner token into `%APPDATA%\openwork\tokens.json` (atomic + .bak). hash = plain sha256 hex, fixed id `openwork-mobile-bridge`. |
 | `src/discovery.js` | Reads `engine-instances.json` (ownerPid) → parses netstat → probes `/health` → checks `/whoami` (token active). **`isProcessAlive(pid)`** = `process.kill(pid, 0)` (no child process, unlike a `tasklist` spawn; `EPERM` still counts as alive) — needed because the registry file outlives the app, so `/api/state` can report "installed but not running" honestly. |
-| `src/proxy.js` | Reverse proxy `/api/ow/*` → openwork-server. Whitelist after **dot-segment normalization**, method allowlist, injects Bearer owner, **body buffering (64MB cap)**, streams the response + SSE keepalive 20s. Also forwards `content-length/content-range/accept-ranges` so downloads show progress. |
+| `src/proxy.js` | Reverse proxy `/api/ow/*` → openwork-server. Whitelist after **dot-segment normalization**, method allowlist, injects Bearer owner, **body buffering (64MB cap)**, streams the response + SSE keepalive 20s. Also forwards `content-length/content-range/accept-ranges` so downloads show progress, and **rewrites `content-disposition` on `/files/raw`** (see "Office/binary downloads on the phone"). |
 | `src/auth.js` | Phone → bridge: `owm_` token (header) + `?_t=` (GET only, for EventSource/img). timingSafeEqual. `requestToken()` extracts from both sources, `isTokenAuthorized()` accepts both alike. |
 | `src/static.js` | Serves `web/dist` (SPA fallback to index.html); traversal out of root blocked; a mid-stat vanish answers a clean 500 JSON instead of an uncaughtException. |
 | `src/pairing.js` | 9Remote-style pairing: one-time 8-char code (30 min, single use, printed in the QR), permanent device key owd_ (hash stored in devices.json), revocation. **`mintDevice(label)`** issues a key without a code — shared by code-pairing and room sign-in `/api/pair/tenant`. |
@@ -576,6 +603,7 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | Want to receive files the agent created without digging in the Files tab | The engine has no dedicated file part — the agent writes via the `write` tool then mentions the path in text. `chat.jsx` (`findFileRefsInText` + `FileRefCard` + `linkifyFiles`) shows slim text rows in the message — tapping one opens the file straight in the Files viewer (view/download) |
 | Want to send a file/image from the phone to the agent | The paperclip in the `chat.jsx` composer: uploads into `mobile-uploads/` via `owUploadFile()` then sends the prompt with the path (the engine takes no file part) |
 | Downloads show no % / no resume | `bridge/src/proxy.js` used to forward only 5 headers — added `content-length/content-range/accept-ranges` |
+| `.xlsx`/`.docx` link opens a blank page instead of downloading | `bridge/src/proxy.js` (`shouldForceDownload` + `rawPathOf`): the engine answers `inline` on `/files/raw` and the old fallback regex matched the query string, so it never fired — now the path is matched query-free and office/archive/binary extensions get `attachment`. Images/PDF/media stay `inline`. Real-HTTP proof in `bridge/test/proxy-download.test.js` |
 | iOS download opens in a tab instead of saving / no progress on big files | `web/src/api.js` (`owDownload()`: fetch with auth header + stream read for % + AbortController) + `files.jsx` (Blob download + progress bar + Cancel + Share via `navigator.share` for iOS "Save to Files") + `bridge/src/proxy.js` (adds a `content-disposition: attachment` fallback from `?path=` when upstream forgets); test in `bridge/test/bridge.test.js` + `filenameFromDisposition` in `web/test/api-contract.test.js` |
 | Back buttons drift with content while scrolling | `web/src/app.jsx` + `web/src/styles.css` — the Back buttons live on the `topbar` (sticky at the top, with blur and safe-area). FileViewer borrows the topbar via the `owm:topback` event |
 | Changed web code but the phone still shows the old version | Build `npm run build` in `web/` then deploy the only worker: `cd worker && npx wrangler deploy` (the official `openpocket` worker — it serves the web assets too; there is no secondary worker anymore). Bump `CACHE = "owm-shell-v48"` in `web/public/sw.js` so the PWA purges the old cache |

@@ -33,6 +33,36 @@ export function isMethodAllowed(method) {
   return ALLOWED_METHODS.has(method.toUpperCase());
 }
 
+// Engine (apps/server/src/routes/files.ts) luôn gắn Content-Disposition: inline
+// cho /files/raw — đúng cho desktop (mở viewer trong app) nhưng trên điện thoại
+// .docx/.xlsx sẽ mở ra một trang trắng vì trình duyệt không biết render gì.
+// Ép "attachment" cho đúng nhóm file không có viewer nào, và chỉ nhóm đó: ảnh
+// và PDF vẫn cần "inline" vì web hiển thị bằng <img>/<iframe>.
+const FORCE_DOWNLOAD_EXT = new Set([
+  // Office
+  "doc", "docx", "docm", "xls", "xlsx", "xlsm", "ppt", "pptx", "pptm", "odt", "ods", "odp", "rtf", "epub",
+  // Nén / gói cài đặt
+  "zip", "7z", "rar", "gz", "tar", "bz2", "xz", "zst", "iso", "dmg", "apk", "msi", "exe", "jar", "war",
+  // Nhị phân không ai mở được trong web (media mp4/mp3/wav thì trình duyệt
+  // tự phát được nên để "inline")
+  "bin", "dat", "db", "sqlite", "sqlite3", "pb", "pyc", "so", "dll", "lib", "o", "a", "class", "wasm",
+  "psd", "sketch", "fig", "xd", "ai", "indd", "dwg", "dxf", "stl", "obj", "blend",
+]);
+
+/** true khi tên file thuộc nhóm browser không render được inline. */
+export function shouldForceDownload(name) {
+  const clean = String(name ?? "");
+  const dot = clean.lastIndexOf(".");
+  if (dot <= 0) return false;
+  return FORCE_DOWNLOAD_EXT.has(clean.slice(dot + 1).toLowerCase());
+}
+
+/** Path đã bỏ query + dot-segment — để regex so đường dẫn, không dính "?path=". */
+function rawPathOf(upstreamPath) {
+  const [path] = String(upstreamPath ?? "").split("?");
+  return normalizeDotSegments(path);
+}
+
 /** Lấy tên file từ ?path= để gắn content-disposition fallback. */
 export function filenameFromQuery(rawUrl) {
   try {
@@ -155,15 +185,25 @@ export async function proxyToOpenWork(req, res, upstreamPath, { baseUrl, ownerTo
     if (value) outHeaders[name] = value;
   }
 
+  // Chỉ nhìn PATH, không nhìn query: mọi request file thật đều mang ?path=
+  // nên regex trên chuỗi đầy đủ sẽ không khớp ("raw?path=" ≠ "raw" cuối chuỗi).
+  const isRawFileGet =
+    req.method.toUpperCase() === "GET" && /^\/workspace\/[^/]+\/files\/raw(\/|$)/.test(rawPathOf(upstreamPath));
+
   // files/raw không phải SSE: nếu upstream quên gắn tên file, bridge tự gắn
   // "attachment" để điện thoại hiểu là lưu về máy (kể cả tên có dấu/cách).
-  if (
-    req.method.toUpperCase() === "GET" &&
-    !outHeaders["content-disposition"] &&
-    /^\/workspace\/[^/]+\/files\/raw(\/|$)/.test(normalizeDotSegments(upstreamPath))
-  ) {
+  if (isRawFileGet && !outHeaders["content-disposition"]) {
     const name = filenameFromQuery(req.url);
     if (name) outHeaders["content-disposition"] = `attachment; filename*=UTF-8''${encodeURIComponent(name)}`;
+  }
+
+  // ...và nếu upstream gắn "inline" cho file web không render được (docx/xlsx…),
+  // vẫn phải đổi thành "attachment" — nếu không điện thoại mở ra trang trắng.
+  if (isRawFileGet) {
+    const name = filenameFromQuery(req.url);
+    if (name && shouldForceDownload(name)) {
+      outHeaders["content-disposition"] = `attachment; filename*=UTF-8''${encodeURIComponent(name)}`;
+    }
   }
 
   const isSSE = (response.headers.get("content-type") ?? "").includes("text/event-stream");
