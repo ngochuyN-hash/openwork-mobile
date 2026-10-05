@@ -21,7 +21,7 @@ export function deny(res) {
   res.end(JSON.stringify({ code: "unauthorized", message: "Unauthorized — missing or wrong connection key." }));
 }
 
-/** So sánh token đã trích (header hoặc ?_t=) với master token. */
+/** So sánh token đã trích (từ header Bearer) với master token. */
 export function isTokenAuthorized(presented, mobileToken) {
   if (!presented || !mobileToken) return false;
   return sameToken(presented, mobileToken);
@@ -34,22 +34,27 @@ function sameToken(presented, expected) {
 }
 
 /**
- * Lấy Bearer token từ header, hoặc `?_t=` (chỉ GET).
+ * Lấy token từ header `Authorization: Bearer …` — ĐƯỜNG DUY NHẤT còn sống.
  *
- * `?_t=` là đường CŨ: web từng dán token lên query cho `<img>`/`<iframe>` vì hai
- * thẻ đó không set được header. Web đã bỏ hẳn (xem `blobUrlFor` ở
- * web/src/api.js) — mọi request đi bằng header, còn `<img>/<iframe>` thì fetch
- * bằng header rồi gắn `blob:`. Nhánh này GIỮ LẠI để PWA đã cài trên máy cũ,
- * còn cache bundle cũ, không mất quyền ngay giữa chừng. Không code mới nào sinh
- * ra `?_t=` nữa.
+ * Trước đây còn một nhánh thứ hai đọc `?_t=` trên query (chỉ GET), sinh ra từ
+ * lúc web dán token lên URL cho `<img>`/`<iframe>`/EventSource vì các thẻ đó
+ * không set được header. Đường đó ĐÃ BỎ HẲN và không quay lại, vì token nằm
+ * trong query sẽ rò ra ít nhất bốn chỗ mà header không bao giờ rò:
+ *   - history/URL bar của trình duyệt (ai cũng mở xem lại được),
+ *   - access log của Cloudflare và reverse proxy trước mặt bridge,
+ *   - header Referer cho mọi request đi tiếp từ trang đó,
+ *   - link bị copy-chia qua chat/nhắn tin, crash report, screenshot.
+ * Chi phí bỏ: PWA đã cài trên máy cũ còn cache bundle cũ vẫn gửi `?_t=` sẽ
+ * mất quyền, phải cài lại/mở lại web là xong. Đổi lại bridge không còn đường
+ * nào để lộ master token ra ngoài header.
+ *
+ * `url` vẫn nằm trong chữ ký cho khớp call site (app.js) nhưng KHÔNG được đọc:
+ * token không bao giờ đi URL nữa. Thêm nhánh query mới ở đây là đúng cách
+ * mở lại đúng lỗi bảo mật đã đóng.
  */
 export function requestToken(req, url) {
+  void url; // chữ ký giữ nguyên cho call site; token chỉ đọc từ header.
   const header = req.headers["authorization"] ?? "";
   const match = /^Bearer\s+(.+)$/i.exec(String(header));
-  if (match?.[1]) return match[1].trim();
-  if (req.method.toUpperCase() === "GET") {
-    const query = url.searchParams.get("_t");
-    if (query) return query;
-  }
-  return "";
+  return match?.[1]?.trim() ?? "";
 }

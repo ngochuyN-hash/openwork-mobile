@@ -153,12 +153,17 @@ test("token rác bị chặn, token thu hồi chết ngay lập tức", async ()
   });
 });
 
-test("device token chạy được GET (qua ?_t=) cho <img>/EventSource", async () => {
+// Đường `?_t=` (dành cho <img>/EventSource không set được header) đã bị bỏ
+// vì token trên URL lọt vào history trình duyệt, access log proxy và Referer.
+// <img>/<iframe> giờ fetch bằng header rồi gắn `blob:` — xem blobUrlFor ở
+// web/src/api.js. Test này khóa lại cả hai phía: query chết, header sống.
+test("device token trên query ?_t= → 401; qua header Bearer vẫn 200", async () => {
   await withApp({}, async ({ base, pairing }) => {
     const minted = pairing.mintDevice("Máy ảnh");
-    // Không set header — chỉ query, đúng như EventSource/img sẽ gửi.
-    const res = await get(base, `/api/state?_t=${encodeURIComponent(minted.token)}`);
-    assert.equal(res.status, 200);
+    // Không set header — chỉ query, đúng kiểu request mà đường này từng phục vụ.
+    const res = await fetch(`${base}/api/state?_t=${encodeURIComponent(minted.token)}`);
+    assert.equal(res.status, 401, "device token trong query phải chết, không có ngoại lệ nào");
+    assert.equal((await get(base, "/api/state", minted.token)).status, 200, "đường header không bị cắt nhầm");
   });
 });
 

@@ -80,21 +80,26 @@ test("bridge auth requires exact bearer token", () => {
   assert.equal(isAuthorized(req("Basic abc"), token), false);
 });
 
-test("?_t= query token counts as master token (EventSource/img/a)", () => {
+// `?_t=` từng là đường thứ hai để truyền token, dành cho <img>/EventSource vì
+// các thẻ đó không set được header. Nó ĐÃ BỊ BỎ HẲN: token nằm trên URL lọt vào
+// history trình duyệt, access log của Cloudflare/proxy và header Referer của
+// mọi request đi tiếp. Web cũng đã ngừng gửi (mọi thứ đi bằng header, ảnh/PDF
+// thì fetch rồi gắn `blob:`), nên đường này không còn đường sống nào để bảo vệ.
+test("?_t= trên query KHÔNG còn là đường auth; chỉ header Bearer mới vào được", () => {
   const token = "owm_abc";
-  const get = (t) => ({ method: "GET", headers: {} });
+  const bare = () => ({ method: "GET", headers: {} });
   const url = (t) => new URL(`http://x/api/ow/a?path=f${t ? `&_t=${t}` : ""}`);
-  // trích được từ query...
-  assert.equal(requestToken(get(), url(`Bearer ${token}`)), `Bearer ${token}`);
-  assert.equal(requestToken(get(), url(token)), token);
-  assert.equal(requestToken(get(), url("")), "");
-  // ...và được công nhận như header (fix bug cũ: isAuthorized chỉ nhìn header)
-  assert.equal(isTokenAuthorized(requestToken(get(), url(token)), token), true);
-  assert.equal(isTokenAuthorized(requestToken(get(), url(`${token}x`)), token), false);
-  assert.equal(isTokenAuthorized(requestToken(get(), url("")), token), false);
-  // POST không được auth bằng query
-  const post = { method: "POST", headers: {} };
-  assert.equal(requestToken(post, url(token)), "");
+
+  // Token đúng, đặt trên query → không trích được gì, dù GET lẫn POST.
+  assert.equal(requestToken(bare(), url(token)), "");
+  assert.equal(requestToken({ method: "POST", headers: {} }, url(token)), "");
+
+  // Header Bearer vẫn là đường duy nhất, và vẫn qua được isTokenAuthorized.
+  const withHeader = (v) => ({ method: "GET", headers: { authorization: v } });
+  assert.equal(requestToken(withHeader(`Bearer ${token}`), url("")), token);
+  assert.equal(isTokenAuthorized(requestToken(withHeader(`Bearer ${token}`), url("")), token), true);
+  assert.equal(isTokenAuthorized(requestToken(withHeader(`Bearer ${token}x`), url("")), token), false);
+  assert.equal(isTokenAuthorized(requestToken(bare(), url(token)), token), false);
 });
 
 test("hashToken matches OpenWork's sha256 scheme", () => {
