@@ -221,8 +221,9 @@ a REAL isolated bridge process and asserts the same `/api/state` and
 > restores it afterwards, matching `test/pairing.test.js`. Same class of bug as
 > the CLI sandbox one. The real store was verified intact afterwards.
 
-> Last updated: 2026-10-04 — parity rounds closed: session extras (cost, rename, /compact, steer,
-> effort/variant, cross-session search, pin/archive/groups, share) and Settings maintenance
+> Last updated: 2026-10-05 — **pin / archive / groups removed** from the web app on the owner's call
+> (see the 2026-10-05 section). Parity rounds closed 2026-10-04: session extras (cost, rename,
+> /compact, steer, effort/variant, cross-session search, share) and Settings maintenance
 > (pairing-code display, machine rename, tunnel restart, engine reload) — see the 2026-10-04 section.
 > Also since 2026-10-03: chat streams through a fetch-based SSE client (`web/src/lib/sse.js`:
 > Authorization header instead of the old `?_t=` token-on-URL, backoff reconnect 1s→16s, event `type`
@@ -242,6 +243,27 @@ a REAL isolated bridge process and asserts the same `/api/state` and
 >
 > 📌 **Rules (project owner's requirements):** every time code/structure/behavior changes,
 > BOTH this file AND `README.md` MUST be updated in the same commit — **in English**.
+
+## Session organizers removed from the phone — 2026-10-05 (web only)
+
+Owner's verdict: the three icon buttons on every session row (pin / assign-group /
+archive) were noise for a single-user app — nobody organizes sessions into groups
+from a phone. Removed entirely, not hidden:
+
+- `web/src/pages/sessions.jsx`: the All/Pinned/Archived scope chips, the group
+  chips, the assign + manage-groups sheets and the three per-row icon buttons are
+  gone. A session row keeps title, status dot and time; the only button above the
+  list is **Search in workspace**; swipe-to-delete and the (+) FAB stay.
+- `web/src/pages/home.jsx`: the pin button, pinned-first ordering and the
+  archived filter are gone; the header count no longer shows "N pinned".
+- Deleted `web/src/lib/session-organize.js` and its test (28 cases — no other
+  caller was left). Stale `pinned`/`archived` flags sitting in a device's
+  localStorage are simply ignored now.
+- Server side untouched: the bridge still whitelists `/session-groups` — dead
+  but harmless plumbing, no bridge restart spent on it.
+
+Web suite all green (340 tests). Verified in the browser on the built bundle:
+plain session rows, chat page unaffected.
 
 ## Chat composer floated mid-screen on short sessions — 2026-10-04 (web only)
 
