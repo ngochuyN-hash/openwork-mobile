@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { bridgeDataDir } from "./config.js";
 
@@ -16,7 +17,48 @@ import { bridgeDataDir } from "./config.js";
 // GHI FILE (tunnel-state.json) nên restart bridge không xoá nổi sự kiên nhẫn.
 
 const TUNNEL_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
-const DOWNLOAD_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe";
+
+// GHIM PHIÊN BẢN + SHA256 (không dùng releases/latest): URL latest trỏ tới
+// bản mới nhất nên hash đổi theo thời gian — không ghim được thì không verify
+// được, mà verify là thứ duy nhất chặn CDN/MITM nhả exe bẩn vào máy.
+// Nguồn hash: digest của asset trong GitHub API
+// https://api.github.com/repos/cloudflare/cloudflared/releases/tags/2026.9.3
+const CLOUDFLARED_VERSION = "2026.9.3";
+const DOWNLOAD_URL = `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-windows-amd64.exe`;
+const CLOUDFLARED_SHA256 = "f096265ec2fcbe9bb6e2d64268db167ced3fcbb83d894bdb9e2fcdb26f2ea7e2";
+
+/**
+ * URL + hash dùng cho lần chạy này. Env override để chủ nhà nâng cấp tay:
+ *   CLOUDFLARED_URL    = URL asset (mirror nội bộ, bản khác)
+ *   CLOUDFLARED_SHA256 = hash 64 hex của đúng asset đó
+ * Đọc lúc GỌI (không lúc import) để test set env được.
+ */
+export function cloudflaredSource() {
+  return {
+    url: process.env.CLOUDFLARED_URL || DOWNLOAD_URL,
+    sha256: (process.env.CLOUDFLARED_SHA256 || CLOUDFLARED_SHA256).trim().toLowerCase(),
+  };
+}
+
+/**
+ * So sha256 của buffer với hash ghim. Lệch là ném — không bao giờ ghi file,
+ * không bao giờ chạy. So sánh chuỗi hex thường là đủ (hash là public, không
+ * cần timing-safe).
+ * @param {Buffer|Uint8Array} buffer
+ * @param {string} expected 64 hex
+ * @returns {string} hash tính được (đã lowercase)
+ */
+export function verifyCloudflared(buffer, expected) {
+  const want = typeof expected === "string" ? expected.trim().toLowerCase() : "";
+  if (!/^[0-9a-f]{64}$/.test(want)) {
+    throw new Error(`Invalid expected cloudflared SHA-256: ${JSON.stringify(expected ?? null)} (need 64 hex chars)`);
+  }
+  const got = createHash("sha256").update(buffer).digest("hex");
+  if (got !== want) {
+    throw new Error(`cloudflared SHA-256 mismatch - refusing to run it. expected ${want}, got ${got}`);
+  }
+  return got;
+}
 
 // cloudflared mặc định đi QUIC qua UDP:7844 — mạng nhà (VN) hay rớt UDP tới
 // edge (log: "datagram manager error: timeout: no recent network activity",
@@ -60,7 +102,23 @@ export function cloudflaredPath() {
 
 async function ensureCloudflared(log) {
   const target = cloudflaredPath();
-  if (existsSync(target)) return target;
+  const { url, sha256 } = cloudflaredSource();
+  // File đã có sẵn (tải lần trước): verify MỖI LẦN start — file đã cài có thể bị
+  // thay sau đó bởi virus/script lạ. Sai thì xoá và tải lại bản ghim.
+  if (existsSync(target)) {
+    try {
+      verifyCloudflared(readFileSync(target), sha256);
+      return target;
+    } catch (error) {
+      log(`[tunnel] cached cloudflared failed integrity check (${error.message}) - deleting and re-downloading...`);
+      try {
+        rmSync(target, { force: true });
+      } catch {
+        // không xoá được (đang bị khoá) — để lỗi dưới đây ném ra, đừng chạy file hỏng
+        throw new Error(`Cached cloudflared is corrupt and could not be deleted: ${target}`);
+      }
+    }
+  }
   // Có sẵn trên PATH thì dùng luôn
   const fromPath = await new Promise((resolve) => {
     const probe = spawn(process.platform === "win32" ? "where" : "which", ["cloudflared"], { windowsHide: true });
@@ -71,14 +129,15 @@ async function ensureCloudflared(log) {
   });
   if (fromPath) return fromPath;
 
-  log(`[tunnel] downloading cloudflared to ${target} (first run only, ~50MB)...`);
+  log(`[tunnel] downloading cloudflared ${CLOUDFLARED_VERSION} to ${target} (first run only, ~50MB)...`);
   // Hard deadline: a hung GitHub download used to leave this promise unsettled
   // forever — bridge alive with phase "starting" and no tunnel, ever. 60s is
   // plenty for ~50MB, and the same signal aborts a stalled body read.
-  const response = await fetch(DOWNLOAD_URL, { redirect: "follow", signal: AbortSignal.timeout(60_000) });
+  const response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(60_000) });
   if (!response.ok || !response.body) throw new Error(`Failed to download cloudflared: HTTP ${response.status}`);
   const buffer = Buffer.from(await response.arrayBuffer());
-  const { writeFileSync } = await import("node:fs");
+  // Verify TRƯỚC khi ghi: file sai hash không bao giờ chạm đĩa, không bao giờ được spawn.
+  verifyCloudflared(buffer, sha256);
   writeFileSync(target, buffer);
   if (process.platform !== "win32") {
     const { chmodSync } = await import("node:fs");
