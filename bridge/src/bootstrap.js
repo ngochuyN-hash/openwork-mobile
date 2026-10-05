@@ -12,7 +12,11 @@ import { openworkFilePath } from "./paths.js";
 //  - after that the token works forever (create/revoke operations rewrite the
 //    whole array from memory, which includes our entry).
 //
-// The RAW token is kept in the bridge config (outside the repo).
+// The RAW token is kept in the bridge config (outside the repo). Because the
+// raw token survives bridge restarts, we can always RE-INSERT its hash when it
+// goes missing from tokens.json instead of minting a new one - otherwise every
+// restart would rotate the token and force yet another OpenWork restart
+// (the 04/10 incident).
 
 export const BRIDGE_TOKEN_ID = "openwork-mobile-bridge";
 export const BRIDGE_TOKEN_LABEL = "OpenWork Mobile bridge";
@@ -41,28 +45,41 @@ function atomicWrite(file, data) {
 /**
  * Make sure tokens.json contains a hash entry whose raw token we know.
  *
+ * The raw token only ever lives in the bridge config, so as long as we hold it
+ * the hash is reproducible: a missing entry is restored, never re-minted.
+ *
  * @returns {{token: string, added: boolean, restartRequired: boolean}}
- *   added          - we appended a new entry to tokens.json this call
+ *   added          - we wrote an entry to tokens.json this call
  *   restartRequired- OpenWork needs a restart before the token is honored
  */
 export function ensureOwnerToken(existingRawToken) {
   const file = openworkFilePath("tokens.json");
   const store = readTokenStore(file);
+  const raw = typeof existingRawToken === "string" ? existingRawToken.trim() : "";
 
-  // Case 1: we already hold a raw token whose hash is present -> done.
-  if (existingRawToken) {
-    const hash = hashToken(existingRawToken);
+  // Case 1: we hold a raw token and its hash is already in the store -> done.
+  let token = "";
+  let tokens = store.tokens;
+  if (raw) {
+    const hash = hashToken(raw);
     if (store.tokens.some((t) => t?.hash === hash)) {
-      return { token: existingRawToken, added: false, restartRequired: false };
+      return { token: raw, added: false, restartRequired: false };
     }
+
+    // Case 2: we hold the raw token but its hash is gone (tokens.json was
+    // reset / rewritten without us). Re-INSERT THE SAME token's hash - minting
+    // a new one here would rotate the token on every bridge restart and make
+    // OpenWork demand yet another restart. No existing entry is removed.
+    token = raw;
+    tokens = [...store.tokens];
+  } else {
+    // Case 3: we lost the raw token (e.g. bridge config deleted). Any bridge
+    // entry left behind is an orphan we cannot reproduce - drop it and mint a
+    // fresh one.
+    token = `owt_${randomUUID().replace(/-/g, "")}`;
+    tokens = store.tokens.filter((t) => t?.id !== BRIDGE_TOKEN_ID);
   }
 
-  // Case 2: an old bridge entry exists but we lost the raw token (e.g. bridge
-  // config deleted). Drop the orphan entry and mint a fresh one - a hash we
-  // cannot reproduce is useless to us.
-  const tokens = store.tokens.filter((t) => t?.id !== BRIDGE_TOKEN_ID);
-
-  const token = `owt_${randomUUID().replace(/-/g, "")}`;
   tokens.unshift({
     id: BRIDGE_TOKEN_ID,
     hash: hashToken(token),
