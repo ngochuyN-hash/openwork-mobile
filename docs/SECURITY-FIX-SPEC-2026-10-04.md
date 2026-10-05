@@ -312,16 +312,30 @@ thái code thật, không phải một quyết định mới của chủ máy) v
 
 ## Không sửa trong đợt này (rủi ro đã chấp nhận — ghi sổ để khỏi điều tra lại)
 
+> **Cập nhật 2026-10-05:** cả ba mục dưới đây ĐÃ được xử lý trong pass
+> "remaining-risk closure" cùng ngày (8 nhóm vá song song, mutation-verified,
+> QA 3 lens) — xem README mục "Remaining-risk closure pass (2026-10-05)".
+> (1) `?_t=` đã BỊ XOÁ khỏi `bridge/src/auth.js` (chủ nhà chốt: chỉ mình chủ
+> nhà chạy app, chấp nhận PWA cũ phải tải lại — sw v55 ép bundle mới).
+> (3) cloudflared giờ tải bản GHIM `2026.9.3` + verify SHA256 (hash lấy từ
+> asset digest của GitHub API) trước khi ghi đĩa và mỗi lần start.
+> (2) plaintext secret: KV worker KHÔNG còn giữ plaintext (lưu `secretHash`,
+> record legacy tự nâng cấp lúc đăng nhập thành công); `config.json` giữ
+> plaintext CÓ CHỦ ĐÍCH (GUI C# đọc trực tiếp) nhưng được siết ACL sau mỗi
+> lần ghi và mọi đường log đã redact token.
+
 1. **`?_t=` token trên query** (bridge/src/auth.js:46-55) — đường cũ cho PWA đã
    cài còn cache bundle cũ; chủ đích giữ. Token có thể nằm trong history trình
    duyệt. Điều kiện sunset: xóa khi bridge phát hành bản đủ mới + 1 nhịp chuyển
-   đổi (quyết định riêng, không gấp).
+   đổi (quyết định riêng, không gấp). — **ĐÃ ĐÓNG 05/10, xem ghi chú trên.**
 2. **Secret plaintext**: tenant secret trong KV worker (chủ worker đọc được);
    `mobileToken`/`lookupSecret` trong `%APPDATA%\openwork-bridge\config.json`
    (ACL theo user, chuẩn app local). Băm được nhưng đánh đổi khả năng thu hồi/
-   đối chiếu — không thay đổi.
+   đối chiếu — không thay đổi. — **KV ĐÃ HASH 05/10; config.json giữ plaintext
+   có chủ đích + ACL siết + log redact.**
 3. **cloudflared tải từ GitHub releases không verify chữ ký**
-   (bridge/src/tunnel.js:19, 78) — tin HTTPS + GitHub chính chủ.
+   (bridge/src/tunnel.js:19, 78) — tin HTTPS + GitHub chính chủ. — **ĐÃ GHIM
+   PHIÊN BẢN + VERIFY SHA256 05/10.**
 
 ## Check-list triển khai (cập nhật 2026-10-04)
 

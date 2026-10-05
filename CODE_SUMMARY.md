@@ -153,35 +153,46 @@ Re-ran for this update, from the repo root, all three files green:
 (Per-file invocation on purpose — `node --test <dir>` misbehaves on this machine. The
 full bridge/web suites and `vite build` were **not** re-run in this pass.)
 
-> ⚠️ **`web/dist/_headers` is STALE — rebuild before any deploy.** The newest build
-> ran 2026-10-04 21:12 and does contain the UI compaction below (`web/src/styles.css`
-> mtime 19:17 < 21:12), but `web/public/_headers` was edited **after** that build, so
-> the copied `web/dist/_headers` still holds only the CSP line — `cat web/dist/_headers`
-> has no `nosniff` and no `referrer-policy`, while the source has both. The Worker
-> uploads assets straight from that directory (`worker/wrangler.jsonc` →
-> `"assets": { "directory": "../web/dist" }`) and the bridge serves the same folder in
-> `bridge/src/static.js`, so `cd worker && npx wrangler deploy` without
-> `npm --prefix web run build` publishes the old `_headers`. Build first.
+> ✅ **Deployed 2026-10-05.** Web bundle rebuilt first (`npm --prefix web run build` →
+> `web/dist/_headers` carries CSP + `nosniff` + `no-referrer`), then
+> `cd worker && npx wrangler deploy` (version `92321f13`), then one bridge restart.
+> Curl verified on both doors: worker URL and tunnel URL answer with the three
+> headers; a device-key `/api/pairing-code` call returns no `masterUrl`. The
+> restart minted a **new tunnel URL**, so phones re-linked from a fresh QR.
+> The earlier staleness warning about `web/dist/_headers` is resolved.
 
-> **Commit state: FIX-1 only.** `8020ef1 bridge: stop returning the master token to
-> device keys` (routes/pairing.js + its test) is committed. FIX-2, FIX-3 and FIX-4 —
-> `bridge/src/static.js`, `web/public/_headers`, `worker/src/index.js`,
-> `bridge/test/static-headers.test.js`, `worker/test/relay.test.mjs` — are **working
-> tree only, uncommitted**, each still owed its own commit.
-> The web UI compaction at the top of this file (`web/src/styles.css`,
-> `pages/home.jsx`, `pages/sessions.jsx`) rides in the same working tree but is **not
-> part of the security round** — it needs its own commit, otherwise one `npm run build`
-> would mix an unrelated layout change into the security history.
+> **Commit state: the 04/10 four are all committed** — `8020ef1` (FIX-1),
+> `de7380a` (FIX-2), `72e2288` (FIX-3 + FIX-4), `561aec0` (docs). The 05/10
+> remaining-risk closure pass below rides in its own commits.
 
-> ⚠️ **NOT DEPLOYED, BRIDGE NOT RESTARTED.** No `wrangler deploy` was run and no
-> bridge/cloudflared process was restarted in this round (restarting mints a brand
-> new Quick Tunnel and costs against the CF 429 quota anyway), so **none of the four
-> fixes is live yet**: the phone still gets the master token from `/api/pairing-code`,
-> still gets headerless static over the tunnel, and the worker still relays
-> `/api/pair` unthrottled. Deploy order is the spec's: one bridge restart for
-> FIX-1+2, one worker deploy for FIX-2+3+4, then verify live with
-> `curl -s -D - -o /dev/null http://127.0.0.1:8788/ | grep -i "content-security\|nosniff\|referrer"`
-> and a `/api/pairing-code` call with a device key (no `masterUrl` left).
+## Remaining-risk closure pass — 2026-10-05 (workflow run, 8 parallel patches)
+
+The 04/10 audit's accepted-risks list plus its small debts, closed in one
+parallel pass (8 agents, file-partitioned; test-repair loop; 6 mutation checks;
+3 independent reviewers × 2 rounds). Symptom → where to fix:
+
+| Symptom / risk | Where it was fixed |
+|---|---|
+| Token rides the URL (`?_t=` on GET) → history, proxy logs, Referer | `bridge/src/auth.js` — `requestToken` reads the Bearer header only; test `bridge/test/auth-query-token.test.js`, expectations in `routes.test.js` / `bridge.test.js` rewritten |
+| cloudflared downloaded from `releases/latest`, never verified | `bridge/src/tunnel.js` — pinned `2026.9.3` + `CLOUDFLARED_SHA256` (from the GitHub asset digest), verify before write **and** on every start of the cached file; env overrides `CLOUDFLARED_URL` / `CLOUDFLARED_SHA256`; test `bridge/test/tunnel-integrity.test.js` |
+| Room password sits in KV as plaintext | `worker/src/index.js` — records store `secretHash` (sha256, timing-safe compare); legacy `{secret}` records sign in and auto-upgrade on first success; `SECRET-1` tests prove no plaintext lands in KV |
+| Rate limit keyed by public IP only → NAT households share 10/min | `worker/src/index.js` `rateLimited(..., scope, ipLimit)` — per-room buckets, plus a raw per-IP ceiling (30/min on `pair-tenant`) so invented room names cannot drain the shared KV quota; `LIMIT-1` tests |
+| `ALLOW_ROOM_CREATE` only honours the exact string `"0"` | `worker/src/index.js` `roomCreateDisabled()` — `"0"/"false"/"no"/"off"` any case, numeric `0`, trimmed |
+| GUI provisioning shows raw .NET text on 403/409/429 | `desktop/src/OpenPocket.cs` — reads status + JSON `code` (`ReadHttpError`), maps to sentences that carry the fix, auto-retries a fresh random room name on `409 taken` (max 3); gated by `desktop/build.bat` compile |
+| Master token printable into `bridge-task.log` | new `bridge/src/log-safe.js` (`redactUrl`, `redactSecrets`) applied to every URL/error the bridge prints in `bridge/src/index.js`; text URLs are masked, QRs kept scannable; test `bridge/test/log-redaction.test.js` |
+| `config.json` plaintext + permissive ACL | `bridge/src/config.js` `hardenConfigFile()` — chmod 600 off-Windows, `icacls` strips inherited ACLs on Windows (best-effort, never fatal); test `bridge/test/config-secrets.test.js`. Plaintext stays by design (the C# GUI reads the file directly) |
+| Bridge restart minted a new owner token → OpenWork restart loop | `bridge/src/bootstrap.js` — a held raw token is re-inserted into `tokens.json`, never re-minted; only a lost raw token mints; test `bridge/test/bootstrap-owner-token.test.js` |
+| Installed PWA keeps a pre-`?_t=`-removal bundle | `web/public/sw.js` — cache `owm-shell-v54` → `v55` |
+
+Six guards were **mutation-verified**: the guard was deliberately removed, the
+matching test went red, and the file was restored byte-identical (diff-checked).
+
+Test floor after the pass: bridge **86 → 111**, worker **18 → 48**, web **460 → 432**
+(the −28 is the parallel session's `session-organize` removal, not this pass).
+Committed but **not deployed**: one web rebuild + one `wrangler deploy` + one
+bridge restart bring it live. `worker/scripts/tenant.mjs` still writes legacy
+plaintext records — the worker upgrades them on first login, so no migration
+script is needed.
 
 ## Bridge route table split out of `index.js` — 2026-10-04 (bridge only)
 
