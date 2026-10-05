@@ -2,8 +2,12 @@
 //
 // Multi-tenant ("tòa nhà nhiều phòng"): mỗi bridge chiếm một PHÒNG riêng trên
 // KV, ai cũng mở được web nhưng chỉ đụng được máy của phòng mình:
-//   - `tenant:<id>`  = {secret, name, createdAt} — tài khoản do chủ worker cấp
-//     (worker/scripts/tenant.mjs add). Cặp <id>/<secret> dùng ở CẢ HAI đầu:
+//   - `tenant:<id>`  = {secretHash, name, createdAt} — tài khoản do chủ worker cấp
+//     (worker/scripts/tenant.mjs add) hoặc tự tạo qua /api/tenant/create. KV chỉ
+//     giữ sha256 mật khẩu, KHÔNG giữ bản gốc; phòng tạo bởi bản tenant.mjs cũ
+//     còn field `secret` plaintext thì vẫn đăng nhập được và được nâng lên
+//     secretHash ngay ở lần đăng nhập thành công (xem secretMatches()).
+//     Cặp <id>/<secret> dùng ở CẢ HAI đầu:
 //     bridge (openpocket edge join) và web (tab Đăng nhập).
 //   - `machine:<id>` = {url, updatedAt} — tunnel hiện tại của phòng; khi
 //     bridge báo `tunnelDown: true` thì {url: "", tunnelDown, retryAt,
@@ -22,11 +26,33 @@ const STALE_MS = 20 * 60 * 1000; // bridge heartbeat 15 phút/lần — quá 20 
 const TENANT_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 const TUNNEL_RE = /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i;
 
+// Cờ ALLOW_ROOM_CREATE khóa cửa tạo phòng. Chấp nhận mọi cách viết của "tắt"
+// (0/false/no/off — không phân biệt hoa thường, bỏ khoảng trắng thừa) vì
+// chủ worker gõ tay trong dashboard Cloudflare, viết "false"/"OFF" là mất ý
+// muốn cũng không ai báo. Còn "không đặt" hoặc bất kỳ giá trị khác = MỞ y như
+// trước. String() trước để var đặt kiểu SỐ (0) — dashboard có thể trả về số —
+// cũng tắt đúng như lời gõ.
+const ROOM_CREATE_OFF = new Set(["0", "false", "no", "off"]);
+function roomCreateDisabled(env) {
+  return ROOM_CREATE_OFF.has(
+    String(env.ALLOW_ROOM_CREATE ?? "")
+      .trim()
+      .toLowerCase()
+  );
+}
+
 function json(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
     headers: { "content-type": "application/json", "cache-control": "no-store" },
   });
+}
+
+// sha256 hex (chữ thường) — dùng để lưu mật khẩu phòng trên KV mà KHÔNG giữ
+// bản gốc. Chữ thường, không dấu phân cách để so sánh là chuỗi thuần.
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(text)));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 // So secret lệch độ dài trả false ngay, cùng độ dài thì so hằng thời gian
@@ -48,22 +74,103 @@ async function readJson(request) {
   return request.json().catch(() => null);
 }
 
-// Rate-limit các cửa mở cho người lạ (đăng nhập phòng 10 lần/phút/IP, tự tạo
-// phòng 5 lần/phút/IP). Đếm qua Cache API (caches.default) — KHÔNG tốn KV write
+// Bản ghi phòng trên KV (key `tenant:<id>`) có HAI shape:
+//   {secretHash, name, createdAt} — shape MỚI, chỉ còn sha256 của mật khẩu.
+//   {secret,     name, createdAt} — shape CŨ, còn mật khẩu NGUYÊN VĂN do
+//     worker/scripts/tenant.mjs (bản cũ) ghi. Chỉ đọc được, không tự sinh ra.
+//
+// secretMatches() chấp nhận cả hai: có secretHash thì băm secret người dùng
+// trình ra rồi so bằng sameSecret (hằng thời gian); không có thì so thẳng
+// plaintext như thời trước.
+async function secretMatches(record, presented) {
+  if (!record || !presented) return false;
+  if (record.secretHash) return sameSecret(await sha256Hex(presented), record.secretHash);
+  if (record.secret) return sameSecret(presented, record.secret);
+  return false;
+}
+
+/**
+ * Nâng cấp bản ghi cũ {secret} lên {secretHash} sau khi so khớp thành công:
+ * đăng nhập được rồi thì không lý do gì để giữ mật khẩu gốc trên KV.
+ * Best-effort — hỏng ghi thì vẫn cho đăng nhập (lần sau thử lại), vì nâng
+ * cấp là việc dọn dẹp chứ KHÔNG phải điều kiện vào phòng.
+ *
+ * LỘ TRÌNH bỏ tương thích: xoá nhánh `record.secret` + hàm này KHI
+ * worker/scripts/tenant.mjs đã ghi `secretHash` (một bản vá sau này, ngoài
+ * phạm vi file này) VÀ mọi phòng tạo bởi bản tenant.mjs cũ đã đăng nhập ít
+ * nhất một lần (chính lần đăng nhập đó ghi đè bản ghi). Xoá sớm = khóa cửa
+ * các phòng còn mật khẩu gốc trên KV.
+ */
+async function upgradeTenantRecord(env, tenant, record) {
+  if (record?.secretHash || !record?.secret) return false;
+  try {
+    await env.OWM_STATE.put(
+      `tenant:${tenant}`,
+      JSON.stringify({
+        secretHash: await sha256Hex(record.secret),
+        name: record.name ?? tenant,
+        createdAt: record.createdAt ?? Date.now(),
+      })
+    );
+    return true;
+  } catch (error) {
+    console.error(`[worker] tenant: KV upgrade failed for ${tenant}:`, error?.stack ?? String(error));
+    return false;
+  }
+}
+
+// Rate-limit các cửa mở cho người lạ (đăng nhập phòng 10 lần/phút, tự tạo
+// phòng 5 lần/phút). Đếm qua Cache API (caches.default) — KHÔNG tốn KV write
 // quota; nếu không có cửa này, mỗi lần dò mật khẩu đều đốt 1 KV read (hạn mức
 // free 100k/ngày chung cả tòa nhà).
-async function rateLimited(request, kind, limit) {
+//
+// `scope` = phòng đang bị thao tác ("alpha"), để một IP không bị NHÀ NÀO đẩy
+// hết lượt của nhà khác: mọi người sau NAT/vpn công ty đều chung 1 IP, còn
+// tên phòng thì họ biết trước (nằm trong mọi link QR). Bucket vì thế tách theo
+// cả phòng lẫn IP. create-room gọi không truyền scope (lúc tạo chưa có phòng),
+// nên vẫn khoá theo IP y như cũ.
+//
+// `ipLimit` = TẦNG TRẦN THÔ theo IP, chỉ có tác dụng khi `scope` khác rỗng.
+// Không có nó thì việc tách bucket theo phòng thành lỗ hổng: tên phòng hợp lệ
+// thì ai cũng đoán ra ("zz1".."zz9999"), nên kẻ xấu đổi tên là mỗi tên một
+// bucket SẠCH. Cửa pair-tenant không cần token và mỗi lượt tốn 1 KV read, nên
+// 1 IP đổi tên liên tục đốt hạn mức 100k/ngày CHUNG cả tòa nhà (dòng trên) tới
+// cạn, /__register đọc hụt theo → mọi phòng mất heartbeat và thành offline.
+// Trần 10/phút trước vá chặn được vì bucket là của IP; giờ phải cộng tầng thô
+// mới giữ được trần đó. 30/phút đủ cho nhà thật dùng chung NAT (3 phòng × 10
+// lượt dò) mà vẫn chặn nạn đổi tên phòng.
+// Lưu ý: chỉ áp cho cửa tốn KV read (`pair-tenant`). `/api/pair` relay thẳng ra
+// tunnel, không đọc KV, và đã có pairLimiter phía bridge làm mũ sắt hai — đặt
+// trần thô cho nó sẽ chặn nhà thật sau NAT ghép nhiều máy mà không đổi được
+// gì trước KV.
+async function rateLimited(request, kind, limit, scope = "", ipLimit = 0) {
   const ip = request.headers.get("cf-connecting-ip") ?? "?";
   const bucket = Math.floor(Date.now() / 60_000);
-  const key = new Request(`https://owm-ratelimit/${kind}/${encodeURIComponent(ip)}/${bucket}`);
+  const room = scope ? `${encodeURIComponent(scope)}/` : "";
+  const key = new Request(`https://owm-ratelimit/${kind}/${room}${encodeURIComponent(ip)}/${bucket}`);
   const hit = await caches.default.match(key);
   const count = hit ? Number(await hit.text()) : 0;
-  if (count >= limit) return true;
+
+  // Bucket thô: cùng kind nhưng KHÔNG có phần tên phòng. Chỉ dựng khi cả hai
+  // điều kiện đúng — có scope (nếu không thì bucket thô TRÙNG bucket phòng, đếm
+  // hai lần một lượt và trần thô vô nghĩa) và có ipLimit.
+  const rawKey =
+    scope && ipLimit > 0
+      ? new Request(`https://owm-ratelimit/${kind}-ip/${encodeURIComponent(ip)}/${bucket}`)
+      : null;
+  const rawHit = rawKey ? await caches.default.match(rawKey) : null;
+  const rawCount = rawHit ? Number(await rawHit.text()) : 0;
+
+  if (count >= limit || (rawKey && rawCount >= ipLimit)) return true;
+
   // TTL 119s cho key bucket cũ tự rác bay khỏi edge cache.
-  await caches.default.put(
-    key,
-    new Response(String(count + 1), { headers: { "cache-control": "public, max-age=119" } })
-  );
+  const put = (k, n) =>
+    caches.default.put(
+      k,
+      new Response(String(n), { headers: { "cache-control": "public, max-age=119" } })
+    );
+  await put(key, count + 1);
+  if (rawKey) await put(rawKey, rawCount + 1);
   return false;
 }
 
@@ -226,7 +333,7 @@ async function handle(request, env) {
     if (tenant) {
       if (!TENANT_RE.test(tenant)) return json({ error: "invalid_tenant" }, 400);
       const record = await env.OWM_STATE.get(`tenant:${tenant}`, "json").catch(() => null);
-      if (!record?.secret || !(await sameSecret(request.headers.get("x-owm-secret"), record.secret))) {
+      if (!(await secretMatches(record, request.headers.get("x-owm-secret")))) {
         return json({ error: "unauthorized" }, 401);
       }
       return storeRegister(env, `machine:${tenant}`, body);
@@ -244,18 +351,33 @@ async function handle(request, env) {
     // Worker tự so secret TRƯỚC khi relay: phòng lạ và sai mật khẩu cùng một câu
     // 401 — người lạ không dò ra được phòng nào tồn tại (bridge vẫn so lại lần 2).
     if (url.pathname === "/api/pair/tenant" && request.method === "POST") {
-      if (await rateLimited(request, "pair-tenant", 10)) {
-        return json({ code: "rate_limited", message: "Too many sign-in attempts - wait about 1 minute and try again." }, 429);
-      }
+      // Phải đọc body TRƯỚC khi gọi rateLimited vì bucket khoá theo CẢ tên
+      // phòng lẫn IP. Tên chưa qua TENANT_RE thì đổi tên bucket hoàn toàn (rỗng)
+      // — kẻ dò tên phòng đốt lượt của chính mình chứ không của phòng đang
+      // tồn tại, vì tên phòng thì ai cũng biết (nằm trong mọi link QR). Lượt rác
+      // rơi vào Cache API chứ không tốn KV.
+      //
+      // Tham số thứ 5 (30) là TRẦN THÔ theo IP, cộng dồn với trần 10/phút của
+      // từng phòng. Không có nó thì đổi tên phòng hợp lệ là mỗi tên một bucket
+      // sạch, và vì cửa này không cần token + mỗi lượt đọc KV ở dòng dưới,
+      // 1 IP đổi "zz1".."zz9999" sẽ đốt hạn mức KV chung của cả tòa nhà tới
+      // cạn, kéo /__register theo → mọi phòng mất heartbeat. Chi tiết lý do và
+      // vì sao không áp trần này cho /api/pair: xem rateLimited() ở trên.
       const body = await readJson(request);
       const tenant = String(body?.user ?? "").trim().toLowerCase();
+      if (await rateLimited(request, "pair-tenant", 10, TENANT_RE.test(tenant) ? tenant : "", 30)) {
+        return json({ code: "rate_limited", message: "Too many sign-in attempts - wait about 1 minute and try again." }, 429);
+      }
       if (!TENANT_RE.test(tenant)) {
         return json({ code: "invalid_credentials", message: "Wrong login name or password." }, 401);
       }
       const record = await env.OWM_STATE.get(`tenant:${tenant}`, "json").catch(() => null);
-      if (!record?.secret || !(await sameSecret(String(body?.secret ?? ""), record.secret))) {
+      if (!(await secretMatches(record, String(body?.secret ?? "")))) {
         return json({ code: "invalid_credentials", message: "Wrong login name or password." }, 401);
       }
+      // Đăng nhập đúng rồi: bản ghi kiểu cũ ({secret} plaintext) được nâng lên
+      // {secretHash} ngay tại đây, không cần ai chạy script dọn dẹp.
+      await upgradeTenantRecord(env, tenant, record);
       return relay(env, `machine:${tenant}`, request, url, body);
     }
 
@@ -268,10 +390,9 @@ async function handle(request, env) {
     // + rate-limit chặn ngập KV nếu URL worker bị lộ.
     if (url.pathname === "/api/tenant/create" && request.method === "POST") {
       // Cửa tạo phòng có thể khóa lại bằng var môi trường ALLOW_ROOM_CREATE.
-      // KHÔNG đặt var (hoặc đặt "1") = mở, y như cũ — không đổi hành vi ai cả.
-      // Chỉ khi đặt "0" thì đóng: phòng đã có vẫn đăng nhập/gõ lại mật khẩu bình
-      // thường, chỉ chặn người lạ tự mở phòng mới lấp đầy 50 slot KV.
-      if (env.ALLOW_ROOM_CREATE === "0") {
+      // Phòng đã có vẫn đăng nhập/gõ lại mật khẩu bình thường (cờ này chỉ
+      // chặn người lạ tự mở phòng mới lấp đầy 50 slot KV).
+      if (roomCreateDisabled(env)) {
         return json({ code: "room_create_disabled", message: "Creating new rooms is turned off on this worker - ask the owner for an invite." }, 403);
       }
       if (await rateLimited(request, "create-room", 5)) {
@@ -290,7 +411,10 @@ async function handle(request, env) {
       if (!name) name = user;
       const existing = await env.OWM_STATE.get(`tenant:${user}`, "json").catch(() => null);
       if (existing) {
-        if (existing.secret && (await sameSecret(secret, existing.secret))) {
+        if (await secretMatches(existing, secret)) {
+          // Gõ lại đúng mật khẩu của phòng đã có = đăng nhập thành công, nên
+          // bản ghi kiểu cũ cũng được nâng lên {secretHash} ở đây luôn.
+          await upgradeTenantRecord(env, user, existing);
           return json({ ok: true, existed: true, user, name: existing.name || name });
         }
         return json({ code: "taken", message: "That room name is already taken and the password does not match." }, 401);
@@ -305,7 +429,10 @@ async function handle(request, env) {
       if (rooms.keys.length >= 50) {
         return json({ code: "full", message: "No room slots left - contact the worker owner." }, 403);
       }
-      await env.OWM_STATE.put(`tenant:${user}`, JSON.stringify({ secret, name, createdAt: Date.now() }));
+      await env.OWM_STATE.put(
+        `tenant:${user}`,
+        JSON.stringify({ secretHash: await sha256Hex(secret), name, createdAt: Date.now() })
+      );
       // KV không có CAS nên hai lần tạo cùng tên có thể cùng thấy `existing =
       // null` rồi cùng put — ai ghi sau thắng. Đọc lại sau khi ghi: nếu secret
       // trên KV khác secret mình vừa ghi thì có người đã chen vào giữa lúc,
@@ -316,7 +443,7 @@ async function handle(request, env) {
       // "taken" khi đã ĐỌC ĐƯỢC bản ghi và secret nó lệch, không kêu khi đọc
       // hụt (`null`).
       const saved = await env.OWM_STATE.get(`tenant:${user}`, "json").catch(() => null);
-      if (saved && !(await sameSecret(secret, saved.secret))) {
+      if (saved && !(await secretMatches(saved, secret))) {
         return json({ code: "taken", message: "Another room just took that name - try a different one." }, 409);
       }
       return json({ ok: true, created: true, user, name });
@@ -334,12 +461,15 @@ async function handle(request, env) {
     // mọi link QR) nhét đầy bucket là chủ máy không ghép được máy mới. Ở bridge
     // cũng không sửa được: relay forward header client gửi nguyên vẹn (trừ host)
     // nên `x-forwarded-for` bịa ra là vượt; IP đáng tin duy nhất là
-    // `cf-connecting-ip` mà worker thấy. Trần 10/phút/IP — cùng mức pair-tenant,
-    // bridge giữ pairLimiter làm mũ sắt thứ hai cho direct-tunnel.
+    // `cf-connecting-ip` mà worker thấy. Trần 10/phút — cùng mức pair-tenant,
+    // bridge giữ pairLimiter làm mũ sắt thứ hai cho direct-tunnel. Bucket tách
+    // theo PHÒNG nữa (scope = tenant): một IP dùng chung cho nhiều nhà (NAT,
+    // vpn công ty) thì đoán sai mật khẩu của phòng này không được dùng hết
+    // lượt ghép máy của phòng khác.
     // Đứng SAU khi đã tách tenant: request không tenant vẫn phải rơi xuống
     // nhánh tenant_required dưới đây, không bị nuốt vào rate limit.
     if (url.pathname === "/api/pair" && request.method === "POST" && tenant) {
-      if (await rateLimited(request, "pair", 10)) {
+      if (await rateLimited(request, "pair", 10, tenant)) {
         return json({ code: "rate_limited", message: "Too many pairing attempts - wait about 1 minute and try again." }, 429);
       }
     }
