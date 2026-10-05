@@ -832,43 +832,78 @@ namespace OpenPocket.Desktop
             provisioning = true;
             ThreadPool.QueueUserWorkItem(delegate {
                 bool ok = false;
-                try
+                // 409 "taken" = có người chen vào giữa lúc ghi trên KV
+                // (worker/src/index.js:320). Tên phòng random 11 ký tự nên hiếm,
+                // nhưng cứ tự đổi tên thử lại tối đa ProvisionNameRetries lần
+                // TRONG LUỒNG NÀY: thành công ở lượt sau thì user không thấy lỗi.
+                const int ProvisionNameRetries = 3;
+                int nameRetry = 0;
+                string user = NewRoomId();
+                string pass = NewSecret();
+                var cfg = LoadConfig();
+                string url = cfg.ContainsKey("lookupUrl") ? Convert.ToString(cfg["lookupUrl"]).Trim().TrimEnd('/') : "";
+                if (string.IsNullOrEmpty(url)) url = DefaultWorkerUrl;
+                var jss = new JavaScriptSerializer();
+                while (true)
                 {
-                    string user = NewRoomId();
-                    string pass = NewSecret();
-                    var cfg = LoadConfig();
-                    string url = cfg.ContainsKey("lookupUrl") ? Convert.ToString(cfg["lookupUrl"]).Trim().TrimEnd('/') : "";
-                    if (string.IsNullOrEmpty(url)) url = DefaultWorkerUrl;
-
-                    var jss = new JavaScriptSerializer();
-                    byte[] body = Encoding.UTF8.GetBytes(jss.Serialize(new Dictionary<string, object> {
-                        { "user", user }, { "secret", pass }, { "name", Environment.MachineName }
-                    }));
-                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url + "/api/tenant/create");
-                    req.Method = "POST";
-                    req.ContentType = "application/json";
-                    req.ContentLength = body.Length;
-                    req.Timeout = 15000;
-                    req.ReadWriteTimeout = 15000;
-                    using (Stream rs = req.GetRequestStream()) rs.Write(body, 0, body.Length);
-                    using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
-                    using (StreamReader sr = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
+                    ok = false;
+                    provisionError = "";
+                    try
                     {
-                        var dict = jss.Deserialize<Dictionary<string, object>>(sr.ReadToEnd());
-                        ok = dict != null && dict.ContainsKey("ok") && Convert.ToBoolean(dict["ok"]);
+                        byte[] body = Encoding.UTF8.GetBytes(jss.Serialize(new Dictionary<string, object> {
+                            { "user", user }, { "secret", pass }, { "name", Environment.MachineName }
+                        }));
+                        HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url + "/api/tenant/create");
+                        req.Method = "POST";
+                        req.ContentType = "application/json";
+                        req.ContentLength = body.Length;
+                        req.Timeout = 15000;
+                        req.ReadWriteTimeout = 15000;
+                        using (Stream rs = req.GetRequestStream()) rs.Write(body, 0, body.Length);
+                        using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
+                        using (StreamReader sr = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
+                        {
+                            var dict = jss.Deserialize<Dictionary<string, object>>(sr.ReadToEnd());
+                            ok = dict != null && dict.ContainsKey("ok") && Convert.ToBoolean(dict["ok"]);
+                        }
+                        if (ok)
+                        {
+                            var save = LoadConfig();
+                            save["lookupTenant"] = user;
+                            save["lookupSecret"] = pass;
+                            save["lookupUrl"] = url;
+                            if (!save.ContainsKey("machineName") || string.IsNullOrEmpty(Convert.ToString(save["machineName"])))
+                                save["machineName"] = Environment.MachineName;
+                            SaveConfig(save);
+                            break;
+                        }
                     }
-                    if (ok)
+                    catch (WebException wex)
                     {
-                        var save = LoadConfig();
-                        save["lookupTenant"] = user;
-                        save["lookupSecret"] = pass;
-                        save["lookupUrl"] = url;
-                        if (!save.ContainsKey("machineName") || string.IsNullOrEmpty(Convert.ToString(save["machineName"])))
-                            save["machineName"] = Environment.MachineName;
-                        SaveConfig(save);
+                        // Lỗi HTTP có body JSON { code, message } — đọc ra mã
+                        // thật rồi dựng câu KÈM CÁCH SỬA (luật dự án: cảnh báo
+                        // không chỉ đường sửa thì user chỉ biết nhìn chằm chằm).
+                        int status = 0;
+                        string code = "";
+                        ReadHttpError(wex, out status, out code);
+                        if (status == 409 && code == "taken" && nameRetry < ProvisionNameRetries)
+                        {
+                            nameRetry++;
+                            user = NewRoomId();
+                            continue;
+                        }
+                        provisionError = ProvisionErrorText(status, code);
+                        break;
                     }
+                    catch (Exception ex)
+                    {
+                        provisionError = ex.Message;
+                        break;
+                    }
+                    // 2xx nhưng body không có ok=true
+                    provisionError = "The identity server rejected the request (check network / lookupUrl)";
+                    break;
                 }
-                catch (Exception ex) { ok = false; provisionError = ex.Message; }
                 if (!ok && provisionError == "")
                     provisionError = "The identity server rejected the request (check network / lookupUrl)";
                 if (ok) provisionError = "";
@@ -880,6 +915,62 @@ namespace OpenPocket.Desktop
                     CheckStatus();
                 });
             });
+        }
+
+        // Rút HTTP status + mã JSON "code" ra khỏi một WebException. Worker trả
+        // lỗi dạng { code, message } (xem worker/src/index.js), nên đọc body ở
+        // đây giúp câu báo lỗi chỉ đúng mã thay vì "(403) Forbidden" trơ trọi.
+        private static void ReadHttpError(WebException wex, out int status, out string code)
+        {
+            status = 0;
+            code = "";
+            HttpWebResponse resp = wex.Response as HttpWebResponse;
+            if (resp == null) return;
+            try
+            {
+                status = (int)resp.StatusCode;
+                string body = "";
+                try
+                {
+                    using (Stream rs = resp.GetResponseStream())
+                    using (StreamReader sr = new StreamReader(rs, Encoding.UTF8))
+                        body = sr.ReadToEnd();
+                }
+                catch { }
+                if (body != "")
+                {
+                    try
+                    {
+                        var dict = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(body);
+                        if (dict != null && dict.ContainsKey("code")) code = Convert.ToString(dict["code"]);
+                    }
+                    catch { }
+                }
+            }
+            finally { try { resp.Close(); } catch { } }
+        }
+
+        // Luật dự án: CẢNH BÁO PHẢI KÈM CÁCH SỬA. Mỗi mã lỗi của worker có một
+        // câu riêng — đọc xong biết ngay làm gì tiếp (bấm ↻, đợi, hay hỏi chủ
+        // worker). Không map được thì vẫn phải có "bấm ↻" trong câu.
+        private static string ProvisionErrorText(int status, string code)
+        {
+            if (status == 403 && code == "room_create_disabled")
+                return "Room creation is turned off on the worker. Ask the worker owner to re-enable it (ALLOW_ROOM_CREATE).";
+            if (status == 409 && code == "taken")
+                return "That room name was taken while creating. Press Retry - the app will pick a new name automatically.";
+            if (status == 429 && code == "rate_limited")
+                return "Too many attempts - wait a minute and press Retry.";
+            if (status == 503 || status == 502)
+                return "Worker unreachable - check your connection and press Retry.";
+            // 403 "full": hết 50 slot phòng trên worker — cùng dạng "không tự
+            // sửa được, phải hỏi chủ worker", nên cũng phải kèm đường sửa.
+            if (status == 403 && code == "full")
+                return "No room slots left on the worker - ask the worker owner for an invite.";
+            if (status == 0)
+                return "Cannot reach the identity server - check your connection, then press Retry.";
+            return string.Format("The identity server answered {0}{1}. Press Retry.",
+                status, code == "" ? "" : " (" + code + ")");
         }
 
         private static string NewRoomId()
