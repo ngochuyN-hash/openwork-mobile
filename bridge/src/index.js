@@ -9,6 +9,7 @@ import { startLookup } from "./lookup.js";
 import { PairingService, CODE_TTL_MINUTES } from "./pairing.js";
 import { launchOpenWork } from "./openwork-launch.js";
 import { rotateStaleLogs, scheduleDailyWipe, wipeLogs } from "./logwipe.js";
+import { redactUrl, redactSecrets } from "./log-safe.js";
 import { createApp } from "./app.js";
 import { startRateLimitSweep } from "./rate-limit.js";
 import { createStaticHandler } from "./static.js";
@@ -85,7 +86,7 @@ async function refreshDiscovery({ force = false } = {}) {
         config.lastServerPort = Number(new URL(found.baseUrl).port) || 0;
         saveConfig(config);
       }
-      console.log(`[bridge] openwork-server found at ${found.baseUrl} (v${found.version}, opencode ${found.opencodeVersion})`);
+      console.log(`[bridge] openwork-server found at ${redactUrl(found.baseUrl)} (v${found.version}, opencode ${found.opencodeVersion})`);
     }
   }
   if (state.server && !state.tokenActive) {
@@ -137,7 +138,7 @@ await refreshDiscovery();
 // autostart). Discovery loop 5s có sẵn sẽ tự bắt server khi app mở xong.
 if (config.autoLaunchOpenWork && !state.server) {
   launchOpenWork({ configOpenworkExe: config.openworkExe }).catch((error) =>
-    console.error(`[openwork] auto-launch at startup failed: ${error.message}`)
+    console.error(`[openwork] auto-launch at startup failed: ${redactSecrets(error.message)}`)
   );
 }
 
@@ -194,14 +195,21 @@ function printPairing(base, note, { withMaster = false } = {}) {
   console.log("");
   if (note) console.log(note);
   console.log(`  Device pairing QR (one-time code, expires after ${CODE_TTL_MINUTES} minutes):`);
-  console.log(`  ${pairingUrl}`);
+  // Dòng URL để copy TAY thì in bản đã che (#p= chỉ còn 4 ký tự đầu) — link
+  // dán tay là đường phụ, QR ngay dưới là đường chính và QR giữ nguyên mã thật.
+  console.log(`  ${redactUrl(pairingUrl)}`);
+  // Dòng này CỐ TÌNH giữ mã đầy đủ: nó là chỗ nhập tay trên điện thoại, mã
+  // one-time sống 30 phút (CODE_TTL_MINUTES) nên không phải bí mật vĩnh viễn,
+  // và chỉ in khi stdout là TTY (tức người chủ máy đang ngồi trước máy).
   console.log(`  Pairing code: ${code.slice(0, 4)}-${code.slice(4)}`);
   console.log("");
   qrcode.generate(pairingUrl, { small: true });
   if (withMaster) {
     const masterUrl = `${base}/#t=${config.mobileToken}${tenantHashSuffix()}`;
     console.log("  MASTER QR (permanent token - local machine only, NEVER share it):");
-    console.log(`  ${masterUrl}`);
+    // Mobile token vĩnh viễn -> dòng text phải che, QR giữ nguyên (chủ máy
+    // quét bằng máy của mình, không ai đọc được log).
+    console.log(`  ${redactUrl(masterUrl)}`);
     console.log("");
     qrcode.generate(masterUrl, { small: true });
   }
@@ -220,7 +228,7 @@ const onListening = () => {
   console.log("");
   console.log(`OpenWork Mobile bridge v${BRIDGE_VERSION}`);
   console.log(`listening on ${local} (localhost only - remote access goes through the tunnel below)`);
-  console.log(`openwork-server: ${state.server ? state.server.baseUrl : "not found yet (waiting for OpenWork...)"}`);
+  console.log(`openwork-server: ${state.server ? redactUrl(state.server.baseUrl) : "not found yet (waiting for OpenWork...)"}`);
   console.log(`token status: ${state.tokenActive ? "ACTIVE" : state.restartRequired ? "needs OpenWork restart (one time)" : "pending"}`);
   // QR thứ 1 (mã one-time 30 phút): để ghép thiết bị mới — hết hạn tự chết.
   // QR thứ 2 (master token): vĩnh viễn, chỉ in tại máy để chủ máy tiện tay
@@ -244,14 +252,14 @@ const onListening = () => {
         tunnel.getState = () => controller.getState();
         tunnel.restart = () => controller.restart();
       })
-      .catch((error) => console.error(`[tunnel] error: ${error.message}`));
+      .catch((error) => console.error(`[tunnel] error: ${redactSecrets(error.message)}`));
   }
 
   // Heartbeat lên Cloudflare Worker (địa chỉ cố định) nếu đã cấu hình:
   // điện thoại mở đúng 1 URL duy nhất, tự tìm được bridge dù tunnel đổi.
   if (config.lookupUrl && config.lookupSecret) {
     console.log(
-      `[lookup] reporting to ${config.lookupUrl}${config.lookupTenant ? ` (room: ${config.lookupTenant})` : ""}`
+      `[lookup] reporting to ${redactUrl(config.lookupUrl)}${config.lookupTenant ? ` (room: ${config.lookupTenant})` : ""}`
     );
     startLookup({
       getUrl: () => state.tunnelUrl,
@@ -273,7 +281,7 @@ server.on("error", (err) => {
   if (err.code !== "EADDRINUSE") {
     // Throwing inside this handler falls into the uncaughtException net: the
     // process would linger alive while listening on NOTHING. Exit loudly.
-    console.error(`[listener] cannot listen on port ${config.port} (${err.code ?? "no_code"}): ${err.message} - exiting.`);
+    console.error(`[listener] cannot listen on port ${config.port} (${err.code ?? "no_code"}): ${redactSecrets(err.message)} - exiting.`);
     process.exit(1);
   }
   const retry = () => {
@@ -303,9 +311,12 @@ process.on("SIGINT", () => {
 
 // Lưới an toàn: bridge là tiến trình dài hạn, một lỗi bất ngờ không được làm
 // chết nó. Log và tiếp tục.
+// Lỗi tới từ proxy/tunnel có thể nhúng URL đã mang token trong message/stack,
+// nên in qua redactSecrets (cùng lý do mọi log khác: stdout của task VBS nằm
+// trong bridge-task.log trên đĩa).
 process.on("uncaughtException", (error) => {
-  console.error("[bridge] uncaughtException:", error);
+  console.error("[bridge] uncaughtException:", redactSecrets(String(error?.stack ?? error)));
 });
 process.on("unhandledRejection", (error) => {
-  console.error("[bridge] unhandledRejection:", error);
+  console.error("[bridge] unhandledRejection:", redactSecrets(String(error?.stack ?? error)));
 });

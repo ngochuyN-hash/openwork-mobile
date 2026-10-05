@@ -1,5 +1,6 @@
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -68,11 +69,45 @@ export function loadConfig() {
   return config;
 }
 
+/**
+ * Siết quyền đọc config.json — nó chứa token plaintext (owm_/owt_) và
+ * chủ nhà đã chốt GIỮ plaintext (GUI C# đọc thẳng). Đây chỉ là lớp
+ * hardening, KHÔNG phải điều kiện chạy được: hỏng thì cảnh báo 1 dòng rồi
+ * bỏ qua, tuyệt đối không ném — bridge vẫn phải lên.
+ */
+export function hardenConfigFile(file) {
+  try {
+    if (process.platform !== "win32") {
+      // 600 = chỉ owner được đọc/ghi.
+      chmodSync(file, 0o600);
+      return;
+    }
+    // Windows: bỏ quyền kế thừa, chỉ chừa user hiện tại (Full control).
+    // spawn() + mảng tham số + windowsHide: KHÔNG shell, KHÔNG ghép chuỗi
+    // (nên tên user/đường dẫn không thể chèn thêm lệnh), và không mở cửa sổ
+    // console lấp loáy. Fire-and-forget: không chặn luồng ghi config.
+    const user = (process.env.USERNAME || "").trim();
+    if (!user) return;
+    const child = spawn("icacls", [file, "/inheritance:r", "/grant:r", `${user}:F`], {
+      windowsHide: true,
+      stdio: "ignore",
+      // Chặn kẹt: icacls mà treo thì bỏ sau 10s, không nuôi bridge.
+      timeout: 10_000,
+    });
+    child.on("error", (error) => {
+      console.warn(`[config] khong siet ACL cho config.json: ${error.message}`);
+    });
+  } catch (error) {
+    console.warn(`[config] khong siet ACL cho config.json: ${error.message}`);
+  }
+}
+
 export function saveConfig(config) {
   const dir = bridgeDataDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const file = join(dir, CONFIG_FILE);
   writeFileSync(file, JSON.stringify(config, null, 2) + "\n", "utf8");
+  hardenConfigFile(file);
   return file;
 }
 
