@@ -259,8 +259,11 @@ from a phone. Removed entirely, not hidden:
 - Deleted `web/src/lib/session-organize.js` and its test (28 cases — no other
   caller was left). Stale `pinned`/`archived` flags sitting in a device's
   localStorage are simply ignored now.
-- Server side untouched: the bridge still whitelists `/session-groups` — dead
-  but harmless plumbing, no bridge restart spent on it.
+- Server side cleaned the same day: `bridge/src/proxy.js` drops `session-groups`
+  from the proxy whitelist (the engine keeps the endpoint; the bridge just stops
+  forwarding it to phones) and the whitelist test now asserts the path is
+  denied. The proxy/auth/startup test files are green (45 tests). No bridge
+  restart was spent — it picks the change up on the next one.
 
 Web suite all green (340 tests). Verified in the browser on the built bundle:
 plain session rows, chat page unaffected.
@@ -1041,7 +1044,7 @@ The phone opens **exactly 1 fixed URL** (`https://YOUR-WORKER.workers.dev`) → 
 | `POST /api/openwork/path` | owm_/owd_ (rate-limit 5/min/IP, shared with wake) | Point the bridge at the OpenWork.exe the phone can't find. Body `{path}` → saves `config.openworkExe` and returns `{ok, openwork}` (same shape `/api/state` sends). **Stores only, never spawns** — but the stored value IS what wake/boot spawn, so validation is: string, non-empty, quotes stripped (`normalizeExePathInput`), ≤400 chars, `existsSync`, `statSync().isFile()` **and `isOpenWorkExeName()`** (file named exactly `OpenWork.exe`). 400 `invalid_path` / `not_found` / `not_a_file` / `not_openwork_exe` / `invalid_body` / `fs_error`, each with a Vietnamese `message` the web shows verbatim |
 | `GET /api/fs/ls?path=` | owm_/owd_ | Browse the computer's folders. No `path` → `{isWindows, home, roots[], quick[]}`; with `path` → `{path, parent, name, dirs[]}` (dirs only). Errors: 404 ENOENT/ENOTDIR, 403 EACCES |
 | `POST /api/fs/mkdir` | owm_/owd_ | Create a folder `{dir, name}` → `{path, name}`. 400 EEXIST/EINVAL (name clash/forbidden chars), 403 EACCES |
-| `/api/ow/<path>` | owm_ (header or `?_t=` for GET) | Proxy to openwork-server. Whitelist: `/workspaces*`, `/workspace/:id/(events|session-groups|files|opencode/*|engine/reload|artifacts|inbox)`, `/approvals*`, `/files/sessions/*`, `/experimental/(ui-control|extensions)`, `/status`, `/capabilities`, `/whoami`, `/health` |
+| `/api/ow/<path>` | owm_ (header or `?_t=` for GET) | Proxy to openwork-server. Whitelist: `/workspaces*`, `/workspace/:id/(events|files|opencode/*|engine/reload|artifacts|inbox)`, `/approvals*`, `/files/sessions/*`, `/experimental/(ui-control|extensions)`, `/status`, `/capabilities`, `/whoami`, `/health` |
 
 ## Frequently used openwork-server endpoints (via `/api/ow/`)
 

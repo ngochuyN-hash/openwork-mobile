@@ -34,7 +34,6 @@ test("proxy whitelist allows management paths, blocks everything else", () => {
   const allow = [
     "/workspaces",
     "/workspaces/local",
-    "/workspace/ws_1/session-groups",
     "/workspace/ws_1/opencode/session",
     "/workspace/ws_1/opencode/session/ses_1/message",
     "/workspace/ws_1/files/content",
@@ -51,6 +50,8 @@ test("proxy whitelist allows management paths, blocks everything else", () => {
     "/env",
     "/dev/log",
     "/workspace/ws_1/secret",
+    // session-groups ra khỏi whitelist cùng tính năng nhóm phiên trên web (05/10)
+    "/workspace/ws_1/session-groups",
     "/workspace/ws_1/opencode/../../hack",
     "/runtime/upgrade",
   ];
