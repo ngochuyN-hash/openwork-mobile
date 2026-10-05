@@ -1,5 +1,27 @@
 # CODE_SUMMARY — OpenWork Mobile
 
+## Desktop GUI stuck on "Cloudflare Tunnel: Connecting..." — 2026-10-05 (desktop only)
+
+Symptom: with the bridge running as the scheduled task (the normal case), the
+OpenPocket GUI status card stayed amber on **"Cloudflare Tunnel: Connecting..."**
+forever, even though the tunnel was up and the phone could reach the bridge
+through it.
+
+Root cause: `2a202a3` (the simplification pivot) made `printPairing()` return
+early when stdout is not a TTY — correct for keeping tokens/QRs out of log
+files, but a task-run bridge therefore never prints the
+`[tunnel] NEW public URL` line into `bridge-task.log`. The GUI read the tunnel
+URL **only** by scanning the log tail, so it found nothing and fell back to
+"Connecting...".
+
+Fix (`desktop/src/OpenPocket.cs`): the GUI now reads the URL from
+`%APPDATA%/openwork-bridge/tunnel-state.json` first — the bridge writes
+`phase: "up"` + the live `url` there on every capture, and the GUI already read
+that file for the 429-backoff hint — and only falls back to the log scan. The
+bridge is untouched, so the running tunnel URL stays valid and phones do not
+need to re-pair. Rebuilt `bin/OpenPocket.exe`, swapped the live GUI (one UAC
+prompt), verified on screen: green tunnel line with the live URL.
+
 ## Denser session list, filter row and bottom nav — 2026-10-04 (web only)
 
 Owner: *"mỗi tab session cũng đang cao và to quá"*. Three surfaces shrank;

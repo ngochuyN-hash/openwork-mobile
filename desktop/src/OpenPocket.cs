@@ -1061,11 +1061,15 @@ namespace OpenPocket.Desktop
             // lệnh lưu đang bay, kẻo ghi đè mất chữ user đang gõ
             currentTenant = config.ContainsKey("lookupTenant") ? Convert.ToString(config["lookupTenant"]) : "";
 
-            // 3. Đọc tunnel URL từ log — nhưng nếu tunnel-state.json đang báo
-            // backoff 429 thì ưu tiên cảnh báo. Nút Restart tunnel cho phép
-            // chủ động thử ngay (bridge vẫn sống, chỉ cloudflared được thay).
+            // 3. Đọc tunnel URL: nguồn chính là tunnel-state.json (bridge tự ghi
+            // URL vào đó mỗi lần bắt được tunnel), quét log chỉ là dự phòng —
+            // bridge chạy bằng task scheduler thì stdout không phải TTY nên
+            // printPairing bỏ qua, log KHÔNG còn dòng URL nào để quét và dòng
+            // trạng thái kẹt "Connecting..." mãi dù tunnel đã lên. Nút Restart
+            // tunnel vẫn cho phép chủ động thử ngay khi 429.
             int backoffMin = ReadTunnelBackoffMinutes();
-            tunnelUrl = ReadTunnelUrlFromLog();
+            tunnelUrl = ReadTunnelUrlFromState();
+            if (string.IsNullOrEmpty(tunnelUrl)) tunnelUrl = ReadTunnelUrlFromLog();
             if (backoffMin > 0)
             {
                 lblStatusTunnel.Text = "● Cloudflare: waiting to reopen the tunnel (429)";
@@ -1234,6 +1238,24 @@ namespace OpenPocket.Desktop
                     }
                 }
                 return best;
+            }
+            catch { }
+            return "";
+        }
+
+        // tunnel-state.json do bridge/src/tunnel.js ghi mỗi lần đổi pha — khi
+        // tunnel đang sống file luôn mang phase "up" + URL hiện tại. Trả URL đó,
+        // rỗng khi file thiếu / pha không phải "up" (backoff để nhánh 429 lo).
+        private string ReadTunnelUrlFromState()
+        {
+            try
+            {
+                string path = Path.Combine(GetBridgeDataDir(), "tunnel-state.json");
+                if (!File.Exists(path)) return "";
+                string content = File.ReadAllText(path);
+                if (!Regex.IsMatch(content, @"""phase""\s*:\s*""up""")) return "";
+                Match url = Regex.Match(content, @"""url""\s*:\s*""(https://[a-z0-9-]+\.trycloudflare\.com)""");
+                return url.Success ? url.Groups[1].Value : "";
             }
             catch { }
             return "";
