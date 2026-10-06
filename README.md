@@ -203,7 +203,7 @@ web/             # PWA Preact + Vite → builds to web/dist served by the bridge
   test/          # real unit suites — 27 files, 443 tests (api contract + blob cache · markdown · chat stream · chat events + file refs · session helpers · file viewer · contract fixture)
   .zcode/skills/ # pwa-workspace-ui: internal design skill (tokens · ui-rules · pwa-checklist)
 desktop/         # OpenPocket.exe — native WinForms GUI (built by csc.exe, zero deps): ONE page — status · bridge start/stop/autostart · self-provisioned identity · QR pairing (bridge is zero-dependency since 06/10 — qrcode-terminal vendored in bridge/src/vendor, no npm install ever). No login/rooms (removed 13/09)
-shared/          # API contract, ONE source of truth for all runtimes: link shapes (#p/#t/&m), x-owm-* headers, cross-layer error codes, token prefixes + buildPairingUrl() — imported by bridge + web; worker pinned by web/test/contract-fixture.test.js
+shared/          # API contract, ONE source of truth for all runtimes: link shapes (#p/#t/&m), x-owm-* headers, cross-layer error codes, token prefixes + buildPairingUrl() — imported by bridge, web AND worker; drift-guarded by web/test/contract-fixture.test.js
 README.md        # this file
 CODE_SUMMARY.md  # code map + the "symptom → where to fix" table
 ```

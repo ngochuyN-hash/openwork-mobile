@@ -24,6 +24,11 @@
 // thẳng tới tunnel của phòng (kèm header auth nguyên vẹn — khóa vẫn do bridge
 // kiểm tra, worker KHÔNG giữ khóa của ai cả). Static phục vụ từ web/dist.
 
+// Hợp đồng dùng chung với bridge + web (mã lỗi xuyên tầng, tên header, ?_m=):
+// một nguồn chân lý ở shared/contract.js — wrangler/esbuild bundle theo
+// relative import bình thường.
+import { ErrorCode, HEADER_TENANT, HEADER_BRIDGE_SECRET, HEADER_INVITE, TENANT_QUERY_KEY } from "../../shared/contract.js";
+
 const MAIN_KEY = "machine:main";
 const STALE_MS = 20 * 60 * 1000; // bridge heartbeat 15 phút/lần — quá 20 phút coi như offline
 const TENANT_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
@@ -220,13 +225,13 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
       return json({ code: "unpaired", message: "This room was deleted - pair again with a new pairing code." }, 401);
     }
     return json(
-      { code: "bridge_offline", message: "This room's computer has not registered, or has been offline for over 20 minutes." },
+      { code: ErrorCode.BRIDGE_OFFLINE, message: "This room's computer has not registered, or has been offline for over 20 minutes." },
       503
     );
   }
   if (Date.now() - machine.updatedAt > STALE_MS) {
     return json(
-      { code: "bridge_offline", message: "This room's computer has not registered, or has been offline for over 20 minutes." },
+      { code: ErrorCode.BRIDGE_OFFLINE, message: "This room's computer has not registered, or has been offline for over 20 minutes." },
       503
     );
   }
@@ -236,7 +241,7 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
     const waitMin = machine.retryAt ? Math.max(1, Math.ceil((machine.retryAt - Date.now()) / 60_000)) : null;
     return json(
       {
-        code: "tunnel_down",
+        code: ErrorCode.TUNNEL_DOWN,
         message: `The computer is on and the bridge is alive, but Cloudflare is temporarily blocking tunnel creation (429 rate limit). The bridge retries on its own${
           waitMin ? ` (next try in ~${waitMin} min)` : ""
         } - do not restart the bridge, restarting only makes it longer.`,
@@ -263,7 +268,7 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
     if ([520, 521, 522, 523, 524, 525, 527, 530].includes(response.status)) {
       return json(
         {
-          code: "tunnel_down",
+          code: ErrorCode.TUNNEL_DOWN,
           message: "The tunnel to your computer just broke - the bridge opens a new one within a few minutes and your phone reconnects by itself. Do not restart the bridge.",
         },
         502
@@ -336,13 +341,13 @@ async function handle(request, env) {
     if (tenant) {
       if (!TENANT_RE.test(tenant)) return json({ error: "invalid_tenant" }, 400);
       const record = await env.OWM_STATE.get(`tenant:${tenant}`, "json").catch(() => null);
-      if (!(await secretMatches(record, request.headers.get("x-owm-secret")))) {
+      if (!(await secretMatches(record, request.headers.get(HEADER_BRIDGE_SECRET)))) {
         return json({ error: "unauthorized" }, 401);
       }
       return storeRegister(env, `machine:${tenant}`, body);
     }
     // Luồng cũ của chủ worker (không tenant): secret môi trường -> machine:main
-    if (!env.BRIDGE_SECRET || !(await sameSecret(request.headers.get("x-owm-secret"), env.BRIDGE_SECRET))) {
+    if (!env.BRIDGE_SECRET || !(await sameSecret(request.headers.get(HEADER_BRIDGE_SECRET), env.BRIDGE_SECRET))) {
       return json({ error: "unauthorized" }, 401);
     }
     return storeRegister(env, MAIN_KEY, body);
@@ -369,14 +374,14 @@ async function handle(request, env) {
       const body = await readJson(request);
       const tenant = String(body?.user ?? "").trim().toLowerCase();
       if (await rateLimited(request, "pair-tenant", 10, TENANT_RE.test(tenant) ? tenant : "", 30)) {
-        return json({ code: "rate_limited", message: "Too many sign-in attempts - wait about 1 minute and try again." }, 429);
+        return json({ code: ErrorCode.RATE_LIMITED, message: "Too many sign-in attempts - wait about 1 minute and try again." }, 429);
       }
       if (!TENANT_RE.test(tenant)) {
-        return json({ code: "invalid_credentials", message: "Wrong login name or password." }, 401);
+        return json({ code: ErrorCode.INVALID_CREDENTIALS, message: "Wrong login name or password." }, 401);
       }
       const record = await env.OWM_STATE.get(`tenant:${tenant}`, "json").catch(() => null);
       if (!(await secretMatches(record, String(body?.secret ?? "")))) {
-        return json({ code: "invalid_credentials", message: "Wrong login name or password." }, 401);
+        return json({ code: ErrorCode.INVALID_CREDENTIALS, message: "Wrong login name or password." }, 401);
       }
       // Đăng nhập đúng rồi: bản ghi kiểu cũ ({secret} plaintext) được nâng lên
       // {secretHash} ngay tại đây, không cần ai chạy script dọn dẹp.
@@ -399,7 +404,7 @@ async function handle(request, env) {
         return json({ code: "room_create_disabled", message: "Creating new rooms is turned off on this worker - ask the owner for an invite." }, 403);
       }
       if (await rateLimited(request, "create-room", 5)) {
-        return json({ code: "rate_limited", message: "Too many rooms created - wait about 1 minute and try again." }, 429);
+        return json({ code: ErrorCode.RATE_LIMITED, message: "Too many rooms created - wait about 1 minute and try again." }, 429);
       }
       // Khóa chính của cửa: mã mời ROOM_CREATE_KEY (secret trên dashboard,
       // KHÔNG nằm trong repo) phải khớp header x-owm-invite mà exe chủ worker
@@ -407,11 +412,11 @@ async function handle(request, env) {
       // secret = cửa đóng luôn — an toàn khi quên cấu hình, người lạ chỉ biết
       // URL không mở được phòng. Đặt SAU rate-limit để lượt dò mã vẫn bị đếm.
       const expectedInvite = String(env.ROOM_CREATE_KEY ?? "").trim();
-      const gotInvite = (request.headers.get("x-owm-invite") || "").trim();
+      const gotInvite = (request.headers.get(HEADER_INVITE) || "").trim();
       if (!expectedInvite || !gotInvite || !(await sameSecret(gotInvite, expectedInvite))) {
         return json(
           {
-            code: "invite_required",
+            code: ErrorCode.INVITE_REQUIRED,
             message: expectedInvite
               ? "Only the owner's app build can create rooms here - the invite key was missing or wrong."
               : "This worker has no ROOM_CREATE_KEY configured yet - the owner must set it (dashboard secret) before rooms can be created.",
@@ -470,11 +475,11 @@ async function handle(request, env) {
       return json({ ok: true, created: true, user, name });
     }
 
-    const tenant = (request.headers.get("x-owm-tenant") || url.searchParams.get("_m") || "")
+    const tenant = (request.headers.get(HEADER_TENANT) || url.searchParams.get(TENANT_QUERY_KEY) || "")
       .trim()
       .toLowerCase();
     if (tenant && !TENANT_RE.test(tenant)) {
-      return json({ code: "bridge_offline", message: "Invalid machine code (room)." }, 503);
+      return json({ code: ErrorCode.BRIDGE_OFFLINE, message: "Invalid machine code (room)." }, 503);
     }
     // Ghép thiết bị qua /api/pair: chặn theo IP thật Ở ĐÂY chứ không ở bridge.
     // Mọi request đi qua cloudflared về bridge đều mang 127.0.0.1 nên pairLimiter
@@ -491,7 +496,7 @@ async function handle(request, env) {
     // nhánh tenant_required dưới đây, không bị nuốt vào rate limit.
     if (url.pathname === "/api/pair" && request.method === "POST" && tenant) {
       if (await rateLimited(request, "pair", 10, tenant)) {
-        return json({ code: "rate_limited", message: "Too many pairing attempts - wait about 1 minute and try again." }, 429);
+        return json({ code: ErrorCode.RATE_LIMITED, message: "Too many pairing attempts - wait about 1 minute and try again." }, 429);
       }
     }
 
@@ -509,7 +514,7 @@ async function handle(request, env) {
       // sign-in tab is gone, so do not send anyone looking for it.
       return json(
         {
-          code: "tenant_required",
+          code: ErrorCode.TENANT_REQUIRED,
           message:
             "Missing room (tenant) - rescan the QR or reopen the FULL pairing/master link from your computer (the link always carries &m=<room>). Links or keys that lost the room cannot get in through the worker.",
         },

@@ -1,13 +1,13 @@
 // Fixture hợp đồng 3 tầng (bridge / web / worker) — xem shared/contract.js.
 //
-// Worker CHƯA import được contract (đang giữa đợt WIP — esbuild bundle theo
-// relative import ra ngoài worker/ là được, nhưng chưa chuyển), nên những giá
-// trị worker phát ra vẫn là literal trong worker/src/index.js. Test này KHOÁ
-// literal đó vào giá trị canonical: ai đổi mã lỗi/header ở worker mà quên đổi
-// contract (hoặc ngược lại) thì test đỏ NGAY — đúng cái trôi dạt mà review
-// kiến trúc 03/10 (candidate 4) lo. Khi worker đã `import ... from
-// "../../shared/contract.js"` thì thay phần khoá literal bằng assert worker
-// không còn literal trôi nổi.
+// Cả BA tầng giờ đều nói chuyện bằng contract: bridge + web import trực tiếp,
+// worker import qua esbuild bundle (wrangler). Test này giữ 2 lớp bảo vệ:
+//  1. giá trị canonical trong shared/contract.js khóa cứng — đổi tên là phải
+//     sửa chủ đích;
+//  2. worker không được còn literal xuyên tầng trôi nổi (mã lỗi/header/?_m=
+//     phải đi qua ErrorCode/header constants), và test relay của worker — vốn
+//     chạy HTTP mock KHÔNG import contract — vẫn khẳng định ĐÚNG giá trị
+//     canonical từ phía bên kia dây.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -61,23 +61,26 @@ test("contract: link bridge dựng thì web parser đọc được (build -> par
   assert.deepEqual(masterParsed, { value: "owm_deadbeef", tenant: "" });
 });
 
-test("contract: worker phát đúng mã lỗi/header như contract (khoá literal tới khi worker import contract)", () => {
+test("contract: worker đã import contract — không còn literal xuyên tầng trôi nổi", () => {
   const workerSrc = readFileSync(join(ROOT, "worker", "src", "index.js"), "utf8");
-  // Mỗi mã lỗi xuyên tầng: literal trong worker PHẢI đúng bằng giá trị canonical.
-  const workerCodes = {
-    TENANT_REQUIRED: "tenant_required",
-    TUNNEL_DOWN: "tunnel_down",
-    INVALID_CREDENTIALS: "invalid_credentials",
-    RATE_LIMITED: "rate_limited",
-    BRIDGE_OFFLINE: "bridge_offline",
-    INVITE_REQUIRED: "invite_required",
-  };
-  for (const [key, literal] of Object.entries(workerCodes)) {
-    assert.equal(ErrorCode[key], literal, `ErrorCode.${key} trôi khỏi worker: ${literal}`);
-    assert.ok(workerSrc.includes(`"${literal}"`), `worker mất mã lỗi "${literal}"`);
+  assert.ok(
+    workerSrc.includes('from "../../shared/contract.js"'),
+    "worker/src/index.js phải import shared/contract.js"
+  );
+  // Mã lỗi xuyên tầng CHỈ được dùng qua ErrorCode.* — literal trôi nổi là drift.
+  for (const literal of Object.values(ErrorCode)) {
+    assert.ok(!workerSrc.includes(`code: "${literal}"`), `worker còn literal code: "${literal}"`);
   }
   for (const header of [HEADER_TENANT, HEADER_BRIDGE_SECRET, HEADER_INVITE]) {
-    assert.ok(workerSrc.includes(header), `worker mất header ${header}`);
+    assert.ok(!workerSrc.includes(`"${header}"`), `worker còn literal header "${header}"`);
   }
-  assert.ok(workerSrc.includes(TENANT_QUERY_KEY), "worker mất query key ?_m=");
+  assert.ok(!workerSrc.includes('searchParams.get("_m")'), "worker còn literal ?_m=");
+  // Bên bảo vệ thứ hai: test relay của worker chạy HTTP mock, KHÔNG import
+  // contract — nó phải vẫn khẳng định ĐÚNG giá trị canonical từ phía dây.
+  // (relay.test.mjs chỉ phủ 3 mã này: tunnel_down/bridge_offline được bảo vệ
+  // bởi assert "không còn literal" ở trên.)
+  const relayTest = readFileSync(join(ROOT, "worker", "test", "relay.test.mjs"), "utf8");
+  for (const literal of ["tenant_required", "rate_limited", "invalid_credentials"]) {
+    assert.ok(relayTest.includes(`"${literal}"`), `relay test mất assertion cho "${literal}"`);
+  }
 });
