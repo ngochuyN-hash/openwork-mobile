@@ -198,9 +198,9 @@ worker/          # Cloudflare Worker "openpocket" — fixed URL + multi-tenant
   scripts/tenant.mjs # issue/delete rooms (user/pass accounts) on KV
 web/             # PWA Preact + Vite → builds to web/dist served by the bridge
   src/pages/     # pairing (two ways in: 8-char code / permanent key + room box) · workspaces · sessions · chat · files · settings (bridge status + paired devices)
-  src/components/# ui.jsx (Loading/Skeleton/Empty/Banner/Confirm/SwipeRow) · icons.jsx (SVG set) · model-picker.jsx
-  src/lib/       # pure, unit-tested logic — blob-cache (object-URL LRU for file previews) · markdown · sse · chat-stream · chat-scroll · file-viewer · session-* · route · net · settings-state
-  test/          # real unit suites — 25 files, 435 tests (api contract + blob cache · markdown · chat stream · session helpers · file viewer · contract fixture)
+  src/components/# ui.jsx (Loading/Skeleton/Empty/Banner/Confirm/SwipeRow) · icons.jsx (SVG set) · model-picker.jsx · chat-message-parts.jsx · chat-sheets.jsx
+  src/lib/       # pure, unit-tested logic — blob-cache (object-URL LRU for file previews) · markdown · sse · chat-stream · chat-events · chat-file-refs · chat-scroll · file-viewer · session-* · route · net · settings-state
+  test/          # real unit suites — 27 files, 443 tests (api contract + blob cache · markdown · chat stream · chat events + file refs · session helpers · file viewer · contract fixture)
   .zcode/skills/ # pwa-workspace-ui: internal design skill (tokens · ui-rules · pwa-checklist)
 desktop/         # OpenPocket.exe — native WinForms GUI (built by csc.exe, zero deps): ONE page — status · bridge start/stop/autostart · self-provisioned identity · QR pairing (bridge is zero-dependency since 06/10 — qrcode-terminal vendored in bridge/src/vendor, no npm install ever). No login/rooms (removed 13/09)
 shared/          # API contract, ONE source of truth for all runtimes: link shapes (#p/#t/&m), x-owm-* headers, cross-layer error codes, token prefixes + buildPairingUrl() — imported by bridge + web; worker pinned by web/test/contract-fixture.test.js
