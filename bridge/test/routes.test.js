@@ -69,7 +69,6 @@ async function withApp(configPatch, run, depsPatch = {}) {
     refreshDiscovery: async () => {},
     tunnel,
     getBaseUrl: () => "http://127.0.0.1:8788",
-    tenantHashSuffix: () => "",
     ...depsPatch,
   });
   server.requestTimeout = 0;

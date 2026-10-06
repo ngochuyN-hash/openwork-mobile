@@ -191,7 +191,7 @@ The OTA self-update system was removed: the updater module, the rollback watchdo
 ```
 bridge/          # Node.js — discovery, token bootstrap, proxy, static, QR
   src/           # index.js (entry: boot → discovery → listen) · app.js (route table + auth gate) · routes/ (pairing · status · openwork · fs · proxy) · router.js · rate-limit.js · http-util.js · proxy.js · discovery.js · bootstrap.js · auth.js · pairing.js · fslist.js · tunnel.js · lookup.js · openwork-version.js · logwipe.js …
-  test/          # unit tests — 16 files, 86 tests (npm test)
+  test/          # unit tests — 21 files, 111 tests (npm test)
   scripts/       # e2e-live.mjs, dbg-prompt.mjs (live tests against a real OpenWork)
 worker/          # Cloudflare Worker "openpocket" — fixed URL + multi-tenant
   src/index.js   # /__register (room check-in) · /api/* (per-room relay) · serves the web app
@@ -200,9 +200,10 @@ web/             # PWA Preact + Vite → builds to web/dist served by the bridge
   src/pages/     # pairing (two ways in: 8-char code / permanent key + room box) · workspaces · sessions · chat · files · settings (bridge status + paired devices)
   src/components/# ui.jsx (Loading/Skeleton/Empty/Banner/Confirm/SwipeRow) · icons.jsx (SVG set) · model-picker.jsx
   src/lib/       # pure, unit-tested logic — blob-cache (object-URL LRU for file previews) · markdown · sse · chat-stream · chat-scroll · file-viewer · session-* · route · net · settings-state
-  test/          # real unit suites — 24 files, 432 tests (api contract + blob cache · markdown · chat stream · session helpers · file viewer)
+  test/          # real unit suites — 25 files, 435 tests (api contract + blob cache · markdown · chat stream · session helpers · file viewer · contract fixture)
   .zcode/skills/ # pwa-workspace-ui: internal design skill (tokens · ui-rules · pwa-checklist)
-desktop/         # OpenPocket.exe — native WinForms GUI (built by csc.exe, zero deps): ONE page — status · bridge start/stop/autostart · self-provisioned identity · QR pairing (node_modules ships inside the Setup installer — no npm install at first run). No login/rooms (removed 13/09)
+desktop/         # OpenPocket.exe — native WinForms GUI (built by csc.exe, zero deps): ONE page — status · bridge start/stop/autostart · self-provisioned identity · QR pairing (bridge is zero-dependency since 06/10 — qrcode-terminal vendored in bridge/src/vendor, no npm install ever). No login/rooms (removed 13/09)
+shared/          # API contract, ONE source of truth for all runtimes: link shapes (#p/#t/&m), x-owm-* headers, cross-layer error codes, token prefixes + buildPairingUrl() — imported by bridge + web; worker pinned by web/test/contract-fixture.test.js
 README.md        # this file
 CODE_SUMMARY.md  # code map + the "symptom → where to fix" table
 ```

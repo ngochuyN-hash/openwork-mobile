@@ -2,12 +2,12 @@ import { useEffect, useState } from "preact/hooks";
 import { setToken, setTenant, apiPair, pairingCodeFromHash } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 import { OpenWorkMark } from "../components/logo.jsx";
+import { ErrorCode, MASTER_TOKEN_HASH, TENANT_HASH_KEY, TOKEN_PREFIX_SOURCE } from "../../../shared/contract.js";
 
 // Roomless key/QR: the worker refuses every roomless web entry with
 // 400 tenant_required — the message must only name paths that still exist
 // (a full link with &m=, or the room box below).
-const TENANT_HINT =
-  "Key/QR code missing room parameter — use the full pairing/master link with &m= from your computer, or enter the room name in the Room field and try again.";
+const TENANT_HINT = `Key/QR code missing room parameter — use the full pairing/master link with &${TENANT_HASH_KEY}= from your computer, or enter the room name in the Room field and try again.`;
 
 // Màn vào app kiểu 9remote với 2 đường, mỗi hàng đúng một nhãn ngắn (owner
 // call: bỏ hết chỉ dẫn dài — hàng nào mã tạm thời, hàng nào mã vĩnh viễn là
@@ -30,7 +30,7 @@ export function PairingScreen({ onPaired }) {
       onPaired();
     } catch (e) {
       setStatus("");
-      setError(e.code === "tenant_required" ? TENANT_HINT : String(e.message || e));
+      setError(e.code === ErrorCode.TENANT_REQUIRED ? TENANT_HINT : String(e.message || e));
     } finally {
       setBusy(false);
     }
@@ -45,7 +45,9 @@ export function PairingScreen({ onPaired }) {
   // hoặc khóa trần owd_/owt_ không kèm phòng.
   function parsePermanentKey(raw) {
     const text = String(raw ?? "").trim();
-    const fromLink = /#t=([^&\s]+)(?:&m=([^&\s]+))?/.exec(text);
+    const fromLink = new RegExp(
+      `#${MASTER_TOKEN_HASH}=([^&\\s]+)(?:&${TENANT_HASH_KEY}=([^&\\s]+))?`
+    ).exec(text);
     if (fromLink?.[1]) {
       return {
         token: decodeURIComponent(fromLink[1]),
@@ -53,7 +55,7 @@ export function PairingScreen({ onPaired }) {
       };
     }
     const bare = text.replace(/\s+/g, "");
-    if (/^(owm|owd|owt)_[0-9a-f]{8,}$/i.test(bare)) return { token: bare, tenant: "" };
+    if (new RegExp(`^${TOKEN_PREFIX_SOURCE}[0-9a-f]{8,}$`, "i").test(bare)) return { token: bare, tenant: "" };
     return null;
   }
 
@@ -79,7 +81,7 @@ export function PairingScreen({ onPaired }) {
         // fans a roomless key out to machines) — surface that hint verbatim.
         const res = await fetch("/api/state", { headers: { authorization: `Bearer ${parsed.token}` } });
         const payload = await res.json().catch(() => null);
-        if (payload?.code === "tenant_required") throw new Error(TENANT_HINT);
+        if (payload?.code === ErrorCode.TENANT_REQUIRED) throw new Error(TENANT_HINT);
         if (!res.ok) throw new Error(payload?.message ?? `HTTP ${res.status}`);
         parsed.tenant = String(payload?.edge?.tenant ?? "").trim().toLowerCase();
         if (!parsed.tenant) throw new Error("This machine has no room configured — use the 8-character pairing code.");

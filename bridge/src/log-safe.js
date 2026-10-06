@@ -16,11 +16,22 @@
  * - Mọi thứ khác (host, path, #m=<phòng>) giữ nguyên để log vẫn đọc được.
  */
 
+import { MASTER_TOKEN_HASH, PAIR_CODE_HASH, TOKEN_PREFIX_SOURCE } from "../../shared/contract.js";
+
 const REDACTED = "<redacted>";
 const MASK = "•"; // dùng ký tự không phải ASCII để "che" không lẫn với ký tự thật
 
 // Key trong query/hash mang token. So khớp không phân biệt hoa thường cho an toàn.
-const SECRET_KEYS = new Set(["_t", "t", "token", "access_token", "authtoken", "auth_token"]);
+// `_t` là dạng query của master key (web bản cũ dán `?_t=`); `t` là key hash
+// hiện tại — cả hai lấy tên từ shared/contract.js để đổi key là log che theo.
+const SECRET_KEYS = new Set([
+  `_${MASTER_TOKEN_HASH}`,
+  MASTER_TOKEN_HASH,
+  "token",
+  "access_token",
+  "authtoken",
+  "auth_token",
+]);
 // Số ký tự đầu của mã one-time được giữ lại trong log (phần còn lại che).
 const PAIRING_CODE_VISIBLE = 4;
 
@@ -62,7 +73,7 @@ function redactParams(params, dropSecrets) {
     const lower = key.toLowerCase();
     if (SECRET_KEYS.has(lower)) {
       if (!dropSecrets) kept.push(`${key}=${REDACTED}`);
-    } else if (lower === "p") {
+    } else if (lower === PAIR_CODE_HASH) {
       kept.push(`${key}=${maskTail(value)}`);
     } else {
       kept.push(pair);
@@ -98,8 +109,9 @@ export function redactUrl(input) {
   );
 }
 
-// Tiền tố chìa khóa của OpenWork (khớp trong web/src/pages/pairing.jsx).
-const TOKEN_LIKE = /\b(?:owm|owd|owt)_[0-9a-zA-Z]+/g;
+// Tiền tố chìa khóa của OpenWork — danh sách prefix nằm ở shared/contract.js
+// (web/src/pages/pairing.jsx dựng regex kiểm tra hình dạng từ cùng nguồn).
+const TOKEN_LIKE = new RegExp(`\\b${TOKEN_PREFIX_SOURCE}[0-9a-zA-Z]+`, "g");
 
 /**
  * Quét bất kỳ chuỗi nào (message lỗi, stack) và thay mọi chìa khóa trần bên

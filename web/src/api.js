@@ -5,6 +5,7 @@ import { buildPromptModelFields } from "./lib/model-behavior.js";
 import { parseHashParam } from "./lib/route.js";
 import { blobCacheKey, createBlobCache, parseBlobCacheKey } from "./lib/blob-cache.js";
 import { withTimeoutSignal } from "./lib/net.js";
+import { HEADER_TENANT, MASTER_TOKEN_HASH, PAIR_CODE_HASH } from "../../shared/contract.js";
 
 const TOKEN_KEY = "owm_token";
 // Multi-tenant: "phòng" = máy đang kết nối. Lưu kèm token; mọi request kèm
@@ -153,7 +154,7 @@ function readHashParam(key) {
 
 // Auto-pairing kiểu cũ (master token trong #t=) — vẫn giữ làm đường dự phòng.
 export function absorbTokenFromHash() {
-  const parsed = readHashParam("t");
+  const parsed = readHashParam(MASTER_TOKEN_HASH);
   if (parsed?.value) {
     setToken(parsed.value);
     if (parsed.tenant) setTenant(parsed.tenant);
@@ -164,7 +165,7 @@ export function absorbTokenFromHash() {
 
 // Mã one-time từ QR/link dạng .../#p=<code>&m=<phòng> — màn pairing sẽ tự ghép.
 export function pairingCodeFromHash() {
-  const parsed = readHashParam("p");
+  const parsed = readHashParam(PAIR_CODE_HASH);
   if (parsed?.value) {
     if (parsed.tenant) setTenant(parsed.tenant);
     return parsed.value;
@@ -218,7 +219,7 @@ function authHeadersFor(token, tenant, extra = {}) {
   const headers = { ...extra };
   if (token) headers["authorization"] = `Bearer ${token}`;
   const clean = cleanTenantId(tenant);
-  if (clean) headers["x-owm-tenant"] = clean;
+  if (clean) headers[HEADER_TENANT] = clean;
   return headers;
 }
 
@@ -230,7 +231,7 @@ function authHeaders(extra = {}) {
 function tenantHeaders(extra = {}) {
   const tenant = getTenant();
   const headers = { ...extra };
-  if (tenant) headers["x-owm-tenant"] = tenant;
+  if (tenant) headers[HEADER_TENANT] = tenant;
   return headers;
 }
 

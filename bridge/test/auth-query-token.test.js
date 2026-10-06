@@ -70,7 +70,6 @@ async function withApp(configPatch, run) {
       restart: () => false,
     },
     getBaseUrl: () => "http://127.0.0.1:8788",
-    tenantHashSuffix: () => "",
   });
   server.requestTimeout = 0;
   await new Promise((r) => server.listen(0, "127.0.0.1", r));

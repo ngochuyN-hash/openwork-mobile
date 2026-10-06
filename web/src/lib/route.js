@@ -1,5 +1,6 @@
 // Hash router + bóc tham số ghép nối — TÁCH THUẦN khỏi app.jsx/api.js để test
 // được bằng `node --test` (app.jsx là JSX, không import nổi trong Node).
+import { TENANT_HASH_KEY } from "../../../shared/contract.js";
 //
 //   #/                     -> home (session gần đây gộp mọi workspace)
 //   #/workspaces           -> danh sách workspace
@@ -35,7 +36,7 @@ export function safeDecode(value) {
 export function parseHashParam(hash, key) {
   const safeKey = String(key ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   if (!safeKey) return null;
-  const match = new RegExp(`^#${safeKey}=([^&]+)(?:&m=([^&]+))?`).exec(String(hash ?? ""));
+  const match = new RegExp(`^#${safeKey}=([^&]+)(?:&${TENANT_HASH_KEY}=([^&]+))?`).exec(String(hash ?? ""));
   if (!match?.[1]) return null;
   return {
     value: safeDecode(match[1]),

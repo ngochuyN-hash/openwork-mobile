@@ -55,7 +55,6 @@ async function withApp(configPatch, run) {
     refreshDiscovery: async () => {},
     tunnel: { getState: () => ({ phase: "starting", url: "", streak: 0, nextRetryAt: 0 }), restart: () => false },
     getBaseUrl: () => "http://127.0.0.1:8788",
-    tenantHashSuffix: () => "",
   });
   server.requestTimeout = 0;
   await new Promise((r) => server.listen(0, "127.0.0.1", r));

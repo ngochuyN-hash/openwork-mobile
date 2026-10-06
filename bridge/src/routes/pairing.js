@@ -2,6 +2,7 @@ import qrcode from "../vendor/qrcode-terminal/index.js";
 import { deny, isTokenAuthorized } from "../auth.js";
 import { readJsonBody, sendJson } from "../http-util.js";
 import { CODE_TTL_MINUTES } from "../pairing.js";
+import { ErrorCode, buildPairingUrl } from "../../../shared/contract.js";
 
 // Nhóm "ghép thiết bị": pair, đăng nhập phòng, danh sách/khoá thiết bị, mã QR.
 // Đây là hai route DUY NHẤT không cần token — người lạ phải ghép được thì mới
@@ -33,12 +34,12 @@ export function createPairingRoutes(ctx) {
       const body = await readJsonBody(req);
       const { config } = ctx;
       if (!config.lookupTenant || !config.lookupSecret) {
-        return sendJson(res, 404, { code: "not_joined", message: "This computer has not joined any room. Run this on the computer: openpocket edge join" });
+        return sendJson(res, 404, { code: ErrorCode.NOT_JOINED, message: "This computer has not joined any room. Run this on the computer: openpocket edge join" });
       }
       const userOk = String(body?.user ?? "").trim().toLowerCase() === config.lookupTenant;
       const passOk = isTokenAuthorized(String(body?.secret ?? ""), config.lookupSecret);
       if (!userOk || !passOk) {
-        return sendJson(res, 401, { code: "invalid_credentials", message: "Wrong login name or password." });
+        return sendJson(res, 401, { code: ErrorCode.INVALID_CREDENTIALS, message: "Wrong login name or password." });
       }
       const result = ctx.pairing.mintDevice(body?.label);
       console.log(`[pairing] room login ${config.lookupTenant}: new device "${result.device.label}" (${result.device.id})`);
@@ -80,7 +81,7 @@ export function createPairingRoutes(ctx) {
     const { config } = ctx;
     const isMaster = !device;
     const code = ctx.pairing.ensureCode();
-    const pairUrl = `${ctx.getBaseUrl()}/#p=${code}${ctx.tenantHashSuffix()}`;
+    const pairUrl = buildPairingUrl({ base: ctx.getBaseUrl(), value: code, tenant: config.lookupTenant });
     let qr = "";
     qrcode.generate(pairUrl, { small: true }, (s) => {
       qr = s;
@@ -96,7 +97,7 @@ export function createPairingRoutes(ctx) {
       qr,
     };
     if (isMaster) {
-      const masterUrl = `${ctx.getBaseUrl()}/#t=${config.mobileToken}${ctx.tenantHashSuffix()}`;
+      const masterUrl = buildPairingUrl({ base: ctx.getBaseUrl(), kind: "master", value: config.mobileToken, tenant: config.lookupTenant });
       let masterQr = "";
       qrcode.generate(masterUrl, { small: true }, (s) => {
         masterQr = s;

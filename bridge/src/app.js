@@ -22,7 +22,7 @@ import { createProxyRoutes } from "./routes/proxy.js";
  * bản mới nhất.
  */
 export function createApp(deps) {
-  const { config, state, bridgeVersion, handleStatic, refreshDiscovery, tunnel, getBaseUrl, tenantHashSuffix, pairing } = deps;
+  const { config, state, bridgeVersion, handleStatic, refreshDiscovery, tunnel, getBaseUrl, pairing } = deps;
 
   const ctx = {
     config,
@@ -32,7 +32,6 @@ export function createApp(deps) {
     refreshDiscovery,
     tunnel,
     getBaseUrl,
-    tenantHashSuffix,
     openworkStateInfo: () => openworkStateInfo(config),
     // /api/pair: tối đa 10 lần/phút/IP - chống dò mã.
     pairLimiter: createRateLimiter({ limit: 10 }),

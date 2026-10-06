@@ -15,6 +15,7 @@ import { startRateLimitSweep } from "./rate-limit.js";
 import { createStaticHandler } from "./static.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { buildPairingUrl } from "../../shared/contract.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Single version source of truth: bridge/package.json (the OTA VERSION file is gone).
@@ -68,8 +69,8 @@ const pairing = new PairingService();
 // so a machine without a room must point its QR straight at the
 // tunnel/public URL instead (pairingBaseUrl, unit-tested).
 const currentBase = () => pairingBaseUrl(config, state.tunnelUrl, config.publicUrl, config.port);
-// Gắn phòng vào link (#p=...&m=phòng / #t=...&m=phòng) để web tự điền.
-const tenantHashSuffix = () => (config.lookupTenant ? `&m=${encodeURIComponent(config.lookupTenant)}` : "");
+// Link ghép nối gắn phòng để web tự điền: hình dạng (#p=...&m= / #t=...&m=)
+// do shared/contract.js định nghĩa một chỗ duy nhất (buildPairingUrl).
 let printingPairing = false;
 pairing.onCode = () => {
   // Mã mới (thiết bị vừa ghép xong hoặc mã cũ hết hạn) -> in lại QR
@@ -168,7 +169,6 @@ const { server, ctx } = createApp({
   refreshDiscovery,
   tunnel,
   getBaseUrl: currentBase,
-  tenantHashSuffix,
 });
 
 // Rate-limit maps phình theo mọi IP từng thấy → quét mỗi 5 phút.
@@ -191,7 +191,7 @@ function printPairing(base, note, { withMaster = false } = {}) {
   printingPairing = true;
   const code = pairing.ensureCode();
   printingPairing = false;
-  const pairingUrl = `${base}/#p=${code}${tenantHashSuffix()}`;
+  const pairingUrl = buildPairingUrl({ base, value: code, tenant: config.lookupTenant });
   console.log("");
   if (note) console.log(note);
   console.log(`  Device pairing QR (one-time code, expires after ${CODE_TTL_MINUTES} minutes):`);
@@ -205,7 +205,7 @@ function printPairing(base, note, { withMaster = false } = {}) {
   console.log("");
   qrcode.generate(pairingUrl, { small: true });
   if (withMaster) {
-    const masterUrl = `${base}/#t=${config.mobileToken}${tenantHashSuffix()}`;
+    const masterUrl = buildPairingUrl({ base, kind: "master", value: config.mobileToken, tenant: config.lookupTenant });
     console.log("  MASTER QR (permanent token - local machine only, NEVER share it):");
     // Mobile token vĩnh viễn -> dòng text phải che, QR giữ nguyên (chủ máy
     // quét bằng máy của mình, không ai đọc được log).
