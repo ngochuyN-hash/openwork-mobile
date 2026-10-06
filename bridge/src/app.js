@@ -6,6 +6,7 @@ import { createRateLimiter } from "./rate-limit.js";
 import { matchRoute } from "./router.js";
 import { createPairingRoutes } from "./routes/pairing.js";
 import { createStatusRoutes } from "./routes/status.js";
+import { createConfigRoutes } from "./routes/config.js";
 import { createOpenWorkRoutes } from "./routes/openwork.js";
 import { createFsRoutes } from "./routes/fs.js";
 import { createProxyRoutes } from "./routes/proxy.js";
@@ -42,6 +43,7 @@ export function createApp(deps) {
   const routes = [
     ...createPairingRoutes(ctx),
     ...createStatusRoutes(ctx),
+    ...createConfigRoutes(ctx),
     ...createOpenWorkRoutes(ctx),
     ...createFsRoutes(),
     ...createProxyRoutes(ctx),
