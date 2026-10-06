@@ -1,15 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Net;
-using System.Net.Sockets;
 using System.Text;
-using System.Text.RegularExpressions;
-using System.Security.Cryptography;
 using System.Threading;
-using System.Management;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
@@ -26,6 +21,18 @@ namespace OpenPocket.Desktop
         }
     }
 
+    // ================= MAIN FORM — layout + điều phối ===========================
+    // Tách module (candidate 7, 06/10): file này CHỈ giữ layout cửa sổ + luồng
+    // điều phối (bấm nút -> gọi module -> cập nhật đèn). Toàn bộ logic nặng đã
+    // rời đi:
+    //   Ui.cs            — nút bo góc tự vẽ, path bo tròn, icon app, SafeInvoke
+    //   BridgeConfig.cs  — đường dẫn + đọc config.json của bridge
+    //   BridgeProcess.cs — tìm node, bật/dừng đúng tiến trình bridge, dọn log
+    //   TunnelState.cs   — đọc URL tunnel + backoff 429 từ đĩa (state + log)
+    //   AutostartTask.cs — task scheduler "OpenPocketBridge" (query/run/create)
+    //   BridgeHttp.cs    — POST API localhost (Bearer master token)
+    //   Provisioning.cs  — hàm thuần của luồng định danh máy (room + secret)
+    //   PairingQrDialog.cs — popup QR ghép nối
     public class MainForm : Form
     {
         // Colors — TOKEN SKILL UI (pwa-workspace-ui/references/tokens.md 13/09):
@@ -34,12 +41,8 @@ namespace OpenPocket.Desktop
         // component RoundedButton tự vẽ: Primary đen / Ghost viền / viền đỏ).
         private static readonly Color ColorCard = Color.White;                          // #FFFFFF
         private static readonly Color ColorCardBorder = Color.FromArgb(228, 231, 236);  // #E4E7EC hairline
-        private static readonly Color ColorStroke = Color.FromArgb(211, 216, 222);      // #D3D8DE viền đậm (ghost)
         private static readonly Color ColorText = Color.FromArgb(28, 32, 36);           // #1C2024
         private static readonly Color ColorMuted = Color.FromArgb(96, 100, 108);        // #60646C text-dim
-        private static readonly Color ColorFaint = Color.FromArgb(139, 141, 152);       // #8B8D98 text-faint
-        private static readonly Color ColorPrimary = Color.FromArgb(28, 32, 36);        // #1C2024 nút chính ĐEN
-        private static readonly Color ColorHover = Color.FromArgb(238, 241, 244);       // #EEF1F4 bg-hover / nút khoá
         private static readonly Color ColorSuccess = Color.FromArgb(48, 164, 108);      // #30A46C — chỉ đèn + chữ trạng thái
         private static readonly Color ColorDanger = Color.FromArgb(214, 69, 69);        // #D64545 — chỉ đèn + viền Dừng
         private static readonly Color ColorAmber = Color.FromArgb(180, 83, 9);          // #B45309 cảnh báo trên nền sáng
@@ -73,182 +76,6 @@ namespace OpenPocket.Desktop
         // Tint nền pill badge admin — vẽ ở pnlHeader.Paint (trẻ vẽ đè sau nên
         // chữ không bị fill phủ); BackColor của label để trong suốt
         private Color badgeTint = Color.FromArgb(220, 252, 231);
-
-        // ================= NÚT BO GÓC KHỬ RĂNG CƯA =================
-        // Region cắt cứng (cũ) không có AntiAlias nên góc bo thành bậc thang —
-        // owner 13/09 tối: "bị răng cưa như đè nhiều box hình chữ nhật lên
-        // vậy". Một component duy nhất cho mọi nút: radius 8, thân/viền tự vẽ
-        // bằng GraphicsPath có AntiAlias, nền control trắng hoà vào thẻ.
-        // Ngôn ngữ theo skill UI: Primary = nền đen chữ trắng; Ghost = nền
-        // trắng viền đậm mảnh; DangerGhost = nền trắng viền đỏ chữ đỏ; khóa
-        // = nhạt hẳn mất màu vai (đèn trạng thái mới giữ màu).
-        internal enum ButtonKind { Primary, Ghost, DangerGhost, SuccessGhost, InlineIcon }
-
-        internal class RoundedButton : Control
-        {
-            // Token skill UI — bản riêng để dialog (class lồng cùng cha) dùng
-            // được mà không đụng bảng màu của MainForm
-            private static readonly Color CCard = Color.White;
-            private static readonly Color CPrimary = Color.FromArgb(28, 32, 36);     // #1C2024
-            private static readonly Color CPrimaryHover = Color.FromArgb(52, 57, 63);
-            private static readonly Color CText = Color.FromArgb(28, 32, 36);
-            private static readonly Color CStroke = Color.FromArgb(211, 216, 222);   // #D3D8DE
-            private static readonly Color CHairline = Color.FromArgb(228, 231, 236); // #E4E7EC
-            private static readonly Color CHover = Color.FromArgb(238, 241, 244);    // #EEF1F4
-            private static readonly Color CFaint = Color.FromArgb(139, 141, 152);    // #8B8D98
-            private static readonly Color CMuted = Color.FromArgb(96, 100, 108);     // #60646C
-            private static readonly Color CDanger = Color.FromArgb(214, 69, 69);     // #D64545
-            private static readonly Color CDangerHover = Color.FromArgb(252, 240, 240);
-            private static readonly Color CSuccess = Color.FromArgb(48, 164, 108);   // #30A46C
-            private static readonly Color CSuccessHover = Color.FromArgb(240, 250, 245);
-
-            private ButtonKind kind; // SetKind() đổi kind lúc chạy (toggle dialog QR)
-            private Color fill, stroke, textColor;
-            private bool hover;
-            // Bán kính bo góc — icon tròn để = chiều cao/2
-            public int Radius = 8;
-
-            // Dựng trên Control THUẦN, không phải Button: ButtonBase cứ tự vẽ
-            // nền/viền/focus-rect sau lưng OnPaint — trên máy owner hằn vết
-            // vuông đen ở góc mỗi nút (13/09 tối). Control tự vẽ 100% thì
-            // không lớp nào chen vào nữa.
-            public RoundedButton(ButtonKind kind)
-            {
-                this.kind = kind;
-                BackColor = CCard;
-                Cursor = Cursors.Hand;
-                TabStop = false;
-                SetStyle(ControlStyles.AllPaintingInWmPaint |
-                    ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
-                    ControlStyles.ResizeRedraw, true);
-                ApplyLook(true);
-            }
-
-            // Đổi kind lúc chạy (dialog QR toggle "Mã 1 lần" ↔ "Mã vĩnh viễn" —
-            // trước đây nút Button đảo BackColor tay, RoundedButton tự vẽ nên
-            // phải tái áp màu qua kind)
-            public void SetKind(ButtonKind kind)
-            {
-                this.kind = kind;
-                ApplyLook(true);
-            }
-
-            // Enabled đổi cả MÀU THÂN — FlatStyle giữ màu nền khi Enabled=false
-            // (bài học pass 5) nên trạng thái khoá phải tự vẽ lại
-            public void ApplyLook(bool on)
-            {
-                if (on)
-                {
-                    fill = CCard;
-                    if (kind == ButtonKind.Primary)
-                    {
-                        fill = CPrimary; stroke = CPrimary; textColor = Color.White;
-                    }
-                    else if (kind == ButtonKind.DangerGhost)
-                    {
-                        stroke = CDanger; textColor = CDanger;
-                    }
-                    else if (kind == ButtonKind.SuccessGhost)
-                    {
-                        stroke = CSuccess; textColor = CSuccess;
-                    }
-                    else if (kind == ButtonKind.InlineIcon)
-                    {
-                        // Icon ẩn danh nằm trong dòng chữ: KHÔNG viền, glyph xám
-                        // nhã — hover mới nổi nền tròn mờ (không hòa viền vào
-                        // thiết kế — owner 14/09 sáng)
-                        stroke = Color.Transparent; textColor = CMuted;
-                    }
-                    else
-                    {
-                        stroke = CStroke; textColor = CText;
-                    }
-                }
-                else
-                {
-                    fill = kind == ButtonKind.Primary ? CHover : CCard;
-                    stroke = (kind == ButtonKind.Primary || kind == ButtonKind.InlineIcon)
-                        ? Color.Transparent : CHairline;
-                    textColor = CFaint;
-                }
-                ForeColor = textColor;
-                Invalidate();
-            }
-
-            protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
-            protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
-
-            // Base Button vẽ nền+viền flat-style trước OnPaint — viền vuông đen
-            // đó bị fill bo đè mất giữa, chỉ hở 4 góc thành "răng" đen. Tự lấp
-            // nền trắng phẳng, không cho base vẽ gì thêm.
-            protected override void OnPaintBackground(PaintEventArgs e)
-            {
-                using (SolidBrush b = new SolidBrush(BackColor))
-                    e.Graphics.FillRectangle(b, 0, 0, Width, Height);
-            }
-
-            protected override void OnPaint(PaintEventArgs e)
-            {
-                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                // Path thụt 1px để nét viền không bị mép control cắt mất nửa nét
-                using (System.Drawing.Drawing2D.GraphicsPath p = MainForm.RoundedPath(Width - 1, Height - 1, Radius))
-                {
-                    Color f = (Enabled && hover) ? HoverFill() : fill;
-                    using (SolidBrush b = new SolidBrush(f)) e.Graphics.FillPath(b, p);
-                    using (Pen pen = new Pen(stroke)) e.Graphics.DrawPath(pen, p);
-                }
-                TextRenderer.DrawText(e.Graphics, Text, Font, new Rectangle(0, 0, Width, Height),
-                    Enabled ? textColor : CFaint,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
-                    TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
-            }
-
-            private Color HoverFill()
-            {
-                if (kind == ButtonKind.Primary) return CPrimaryHover;
-                if (kind == ButtonKind.DangerGhost) return CDangerHover;
-                if (kind == ButtonKind.SuccessGhost) return CSuccessHover;
-                return CHover;
-            }
-        }
-
-        // Icon app: đúng hình khối OpenWork (lục giác bo isometric + lỗ O +
-        // sọc chéo) nhưng ĐẢO MÀU — nét trắng trên nền đen (owner chỉ định
-        // 13/09, rasterize từ web/public/openwork-mark.svg). Nguồn chân lý là
-        // src\app.ico nhúng vào exe qua /win32icon; lúc chạy bấm lại từ exe để
-        // title bar / khay / dialog QR dùng chung một nguồn.
-        static Icon _appIcon;
-        internal static Icon AppIcon
-        {
-            get
-            {
-                if (_appIcon == null)
-                {
-                    try { _appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
-                    catch { }
-                    if (_appIcon == null)
-                    {
-                        // fallback hiếm hoi: vòng O trắng nền đen (bản rút gọn)
-                        Bitmap bmp = new Bitmap(32, 32);
-                        using (Graphics g = Graphics.FromImage(bmp))
-                        {
-                            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                            using (SolidBrush bg = new SolidBrush(Color.FromArgb(24, 24, 27)))
-                            using (System.Drawing.Drawing2D.GraphicsPath path = RoundedPath(32, 32, 8))
-                            {
-                                g.FillPath(bg, path);
-                            }
-                            using (Pen ring = new Pen(Color.White, 5f))
-                            {
-                                g.DrawEllipse(ring, 7, 7, 18, 18);
-                            }
-                        }
-                        _appIcon = Icon.FromHandle(bmp.GetHicon());
-                    }
-                }
-                return _appIcon;
-            }
-        }
 
         // UI Controls - Header
         private Label lblAdminBadge;
@@ -334,10 +161,10 @@ namespace OpenPocket.Desktop
 
             // Bridge zero-dependency (qrcode-terminal đã vendor trong
             // bridge/src/vendor) — không cần node_modules, chỉ cần node.exe
-            // để CHẠY. Thiếu gì Bật Bridge cũng báo rõ (EnsureBridgeDepsPresent).
+            // để CHẠY. Thiếu gì Bật Bridge cũng báo rõ (BridgeProcess.EnsureDepsPresent).
 
             // Tìm node.exe
-            nodeExe = FindNodeExe();
+            nodeExe = BridgeProcess.FindNodeExe();
         }
 
         private void InitializeComponent()
@@ -485,7 +312,7 @@ namespace OpenPocket.Desktop
                     e.Graphics.DrawLine(pen, 0, pnlHeader.Height - 1, pnlHeader.Width, pnlHeader.Height - 1);
                 }
                 // Pill badge: radius = nửa chiều cao (pill 999 của skill)
-                using (System.Drawing.Drawing2D.GraphicsPath p = RoundedPath(
+                using (System.Drawing.Drawing2D.GraphicsPath p = Ui.RoundedPath(
                     lblAdminBadge.Width - 1, lblAdminBadge.Height - 1, (lblAdminBadge.Height - 1) / 2))
                 using (SolidBrush b = new SolidBrush(badgeTint)) {
                     e.Graphics.TranslateTransform(lblAdminBadge.Left, lblAdminBadge.Top);
@@ -530,9 +357,9 @@ namespace OpenPocket.Desktop
             // Icon app + khay hệ thống: X chỉ ẩn xuống khay, "Thoát hẳn" mới
             // kết thúc app (owner yêu cầu 13/09 — tắt cửa sổ mà bridge theo dõi
             // vẫn chạy nền)
-            this.Icon = AppIcon;
+            this.Icon = AppIcons.Current;
             trayIcon = new NotifyIcon();
-            trayIcon.Icon = AppIcon;
+            trayIcon.Icon = AppIcons.Current;
             trayIcon.Text = "OpenPocket - Control OpenWork from your phone";
             trayIcon.Visible = true;
             ContextMenuStrip trayMenu = new ContextMenuStrip();
@@ -541,7 +368,7 @@ namespace OpenPocket.Desktop
                 reallyExit = true;
                 // Log không giữ ở máy (owner 13/09): bridge vẫn chạy nền nên chỉ
                 // truncate được — mấy dòng nó ghi sau đó là của ngày mới.
-                WipeLogFiles(false);
+                BridgeProcess.WipeLogs(false);
                 this.Close();
             });
             trayIcon.ContextMenuStrip = trayMenu;
@@ -612,19 +439,6 @@ namespace OpenPocket.Desktop
             this.Show();
             if (this.WindowState == FormWindowState.Minimized) this.WindowState = FormWindowState.Normal;
             this.Activate();
-        }
-
-        // Vẽ đường bo tròn (path) dùng chung cho Region + viền thẻ — dialog QR
-        // cũng mượn (internal để class cùng file dùng được)
-        internal static System.Drawing.Drawing2D.GraphicsPath RoundedPath(int w, int h, int r)
-        {
-            System.Drawing.Drawing2D.GraphicsPath p = new System.Drawing.Drawing2D.GraphicsPath();
-            p.AddArc(0, 0, r, r, 180, 90);
-            p.AddArc(w - r - 1, 0, r, r, 270, 90);
-            p.AddArc(w - r - 1, h - r - 1, r, r, 0, 90);
-            p.AddArc(0, h - r - 1, r, r, 90, 90);
-            p.CloseFigure();
-            return p;
         }
 
         // ================= UI HELPERS =================
@@ -714,84 +528,23 @@ namespace OpenPocket.Desktop
             btnTunnelRestart.Top = lblStatusTunnel.Top - 2;
         }
 
-        // ================= SAFE UI MARSHAL =================
-
-        // Callback nền (provision, POST bridge, fetch QR) có thể bay về SAU khi
-        // form đã chết: bấm "Thoát hẳn" ở khay trong lúc "Restart tunnel" còn
-        // đang chờ là this.Invoke ném ObjectDisposedException giết cả tiến
-        // trình (crash lúc thoát). SafeInvoke bỏ qua khi target đã gone —
-        // kiểm IsDisposed + IsHandleCreated TRƯỚC, nuốt race ở khoảng giữa.
-        internal static void SafeInvoke(Control target, Action action)
-        {
-            if (target == null || action == null) return;
-            try
-            {
-                if (target.IsDisposed || !target.IsHandleCreated) return;
-                if (target.InvokeRequired) target.Invoke(action);
-                else action();
-            }
-            catch (ObjectDisposedException) { }
-            catch (InvalidOperationException) { }
-        }
-
-        // Bản gọn cho form này: SafeInvoke(delegate { ... }) trên UI marshal
         private void SafeInvoke(Action action)
         {
-            MainForm.SafeInvoke(this, action);
+            Ui.SafeInvoke(this, action);
         }
 
         // ================= CONFIG & LOGIC =================
 
-        private string GetConfigPath()
-        {
-            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            return Path.Combine(appData, "openwork-bridge", "config.json");
-        }
-
-        private string GetBridgeDataDir()
-        {
-            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            return Path.Combine(appData, "openwork-bridge");
-        }
-
-        private Dictionary<string, object> LoadConfig()
-        {
-            string path = GetConfigPath();
-            if (!File.Exists(path)) return new Dictionary<string, object>();
-            try
-            {
-                string json = File.ReadAllText(path, Encoding.UTF8);
-                var jss = new JavaScriptSerializer();
-                var dict = jss.Deserialize<Dictionary<string, object>>(json);
-                if (dict != null) return dict;
-            }
-            catch { }
-            return new Dictionary<string, object>();
-        }
-
-        private void SaveConfig(Dictionary<string, object> dict)
-        {
-            string dir = GetBridgeDataDir();
-            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            var jss = new JavaScriptSerializer();
-            string json = jss.Serialize(dict);
-            File.WriteAllText(GetConfigPath(), json, Encoding.UTF8);
-        }
-
         private void LoadConfigToUi()
         {
-            var config = LoadConfig();
+            var config = BridgeConfig.Load();
             currentTenant = config.ContainsKey("lookupTenant") ? Convert.ToString(config["lookupTenant"]) : "";
 
             // Kiểm tra autostart task
-            CheckAutostartTask();
+            chkAutostart.Checked = AutostartTask.Exists();
         }
 
         // ================= LẦN ĐẦU CHẠY: ĐỊNH DANH MÁY + TỰ CÀI =================
-
-        // Địa chỉ web trung gian là hằng số nhúng trong exe (zip không kèm config —
-        // %APPDATA% máy người dùng trống, lần đầu chạy app tự ghi vào đó).
-        private const string DefaultWorkerUrl = "https://YOUR-WORKER.workers.dev";
 
         // Ghi cấu hình tối thiểu để QR ghép chạy qua internet (lookupUrl) — gọi
         // một lần trong ctor, KHÔNG ghi đè gì đã có (máy đang dùng giữ nguyên).
@@ -799,11 +552,11 @@ namespace OpenPocket.Desktop
         {
             try
             {
-                var config = LoadConfig();
+                var config = BridgeConfig.Load();
                 bool dirty = false;
                 if (!config.ContainsKey("lookupUrl") || string.IsNullOrEmpty(Convert.ToString(config["lookupUrl"])))
                 {
-                    config["lookupUrl"] = DefaultWorkerUrl;
+                    config["lookupUrl"] = Provisioning.DefaultWorkerUrl;
                     dirty = true;
                 }
                 if (!config.ContainsKey("machineName") || string.IsNullOrEmpty(Convert.ToString(config["machineName"])))
@@ -824,7 +577,7 @@ namespace OpenPocket.Desktop
         private void BeginProvisionIfNeeded()
         {
             if (provisionDone || provisioning) return;
-            var config = LoadConfig();
+            var config = BridgeConfig.Load();
             string tenant = config.ContainsKey("lookupTenant") ? Convert.ToString(config["lookupTenant"]) : "";
             string secret = config.ContainsKey("lookupSecret") ? Convert.ToString(config["lookupSecret"]) : "";
             if (!string.IsNullOrEmpty(tenant) && !string.IsNullOrEmpty(secret)) { provisionDone = true; return; }
@@ -838,11 +591,11 @@ namespace OpenPocket.Desktop
                 // TRONG LUỒNG NÀY: thành công ở lượt sau thì user không thấy lỗi.
                 const int ProvisionNameRetries = 3;
                 int nameRetry = 0;
-                string user = NewRoomId();
-                string pass = NewSecret();
-                var cfg = LoadConfig();
+                string user = Provisioning.NewRoomId();
+                string pass = Provisioning.NewSecret();
+                var cfg = BridgeConfig.Load();
                 string url = cfg.ContainsKey("lookupUrl") ? Convert.ToString(cfg["lookupUrl"]).Trim().TrimEnd('/') : "";
-                if (string.IsNullOrEmpty(url)) url = DefaultWorkerUrl;
+                if (string.IsNullOrEmpty(url)) url = Provisioning.DefaultWorkerUrl;
                 var jss = new JavaScriptSerializer();
                 while (true)
                 {
@@ -865,7 +618,7 @@ namespace OpenPocket.Desktop
                         req.ContentLength = body.Length;
                         req.Timeout = 15000;
                         req.ReadWriteTimeout = 15000;
-                        using (Stream rs = req.GetRequestStream()) rs.Write(body, 0, body.Length);
+                        using (var rs = req.GetRequestStream()) rs.Write(body, 0, body.Length);
                         using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
                         using (StreamReader sr = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
                         {
@@ -874,7 +627,7 @@ namespace OpenPocket.Desktop
                         }
                         if (ok)
                         {
-                            var save = LoadConfig();
+                            var save = BridgeConfig.Load();
                             save["lookupTenant"] = user;
                             save["lookupSecret"] = pass;
                             save["lookupUrl"] = url;
@@ -891,14 +644,14 @@ namespace OpenPocket.Desktop
                         // không chỉ đường sửa thì user chỉ biết nhìn chằm chằm).
                         int status = 0;
                         string code = "";
-                        ReadHttpError(wex, out status, out code);
+                        Provisioning.ReadHttpError(wex, out status, out code);
                         if (status == 409 && code == "taken" && nameRetry < ProvisionNameRetries)
                         {
                             nameRetry++;
-                            user = NewRoomId();
+                            user = Provisioning.NewRoomId();
                             continue;
                         }
-                        provisionError = ProvisionErrorText(status, code);
+                        provisionError = Provisioning.ErrorText(status, code);
                         break;
                     }
                     catch (Exception ex)
@@ -923,125 +676,15 @@ namespace OpenPocket.Desktop
             });
         }
 
-        // Rút HTTP status + mã JSON "code" ra khỏi một WebException. Worker trả
-        // lỗi dạng { code, message } (xem worker/src/index.js), nên đọc body ở
-        // đây giúp câu báo lỗi chỉ đúng mã thay vì "(403) Forbidden" trơ trọi.
-        private static void ReadHttpError(WebException wex, out int status, out string code)
-        {
-            status = 0;
-            code = "";
-            HttpWebResponse resp = wex.Response as HttpWebResponse;
-            if (resp == null) return;
-            try
-            {
-                status = (int)resp.StatusCode;
-                string body = "";
-                try
-                {
-                    using (Stream rs = resp.GetResponseStream())
-                    using (StreamReader sr = new StreamReader(rs, Encoding.UTF8))
-                        body = sr.ReadToEnd();
-                }
-                catch { }
-                if (body != "")
-                {
-                    try
-                    {
-                        var dict = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(body);
-                        if (dict != null && dict.ContainsKey("code")) code = Convert.ToString(dict["code"]);
-                    }
-                    catch { }
-                }
-            }
-            finally { try { resp.Close(); } catch { } }
-        }
-
-        // Luật dự án: CẢNH BÁO PHẢI KÈM CÁCH SỬA. Mỗi mã lỗi của worker có một
-        // câu riêng — đọc xong biết ngay làm gì tiếp (bấm ↻, đợi, hay hỏi chủ
-        // worker). Không map được thì vẫn phải có "bấm ↻" trong câu.
-        private static string ProvisionErrorText(int status, string code)
-        {
-            if (status == 403 && code == "room_create_disabled")
-                return "Room creation is turned off on the worker. Ask the worker owner to re-enable it (ALLOW_ROOM_CREATE).";
-            // 403 "invite_required": worker yêu cầu mã mời mà exe này không có
-            // (build từ source thiếu invite.key) hoặc mã không khớp secret
-            // ROOM_CREATE_KEY của worker — bản chính chủ thì không bao giờ gặp.
-            if (status == 403 && code == "invite_required")
-                return InviteConfig.RoomInviteKey.Length == 0
-                    ? "This build carries no invite key (invite.key was missing at build time) - it cannot create rooms. Use the app build from the worker owner."
-                    : "This worker only accepts the owner's app build - the invite key did not match.";
-            if (status == 409 && code == "taken")
-                return "That room name was taken while creating. Press Retry - the app will pick a new name automatically.";
-            if (status == 429 && code == "rate_limited")
-                return "Too many attempts - wait a minute and press Retry.";
-            if (status == 503 || status == 502)
-                return "Worker unreachable - check your connection and press Retry.";
-            // 403 "full": hết 50 slot phòng trên worker — cùng dạng "không tự
-            // sửa được, phải hỏi chủ worker", nên cũng phải kèm đường sửa.
-            if (status == 403 && code == "full")
-                return "No room slots left on the worker - ask the worker owner for an invite.";
-            if (status == 0)
-                return "Cannot reach the identity server - check your connection, then press Retry.";
-            return string.Format("The identity server answered {0}{1}. Press Retry.",
-                status, code == "" ? "" : " (" + code + ")");
-        }
-
-        private static string NewRoomId()
-        {
-            // a-z0-9 (bỏ ký tự dễ nhầm), "pc-" + 8 ký tự ngẫu nhiên — khớp TENANT_RE
-            const string alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
-            byte[] raw = new byte[8];
-            using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(raw);
-            string id = "pc-";
-            foreach (byte b in raw) id += alphabet[b % alphabet.Length].ToString();
-            return id;
-        }
-
-        private static string NewSecret()
-        {
-            byte[] entropy = new byte[24];
-            using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(entropy);
-            return "ows_" + BitConverter.ToString(entropy).Replace("-", "").ToLowerInvariant();
-        }
-
-        // Bridge zero-dependency (qrcode-terminal nằm trong bridge/src/vendor) —
-        // KHÔNG còn npm install, KHÔNG còn node_modules (khối cũ chạy ngầm tối
-        // đa 5 phút mà không nói gì, và giữ nút "Đang cài bridge" treo không
-        // hồi kết). Kiểm presence ĐỒNG BỘ: thiếu là bản zip đóng gói hỏng — báo rõ.
-        private bool EnsureBridgeDepsPresent()
-        {
-            if (bridgeDir == "" || !File.Exists(Path.Combine(bridgeDir, "src", "index.js")))
-            {
-                MessageBox.Show(this,
-                    "Bridge folder not found (bridge\\src\\index.js must sit next to OpenPocket.exe).\nGet the zip with the correct layout again, then tap Start Bridge.",
-                    "Missing component", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return false;
-            }
-            if (!File.Exists(nodeExe))
-            {
-                MessageBox.Show(this,
-                    "Node.js (node.exe) not found.\nInstall Node.js 20+ (nodejs.org), then tap Start Bridge again.",
-                    "Missing component", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return false;
-            }
-            return true;
-        }
-
-
         private void CheckStatus()
         {
             // 1. Check bridge port 8788
-            int port = 8788;
-            var config = LoadConfig();
-            if (config.ContainsKey("port"))
-            {
-                int p;
-                if (int.TryParse(Convert.ToString(config["port"]), out p) && p > 0) port = p;
-            }
+            var config = BridgeConfig.Load();
+            int port = BridgeConfig.Port(config);
 
             // 150ms là đủ cho cổng localhost — tick 3.5s cũ chờ 500ms làm GUI
             // giật cục trên máy chậm (audit pass này).
-            isBridgeRunning = IsPortOpen("127.0.0.1", port, 150);
+            isBridgeRunning = BridgeProcess.IsPortOpen("127.0.0.1", port, 150);
 
             if (isBridgeRunning)
             {
@@ -1073,9 +716,10 @@ namespace OpenPocket.Desktop
             // printPairing bỏ qua, log KHÔNG còn dòng URL nào để quét và dòng
             // trạng thái kẹt "Connecting..." mãi dù tunnel đã lên. Nút Restart
             // tunnel vẫn cho phép chủ động thử ngay khi 429.
-            int backoffMin = ReadTunnelBackoffMinutes();
-            tunnelUrl = ReadTunnelUrlFromState();
-            if (string.IsNullOrEmpty(tunnelUrl)) tunnelUrl = ReadTunnelUrlFromLog();
+            string dataDir = BridgeConfig.DataDir();
+            int backoffMin = TunnelState.BackoffMinutes(dataDir);
+            tunnelUrl = TunnelState.UrlFromState(dataDir);
+            if (string.IsNullOrEmpty(tunnelUrl)) tunnelUrl = TunnelState.UrlFromLog(dataDir);
             if (backoffMin > 0)
             {
                 lblStatusTunnel.Text = "● Cloudflare: waiting to reopen the tunnel (429)";
@@ -1107,7 +751,7 @@ namespace OpenPocket.Desktop
             // (bản desktop Electron). Soi cổng 8787 cũ không đáng tin: app mở
             // rồi mà GUI vẫn báo "Chưa mở" — owner bắt sửa 13/09 đêm.
             bool openworkRunning = false;
-            foreach (Process p in Process.GetProcessesByName("OpenWork"))
+            foreach (System.Diagnostics.Process p in System.Diagnostics.Process.GetProcessesByName("OpenWork"))
             {
                 openworkRunning = true;
                 p.Dispose();
@@ -1185,113 +829,6 @@ namespace OpenPocket.Desktop
             BeginProvisionIfNeeded();
         }
 
-        private bool IsPortOpen(string host, int port, int timeoutMs)
-        {
-            try
-            {
-                using (TcpClient client = new TcpClient())
-                {
-                    IAsyncResult ar = client.BeginConnect(host, port, null, null);
-                    bool success = ar.AsyncWaitHandle.WaitOne(timeoutMs);
-                    if (!success) return false;
-                    client.EndConnect(ar);
-                    return true;
-                }
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private string ReadTunnelUrlFromLog()
-        {
-            try
-            {
-                string dataDir = GetBridgeDataDir();
-                // Quét CẢ hai log (CLI `openpocket start` ghi bridge.log, task
-                // scheduler ghi bridge-task.log) — dừng ở bridge.log là hụt URL
-                // khi cầu nối chạy bằng task. Lấy match của file SỬA GẦN NHẤT.
-                string best = "";
-                DateTime bestTime = DateTime.MinValue;
-                foreach (string name in new string[] { "bridge-task.log", "bridge.log" })
-                {
-                    string logPath = Path.Combine(dataDir, name);
-                    if (!File.Exists(logPath)) continue;
-                    DateTime modified = File.GetLastWriteTime(logPath);
-                    string found = "";
-                    using (FileStream fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                    {
-                        // Đọc CHỈ 32KB CUỐI file (FileStream.Seek): bản cũ
-                        // ReadToEnd TOÀN BỘ log mỗi nhịp 3.5s — log phình to là
-                        // GUI giật cục. URL tunnel luôn nằm ở dòng gần cuối
-                        // nên phần đuôi là đủ.
-                        const int TailBytes = 32 * 1024;
-                        long start = Math.Max(0, fs.Length - TailBytes);
-                        fs.Seek(start, SeekOrigin.Begin);
-                        using (StreamReader sr = new StreamReader(fs, Encoding.UTF8))
-                        {
-                            string tail = sr.ReadToEnd();
-                            Match last = default(Match);
-                            foreach (Match m in Regex.Matches(tail, @"https://[a-z0-9-]+\.trycloudflare\.com")) last = m;
-                            if (last != null && last.Success) found = last.Value;
-                        }
-                    }
-                    if (found != "" && modified > bestTime)
-                    {
-                        best = found;
-                        bestTime = modified;
-                    }
-                }
-                return best;
-            }
-            catch { }
-            return "";
-        }
-
-        // tunnel-state.json do bridge/src/tunnel.js ghi mỗi lần đổi pha — khi
-        // tunnel đang sống file luôn mang phase "up" + URL hiện tại. Trả URL đó,
-        // rỗng khi file thiếu / pha không phải "up" (backoff để nhánh 429 lo).
-        private string ReadTunnelUrlFromState()
-        {
-            try
-            {
-                string path = Path.Combine(GetBridgeDataDir(), "tunnel-state.json");
-                if (!File.Exists(path)) return "";
-                string content = File.ReadAllText(path);
-                if (!Regex.IsMatch(content, @"""phase""\s*:\s*""up""")) return "";
-                Match url = Regex.Match(content, @"""url""\s*:\s*""(https://[a-z0-9-]+\.trycloudflare\.com)""");
-                return url.Success ? url.Groups[1].Value : "";
-            }
-            catch { }
-            return "";
-        }
-
-        // tunnel-state.json do bridge/src/tunnel.js ghi: {"phase":"backoff",
-        // "streak":N,"nextAttemptAt":<epoch ms>,...}. Trả số PHÚT còn lại phải
-        // chờ (>0 khi đang bị Cloudflare 429), -1 khi không có file/đã hết chờ.
-        // Lý do tồn tại: trước đây user thấy "không kết nối được" là bấm Restart
-        // — mỗi lần Restart = xin Cloudflare 1 tunnel mới = 429 tự gia hạn mãi.
-        private int ReadTunnelBackoffMinutes()
-        {
-            try
-            {
-                string path = Path.Combine(GetBridgeDataDir(), "tunnel-state.json");
-                if (!File.Exists(path)) return -1;
-                string content = File.ReadAllText(path);
-                if (!Regex.IsMatch(content, @"""phase""\s*:\s*""backoff""")) return -1;
-                Match next = Regex.Match(content, @"""nextAttemptAt""\s*:\s*(\d+)");
-                if (!next.Success) return -1;
-                long nextAttemptAt = Convert.ToInt64(next.Groups[1].Value);
-                long epochNow = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
-                long remainingMs = nextAttemptAt - epochNow;
-                if (remainingMs <= 0) return -1;
-                return (int)Math.Ceiling(remainingMs / 60000.0);
-            }
-            catch { }
-            return -1;
-        }
-
         // ================= ACTIONS =================
 
         private void ActionStartBridge()
@@ -1306,7 +843,7 @@ namespace OpenPocket.Desktop
 
             // Dependency vendored trong zip — kiểm presence ĐỒNG BỘ (false =
             // thiếu thành phần, MessageBox đã báo rõ, nút không kẹt trạng thái).
-            if (!EnsureBridgeDepsPresent()) return;
+            if (!BridgeProcess.EnsureDepsPresent(this, bridgeDir, nodeExe)) return;
 
             SetBridgeButton(btnStartBridge, false);
             btnStartBridge.Text = "Preparing...";
@@ -1319,32 +856,16 @@ namespace OpenPocket.Desktop
                     btnStartBridge.Text = "Start Bridge";
                     try
                     {
-                        if (IsAutostartTaskExisting())
+                        if (AutostartTask.Exists())
                         {
                             // Chạy task có sẵn — PHẢI kiểm exit code: trước đây
                             // /run hụt (task hỏng, thiếu quyền…) mà không ai hay,
                             // đèn xanh chỉ là mơ hồ của tick sau.
-                            var psiRun = new ProcessStartInfo("schtasks.exe", "/run /tn OpenPocketBridge");
-                            psiRun.CreateNoWindow = true;
-                            psiRun.UseShellExecute = false;
-                            psiRun.RedirectStandardOutput = true;
-                            psiRun.RedirectStandardError = true;
-                            using (Process p = Process.Start(psiRun))
+                            string runError;
+                            if (!AutostartTask.RunExisting(out runError))
                             {
-                                bool exited = p.WaitForExit(10000);
-                                if (!exited)
-                                {
-                                    MessageBox.Show(this, "Could not start the bridge: the schtasks /run command did not exit after 10 seconds.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                                    return;
-                                }
-                                if (p.ExitCode != 0)
-                                {
-                                    string err = "";
-                                    try { err = p.StandardError.ReadToEnd().Trim(); } catch { }
-                                    if (err == "") { try { err = p.StandardOutput.ReadToEnd().Trim(); } catch { } }
-                                    MessageBox.Show(this, "Could not start the bridge - the OpenPocketBridge task failed (schtasks exit " + p.ExitCode + "): " + err, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                                    return;
-                                }
+                                MessageBox.Show(this, runError, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                return;
                             }
                         }
                         else
@@ -1353,7 +874,7 @@ namespace OpenPocket.Desktop
                             // vừa TẮT): chạy node trực tiếp. TUYỆT ĐỐI không tự
                             // tạo lại task ở đây — bản cũ tự bật lại autostart
                             // ngay sau khi người dùng bỏ tick, rất khó chịu.
-                            StartBridgeDirect();
+                            BridgeProcess.StartDirect(bridgeDir, nodeExe);
                         }
                         Thread.Sleep(800);
                         CheckStatus();
@@ -1366,120 +887,23 @@ namespace OpenPocket.Desktop
             });
         }
 
-        // Bật bridge KHÔNG qua task scheduler: node chạy trực tiếp, cửa sổ ẩn,
-        // log ghi tiếp bridge-task.log (cùng dòng lệnh với .vbs của task). GUI
-        // chạy elevated (manifest) nên tiến trình con kế thừa quyền — tương
-        // đương /RL HIGHEST. Được dùng khi task tự khởi động chưa tồn tại:
-        // Bật Bridge phải LUÔN chạy được, còn autostart chỉ qua checkbox.
-        private void StartBridgeDirect()
-        {
-            string entry = Path.Combine(bridgeDir, "src", "index.js");
-            string logPath = Path.Combine(GetBridgeDataDir(), "bridge-task.log");
-            var psi = new ProcessStartInfo("cmd.exe",
-                "/c \"\"" + nodeExe + "\" \"" + entry + "\" >> \"" + logPath + "\" 2>&1\"");
-            psi.WorkingDirectory = bridgeDir;
-            psi.CreateNoWindow = true;
-            psi.UseShellExecute = false;
-            Process.Start(psi);
-        }
-
         private void ActionStopBridge()
         {
             try
             {
-                // Dừng task nếu task đang có instance chạy
-                try
+                string error = BridgeProcess.Stop(bridgeDir);
+                if (error != "")
                 {
-                    var psiEnd = new ProcessStartInfo("schtasks.exe", "/end /tn OpenPocketBridge");
-                    psiEnd.CreateNoWindow = true;
-                    psiEnd.UseShellExecute = false;
-                    Process.Start(psiEnd).WaitForExit(3000);
+                    MessageBox.Show(this, "Error while stopping: " + error, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
                 }
-                catch { }
-
-                // 1. Kill theo pid file (bridge do `openpocket start` mở)
-                string pidFile = Path.Combine(GetBridgeDataDir(), "bridge.pid");
-                if (File.Exists(pidFile))
-                {
-                    string pidStr = File.ReadAllText(pidFile).Trim();
-                    int pid;
-                    if (int.TryParse(pidStr, out pid))
-                    {
-                        try
-                        {
-                            Process.GetProcessById(pid).Kill();
-                        }
-                        catch { }
-                    }
-                    try { File.Delete(pidFile); } catch { }
-                }
-
-                // 2. Fallback WMI: bridge do task scheduler mở chạy elevated KHÔNG có
-                // pid file — dò process node có ĐẦY ĐỦ đường dẫn entry script của
-                // cài đặt NÀY trong command line rồi kill. Điều kiện cũ (chỉ cần
-                // chữ "bridge" + "index.js" xuất hiện riêng lẻ) từng giết NHẦM
-                // node.exe của người khác đang chạy bridge trong repo/thư mục
-                // khác trên cùng máy. bridgeDir chưa xác định thì KHÔNG kill mò.
-                if (bridgeDir != "" && File.Exists(Path.Combine(bridgeDir, "src", "index.js")))
-                {
-                    string entryThis = Path.Combine(bridgeDir, "src", "index.js")
-                        .ToLowerInvariant().Replace('/', '\\');
-                    try
-                    {
-                        using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
-                            "SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name = 'node.exe'"))
-                        {
-                            foreach (ManagementObject proc in searcher.Get())
-                            {
-                                string cmdLine = (Convert.ToString(proc["CommandLine"]) ?? "")
-                                    .ToLowerInvariant().Replace('/', '\\');
-                                if (cmdLine.Contains(entryThis))
-                                {
-                                    try
-                                    {
-                                        Process.GetProcessById(Convert.ToInt32(proc["ProcessId"])).Kill();
-                                    }
-                                    catch { }
-                                }
-                            }
-                        }
-                    }
-                    catch { }
-                }
-
-                Thread.Sleep(800);
                 // Bridge đã chết — xóa hẳn file log (owner 13/09: log không giữ ở máy).
-                WipeLogFiles(true);
+                BridgeProcess.WipeLogs(true);
                 CheckStatus();
             }
             catch (Exception ex)
             {
                 MessageBox.Show(this, "Error while stopping: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        // Dọn log bridge trong data dir. deleteFiles = xóa hẳn file (dùng SAU khi
-        // bridge đã chết); false = truncate về 0 (bridge vẫn chạy, file bị giữ
-        // handle append nên không xóa được). Mở FileShare.ReadWrite để không
-        // vấp handle của tiến trình ghi.
-        private void WipeLogFiles(bool deleteFiles)
-        {
-            string[] names = new string[] { "bridge.log", "bridge-task.log", "watchdog.log" };
-            foreach (string name in names)
-            {
-                string path = Path.Combine(GetBridgeDataDir(), name);
-                if (deleteFiles)
-                {
-                    try { File.Delete(path); continue; } catch { }
-                }
-                try
-                {
-                    using (FileStream fs = new FileStream(path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite))
-                    {
-                        fs.SetLength(0);
-                    }
-                }
-                catch { }
             }
         }
 
@@ -1490,50 +914,20 @@ namespace OpenPocket.Desktop
             ActionStartBridge();
         }
 
-        // ================= BRIDGE HTTP (POST JSON, Bearer master token) =================
+        // ================= BRIDGE HTTP (POST JSON, Bearer master token) =========
 
         // POST tới bridge localhost bằng master token trong config (GUI là chủ
         // máy). onDone(dict, err): dict = đáp án JSON khi 2xx, null = lỗi (err
         // mang mô tả). Chạy thread pool, đáp án marshal về UI thread.
         private void PostBridgeJson(string path, string json, Action<Dictionary<string, object>, string> onDone)
         {
-            var config = LoadConfig();
-            int port = 8788;
-            if (config.ContainsKey("port"))
-            {
-                int p;
-                if (int.TryParse(Convert.ToString(config["port"]), out p) && p > 0) port = p;
-            }
-            string token = config.ContainsKey("mobileToken") ? Convert.ToString(config["mobileToken"]) : "";
+            var config = BridgeConfig.Load();
+            int port = BridgeConfig.Port(config);
+            string token = BridgeConfig.MobileToken(config);
             ThreadPool.QueueUserWorkItem(delegate {
-                Dictionary<string, object> dict = null;
-                string error = null;
-                try
-                {
-                    var req = (HttpWebRequest)WebRequest.Create("http://127.0.0.1:" + port + path);
-                    req.Method = "POST";
-                    req.ContentType = "application/json";
-                    req.Headers.Add("Authorization", "Bearer " + token);
-                    req.Timeout = 8000;
-                    if (json != null)
-                    {
-                        byte[] body = Encoding.UTF8.GetBytes(json);
-                        req.ContentLength = body.Length;
-                        using (Stream stream = req.GetRequestStream()) stream.Write(body, 0, body.Length);
-                    }
-                    using (var res = (HttpWebResponse)req.GetResponse())
-                    using (var sr = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
-                    {
-                        dict = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(sr.ReadToEnd()) ?? new Dictionary<string, object>();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    error = ex.Message;
-                }
-                Dictionary<string, object> result = dict;
-                string errText = error;
-                SafeInvoke(delegate { onDone(result, errText); });
+                string error;
+                Dictionary<string, object> result = BridgeHttp.PostSync(port, token, path, json, out error);
+                SafeInvoke(delegate { onDone(result, error); });
             });
         }
 
@@ -1567,20 +961,21 @@ namespace OpenPocket.Desktop
                 return;
             }
 
-            PairingQrDialog dlg = new PairingQrDialog(LoadConfig(), GetBridgeDataDir());
+            PairingQrDialog dlg = new PairingQrDialog(BridgeConfig.Load(), BridgeConfig.DataDir());
             dlg.ShowDialog(this);
         }
 
         private void ActionOpenLogs()
         {
-            string logPath = Path.Combine(GetBridgeDataDir(), "bridge.log");
+            string dataDir = BridgeConfig.DataDir();
+            string logPath = Path.Combine(dataDir, "bridge.log");
             if (!File.Exists(logPath))
             {
-                logPath = Path.Combine(GetBridgeDataDir(), "bridge-task.log");
+                logPath = Path.Combine(dataDir, "bridge-task.log");
             }
             if (File.Exists(logPath))
             {
-                Process.Start("notepad.exe", logPath);
+                System.Diagnostics.Process.Start("notepad.exe", logPath);
             }
             else
             {
@@ -1588,33 +983,7 @@ namespace OpenPocket.Desktop
             }
         }
 
-        // ================= AUTOSTART TASK =================
-
-        private bool IsAutostartTaskExisting()
-        {
-            try
-            {
-                var psi = new ProcessStartInfo("schtasks.exe", "/query /tn OpenPocketBridge");
-                psi.CreateNoWindow = true;
-                psi.UseShellExecute = false;
-                psi.RedirectStandardOutput = true;
-                psi.RedirectStandardError = true;
-                var p = Process.Start(psi);
-                // schtasks chạy trên UI thread — chờ CÓ GIỚI HẠN, không đóng
-                // băng cửa sổ vô hạn; quá hạn coi như task không tồn tại.
-                bool exited = p.WaitForExit(10000);
-                return exited && p.ExitCode == 0;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private void CheckAutostartTask()
-        {
-            chkAutostart.Checked = IsAutostartTaskExisting();
-        }
+        // ================= AUTOSTART CHECKBOX =================
 
         private void OnAutostartChanged(object sender, EventArgs e)
         {
@@ -1622,69 +991,26 @@ namespace OpenPocket.Desktop
             {
                 if (chkAutostart.Checked)
                 {
-                    EnsureAutostartTaskEnabled();
+                    string error;
+                    if (!AutostartTask.Enable(bridgeDir, nodeExe, out error))
+                    {
+                        chkAutostart.Checked = false;
+                        if (error != "")
+                        {
+                            MessageBox.Show(this, "Could not create the autostart task: " + error, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
+                    }
+                    else
+                    {
+                        chkAutostart.Checked = true;
+                    }
                 }
                 else
                 {
-                    DisableAutostartTask();
+                    AutostartTask.Disable();
+                    chkAutostart.Checked = false;
                 }
             }
-        }
-
-        private void EnsureAutostartTaskEnabled()
-        {
-            try
-            {
-                string bridgeEntry = Path.Combine(bridgeDir, "src", "index.js");
-                if (!File.Exists(bridgeEntry))
-                {
-                    MessageBox.Show(this, "File bridge/src/index.js not found", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
-                string dataDir = GetBridgeDataDir();
-                if (!Directory.Exists(dataDir)) Directory.CreateDirectory(dataDir);
-                string vbsPath = Path.Combine(dataDir, "bridge-task.vbs");
-                string logPath = Path.Combine(dataDir, "bridge-task.log");
-
-                string vbsContent = "Set sh = CreateObject(\"WScript.Shell\")\r\n" +
-                    "sh.CurrentDirectory = \"" + bridgeDir.Replace("\"", "\"\"") + "\"\r\n" +
-                    "sh.Run \"cmd /c \"\"\"\"" + nodeExe.Replace("\"", "\"\"") + "\"\" \"\"" + bridgeEntry.Replace("\"", "\"\"") + "\"\" >> \"\"" + logPath.Replace("\"", "\"\"") + "\"\" 2>&1\"\"\", 0, False\r\n";
-
-                // KHÔNG BOM: wscript đọc .vbs dính UTF-8 BOM là chết ngay với lỗi
-                // "Not enough memory resources" — task Running ảo, bridge không
-                // bao giờ boot (bắt gặp thật 13/09, phải printf tay mới chữa được)
-                File.WriteAllText(vbsPath, vbsContent, new UTF8Encoding(false));
-
-                var psi = new ProcessStartInfo("schtasks.exe",
-                    "/Create /TN OpenPocketBridge /SC ONLOGON /TR \"\\\"wscript.exe\\\" \\\"" + vbsPath + "\\\"\" /RL HIGHEST /F");
-                psi.CreateNoWindow = true;
-                psi.UseShellExecute = false;
-                var p = Process.Start(psi);
-                // Timeout 10s — schtasks trên UI thread không được treo vô hạn;
-                // quá hạn thì chưa thể đọc ExitCode, coi như tạo chưa xong.
-                bool exited = p.WaitForExit(10000);
-
-                chkAutostart.Checked = exited && p.ExitCode == 0;
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, "Could not create the autostart task: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void DisableAutostartTask()
-        {
-            try
-            {
-                var psi = new ProcessStartInfo("schtasks.exe", "/Delete /TN OpenPocketBridge /F");
-                psi.CreateNoWindow = true;
-                psi.UseShellExecute = false;
-                var p = Process.Start(psi);
-                p.WaitForExit(10000); // timeout — không đóng băng UI vô hạn
-                chkAutostart.Checked = false;
-            }
-            catch { }
         }
 
         // ================= TENANT MANAGEMENT — ĐÃ BỎ =================
@@ -1693,306 +1019,33 @@ namespace OpenPocket.Desktop
         // cấp NGẦM bằng BeginProvisionIfNeeded; worker/bridge vẫn giữ đường
         // multi-tenant ngủ đông cho ai cần (không UI nào gọi tới).
 
-        private static string FindNodeExe()
+        // ================= GHI CONFIG — QUA API BRIDGE (candidate 3) =============
+
+        // Lưu config QUA bridge (POST /api/config/identity trên localhost) thay
+        // vì ghi file trực tiếp — bridge là người giữ config.json nhất quán
+        // (saveConfig + ACL). Bridge đang sống: 200 = bridge ghi xong. Bridge
+        // chết: fallback ghi file như trước (khi đó không ai khác đang giữ
+        // config nên ghi trực tiếp là an toàn — vừa ghi xong chính mình boot).
+        private void SaveConfig(Dictionary<string, object> config)
         {
-            try
+            if (TrySaveViaBridge(config)) return;
+            BridgeConfig.Save(config);
+        }
+
+        // Ghi qua bridge; false khi bridge không nhận (chết, 4xx/5xx, sai token)
+        private bool TrySaveViaBridge(Dictionary<string, object> config)
+        {
+            if (!isBridgeRunning) return false;
+            int port = BridgeConfig.Port(config);
+            string token = BridgeConfig.MobileToken(config);
+            var payload = new Dictionary<string, object>();
+            foreach (string key in new string[] { "lookupUrl", "lookupTenant", "lookupSecret", "machineName" })
             {
-                var p = new Process();
-                p.StartInfo.FileName = "where.exe";
-                p.StartInfo.Arguments = "node.exe";
-                p.StartInfo.UseShellExecute = false;
-                p.StartInfo.RedirectStandardOutput = true;
-                p.StartInfo.CreateNoWindow = true;
-                p.Start();
-                string outStr = p.StandardOutput.ReadLine();
-                p.WaitForExit();
-                if (!string.IsNullOrEmpty(outStr) && File.Exists(outStr.Trim()))
-                    return outStr.Trim();
+                if (config.ContainsKey(key)) payload[key] = config[key];
             }
-            catch { }
-
-            string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-            string nodePf = Path.Combine(pf, "nodejs", "node.exe");
-            if (File.Exists(nodePf)) return nodePf;
-
-            return "node.exe";
-        }
-    }
-
-    // ================= PAIRING QR POPUP DIALOG =================
-    // QR NGUỒN: bridge /api/pairing-code trả sẵn ASCII QR (qrcode-terminal) —
-    // GUI chỉ vẽ lại bằng font monospace, KHÔNG gửi mã ghép cho API QR ngoài.
-
-    public class PairingQrDialog : Form
-    {
-        private static readonly Color ColorBg = Color.FromArgb(244, 244, 245);
-        private static readonly Color ColorCard = Color.White;
-        private static readonly Color ColorPrimary = Color.FromArgb(24, 24, 27);
-        // CHỮ PHẢI TỐI trên nền sáng — di sản bản dark cũ để chữ #F4F4F5 (gần
-        // trắng): title, nút "Mã vĩnh viễn", link master, nút Đóng đều mờ gần
-        // như vô hình trên nền trắng (bắt gặp bằng mắt 13/09)
-        private static readonly Color ColorText = Color.FromArgb(24, 24, 27);
-        private static readonly Color ColorMuted = Color.FromArgb(113, 113, 122);
-
-        private Label lblQrRender;
-        private Label lblPairCode;
-        private Label lblExpiry;
-        private Label lblPairUrlNote;
-        private Label lblMasterNote;
-        private TextBox txtPairUrl;
-        private TextBox txtMasterUrl;
-        private MainForm.RoundedButton btnCopyUrl;
-        private MainForm.RoundedButton btnCopyMaster;
-        private MainForm.RoundedButton btnShowLive;
-        private MainForm.RoundedButton btnShowMaster;
-        private MainForm.RoundedButton btnClose;
-
-        private string liveQr = "";
-        private string masterQr = "";
-        private string livePairUrl = "";
-        private string liveMasterUrl = "";
-        private bool showingMaster = false;
-
-        public PairingQrDialog(Dictionary<string, object> config, string bridgeDataDir)
-        {
-            this.Text = "Phone pairing code - OpenPocket";
-            this.ClientSize = new Size(520, 700);
-            this.StartPosition = FormStartPosition.CenterParent;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
-            this.MaximizeBox = false;
-            this.MinimizeBox = false;
-            this.BackColor = ColorBg;
-            this.ForeColor = ColorText;
-            this.Font = new Font("Segoe UI", 9.5f);
-            this.Icon = MainForm.AppIcon;
-
-            int port = 8788;
-            if (config.ContainsKey("port"))
-            {
-                int p;
-                if (int.TryParse(Convert.ToString(config["port"]), out p) && p > 0) port = p;
-            }
-            string token = config.ContainsKey("mobileToken") ? Convert.ToString(config["mobileToken"]) : "";
-
-            // Title
-            Label lblTitle = new Label();
-            lblTitle.Text = "📱 PHONE PAIRING - SCAN THE CODE";
-            lblTitle.Font = new Font("Segoe UI", 12f, FontStyle.Bold);
-            lblTitle.ForeColor = ColorText;
-            lblTitle.Location = new Point(20, 14);
-            lblTitle.AutoSize = true;
-            this.Controls.Add(lblTitle);
-
-            // Pair Code
-            lblPairCode = new Label();
-            lblPairCode.Text = "Getting the code...";
-            lblPairCode.Font = new Font("Segoe UI", 15f, FontStyle.Bold);
-            lblPairCode.ForeColor = ColorPrimary;
-            lblPairCode.Location = new Point(20, 46);
-            lblPairCode.Size = new Size(470, 30);
-            lblPairCode.TextAlign = ContentAlignment.MiddleCenter;
-            this.Controls.Add(lblPairCode);
-
-            // Expiry
-            lblExpiry = new Label();
-            lblExpiry.Text = "Asking the bridge for the live code...";
-            lblExpiry.Font = new Font("Segoe UI", 8.5f);
-            lblExpiry.ForeColor = ColorMuted;
-            lblExpiry.Location = new Point(20, 78);
-            lblExpiry.Size = new Size(470, 18);
-            lblExpiry.TextAlign = ContentAlignment.MiddleCenter;
-            this.Controls.Add(lblExpiry);
-
-            // Toggle: QR mã 1 lần (30 phút) hay QR master (vĩnh viễn)
-            btnShowLive = new MainForm.RoundedButton(MainForm.ButtonKind.Primary);
-            btnShowLive.Text = "One-time code";
-            btnShowLive.Location = new Point(120, 102);
-            btnShowLive.Size = new Size(130, 26);
-            btnShowLive.Click += delegate { ShowQr(false); };
-            this.Controls.Add(btnShowLive);
-
-            btnShowMaster = new MainForm.RoundedButton(MainForm.ButtonKind.Ghost);
-            btnShowMaster.Text = "⭐ Permanent code";
-            btnShowMaster.Location = new Point(258, 102);
-            btnShowMaster.Size = new Size(142, 26);
-            btnShowMaster.Click += delegate { ShowQr(true); };
-            this.Controls.Add(btnShowMaster);
-
-            // QR render ASCII (nền trắng, chữ đen — font monospace giữ khối vuông).
-            // KHÔNG ghim Left: ASCII mã master dài hơn mã 1 lần nên Width thay đổi —
-            // Relayout() căn giữa theo Width thật sau mỗi lần đổi text (trước đây
-            // cứng x=95 → mã lệch trái, cả khối link dưới bị ghim y=496 dù QR chỉ
-            // cao ~330px → hụt một mảng trống lớn giữa QR và link)
-            lblQrRender = new Label();
-            lblQrRender.Text = "\n\n   Loading QR from the bridge...";
-            lblQrRender.Font = new Font("Consolas", 7.5f);
-            lblQrRender.BackColor = Color.White;
-            lblQrRender.ForeColor = Color.Black;
-            lblQrRender.Location = new Point(0, 140);
-            lblQrRender.AutoSize = true;
-            this.Controls.Add(lblQrRender);
-
-            // Link ghép 1 lần
-            lblPairUrlNote = new Label();
-            lblPairUrlNote.Text = "One-time pairing link (safe to send over any app - tapping it signs you in):";
-            lblPairUrlNote.Font = new Font("Segoe UI", 8.5f);
-            lblPairUrlNote.ForeColor = ColorMuted;
-            lblPairUrlNote.Location = new Point(24, 496);
-            lblPairUrlNote.AutoSize = true;
-            this.Controls.Add(lblPairUrlNote);
-
-            txtPairUrl = new TextBox();
-            txtPairUrl.Location = new Point(24, 514);
-            txtPairUrl.Size = new Size(456, 24);
-            txtPairUrl.BackColor = ColorCard;
-            txtPairUrl.ForeColor = ColorText;
-            txtPairUrl.BorderStyle = BorderStyle.FixedSingle;
-            txtPairUrl.ReadOnly = true;
-            this.Controls.Add(txtPairUrl);
-
-            btnCopyUrl = new MainForm.RoundedButton(MainForm.ButtonKind.Primary);
-            btnCopyUrl.Text = "📋 Copy pairing link";
-            btnCopyUrl.Location = new Point(24, 544);
-            btnCopyUrl.Size = new Size(200, 30);
-            btnCopyUrl.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
-            btnCopyUrl.Click += delegate {
-                if (!string.IsNullOrEmpty(livePairUrl))
-                {
-                    Clipboard.SetText(livePairUrl);
-                    MessageBox.Show(this, "Pairing link copied to the clipboard!", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-            };
-            this.Controls.Add(btnCopyUrl);
-
-            // Master token
-            lblMasterNote = new Label();
-            lblMasterNote.Text = "⭐ Permanent code - DO NOT share, scan it only on this computer:";
-            lblMasterNote.Font = new Font("Segoe UI", 8.5f);
-            lblMasterNote.ForeColor = ColorMuted;
-            lblMasterNote.Location = new Point(24, 586);
-            lblMasterNote.AutoSize = true;
-            this.Controls.Add(lblMasterNote);
-
-            txtMasterUrl = new TextBox();
-            txtMasterUrl.Location = new Point(24, 604);
-            txtMasterUrl.Size = new Size(456, 24);
-            txtMasterUrl.BackColor = ColorCard;
-            txtMasterUrl.ForeColor = ColorText;
-            txtMasterUrl.BorderStyle = BorderStyle.FixedSingle;
-            txtMasterUrl.ReadOnly = true;
-            this.Controls.Add(txtMasterUrl);
-
-            btnCopyMaster = new MainForm.RoundedButton(MainForm.ButtonKind.Ghost);
-            btnCopyMaster.Text = "📋 Copy master link";
-            btnCopyMaster.Location = new Point(24, 634);
-            btnCopyMaster.Size = new Size(200, 30);
-            btnCopyMaster.Click += delegate {
-                if (!string.IsNullOrEmpty(liveMasterUrl))
-                {
-                    Clipboard.SetText(liveMasterUrl);
-                    MessageBox.Show(this, "Master link copied!", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-            };
-            this.Controls.Add(btnCopyMaster);
-
-            // Close Button
-            btnClose = new MainForm.RoundedButton(MainForm.ButtonKind.Ghost);
-            btnClose.Text = "Close";
-            btnClose.Location = new Point(200, 668);
-            btnClose.Size = new Size(120, 28);
-            btnClose.Click += delegate { this.Close(); };
-            this.Controls.Add(btnClose);
-
-            // Lấy mã live từ bridge — SAU khi form có handle (Load event): gọi
-            // Invoke từ ThreadPool trước khi ShowDialog tạo handle là sập app.
-            int portAtLoad = port;
-            string tokenAtLoad = token;
-            this.Load += delegate {
-                FetchLiveCode(portAtLoad, tokenAtLoad);
-            };
-
-            Relayout();
-        }
-
-        // Xếp lại toàn bộ khối dưới theo chiều cao QR thật + căn QR giữa khung.
-        // QR 1 lần và master khác nhau cả rộng lẫn cao → không thể ghim tọa độ
-        // cứng; form cũng tự co/giãn theo nội dung (FixedDialog nên vẫn đẹp)
-        private void Relayout()
-        {
-            int clientW = this.ClientSize.Width;
-            lblQrRender.Left = Math.Max(12, (clientW - lblQrRender.Width) / 2);
-
-            int y = lblQrRender.Bottom + 22;
-            lblPairUrlNote.Location = new Point(24, y);
-            y += lblPairUrlNote.Height + 6;
-            txtPairUrl.Location = new Point(24, y);
-            y += txtPairUrl.Height + 10;
-            btnCopyUrl.Location = new Point(24, y);
-            y += btnCopyUrl.Height + 14;
-            lblMasterNote.Location = new Point(24, y);
-            y += lblMasterNote.Height + 6;
-            txtMasterUrl.Location = new Point(24, y);
-            y += txtMasterUrl.Height + 10;
-            btnCopyMaster.Location = new Point(24, y);
-            y += btnCopyMaster.Height + 16;
-            btnClose.Location = new Point((clientW - btnClose.Width) / 2, y);
-            this.ClientSize = new Size(clientW, btnClose.Bottom + 12);
-        }
-
-        private void ShowQr(bool master)
-        {
-            showingMaster = master;
-            string qrText = master ? masterQr : liveQr;
-            lblQrRender.Text = string.IsNullOrEmpty(qrText) ? "\n\n   (no QR yet)" : qrText;
-            // Viên ĐANG CHỌN = nền đen chữ trắng; viên còn lại = nền trắng chữ đen
-            // RoundedButton tự vẽ màu theo kind — toggle bằng SetKind: nút ĐANG chọn là
-            // Primary (đen), nút còn lại Ghost (trắng viền nhạt)
-            btnShowLive.SetKind(master ? MainForm.ButtonKind.Ghost : MainForm.ButtonKind.Primary);
-            btnShowMaster.SetKind(master ? MainForm.ButtonKind.Primary : MainForm.ButtonKind.Ghost);
-            Relayout();
-        }
-
-        private void FetchLiveCode(int port, string mobileToken)
-        {
-            ThreadPool.QueueUserWorkItem(delegate {
-                try
-                {
-                    string endpoint = string.Format("http://127.0.0.1:{0}/api/pairing-code", port);
-                    var req = (HttpWebRequest)WebRequest.Create(endpoint);
-                    req.Headers.Add("Authorization", "Bearer " + mobileToken);
-                    req.Timeout = 4000;
-
-                    using (var res = (HttpWebResponse)req.GetResponse())
-                    using (var sr = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
-                    {
-                        string json = sr.ReadToEnd();
-                        var jss = new JavaScriptSerializer();
-                        var dict = jss.Deserialize<Dictionary<string, object>>(json);
-
-                        string codeFormatted = dict.ContainsKey("codeFormatted") ? Convert.ToString(dict["codeFormatted"]) : "?";
-                        int secondsLeft = dict.ContainsKey("secondsLeft") ? Convert.ToInt32(dict["secondsLeft"]) : 1800;
-                        livePairUrl = dict.ContainsKey("pairUrl") ? Convert.ToString(dict["pairUrl"]) : "";
-                        liveMasterUrl = dict.ContainsKey("masterUrl") ? Convert.ToString(dict["masterUrl"]) : "";
-                        liveQr = dict.ContainsKey("qr") ? Convert.ToString(dict["qr"]) : "";
-                        masterQr = dict.ContainsKey("masterQr") ? Convert.ToString(dict["masterQr"]) : "";
-
-                        MainForm.SafeInvoke(this, delegate {
-                            lblPairCode.Text = codeFormatted;
-                            lblExpiry.Text = string.Format("The one-time code lives ~{0} minutes - scan it with your phone camera", Math.Ceiling(secondsLeft / 60.0));
-                            txtPairUrl.Text = livePairUrl;
-                            txtMasterUrl.Text = liveMasterUrl;
-                            ShowQr(false);
-                        });
-                    }
-                }
-                catch (Exception ex)
-                {
-                    MainForm.SafeInvoke(this, delegate {
-                        lblPairCode.Text = "Could not read the code";
-                        lblExpiry.Text = "Bridge returned an error: " + ex.Message;
-                    });
-                }
-            });
-        }
+            string json = new JavaScriptSerializer().Serialize(payload);
+            string error;
+            var dict = BridgeHttp.PostSync(port, token, "/api/config/identity", json, out error);
+            return dict != null && dict.ContainsKey("ok") && Convert.ToBoolean(dict["ok"]);        }
     }
 }

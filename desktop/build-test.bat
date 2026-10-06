@@ -18,7 +18,7 @@ if exist "invite.key" set /p INVITE_KEY=<invite.key
 >> src\InviteKey.cs echo     public const string RoomInviteKey = "%INVITE_KEY%";
 >> src\InviteKey.cs echo }
 
-"%CSC%" /target:winexe /optimize /codepage:65001 /win32icon:src\app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket-test.exe src\InviteKey.cs src\OpenPocket.cs
+"%CSC%" /target:winexe /optimize /codepage:65001 /win32icon:src\app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket-test.exe src\InviteKey.cs src\Ui.cs src\BridgeConfig.cs src\BridgeProcess.cs src\TunnelState.cs src\AutostartTask.cs src\BridgeHttp.cs src\Provisioning.cs src\PairingQrDialog.cs src\OpenPocket.cs
 if %ERRORLEVEL% equ 0 (
     echo [OK] Bien dich thanh cong: desktop\bin\OpenPocket-test.exe
 ) else (

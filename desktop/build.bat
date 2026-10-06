@@ -27,7 +27,10 @@ if exist "invite.key" set /p INVITE_KEY=<invite.key
 if not defined INVITE_KEY echo [WARN] Thieu invite.key - exe nay se KHONG tu tao duoc phong tren worker.
 
 echo Compiling OpenPocket.exe...
-"%CSC%" /target:winexe /optimize /codepage:65001 /win32manifest:src\app.manifest /win32icon:src\app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket.exe src\InviteKey.cs src\OpenPocket.cs
+rem 8 module (tách candidate 7 06/10): Ui + BridgeConfig + BridgeProcess +
+rem TunnelState + AutostartTask + BridgeHttp + Provisioning + PairingQrDialog,
+rem OpenPocket.cs chỉ còn form chính + điều phối.
+"%CSC%" /target:winexe /optimize /codepage:65001 /win32manifest:src\app.manifest /win32icon:src\app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket.exe src\InviteKey.cs src\Ui.cs src\BridgeConfig.cs src\BridgeProcess.cs src\TunnelState.cs src\AutostartTask.cs src\BridgeHttp.cs src\Provisioning.cs src\PairingQrDialog.cs src\OpenPocket.cs
 
 if %ERRORLEVEL% equ 0 (
     echo [OK] Bien dich thanh cong: desktop\bin\OpenPocket.exe
