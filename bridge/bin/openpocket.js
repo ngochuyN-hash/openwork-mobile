@@ -335,7 +335,7 @@ if (cmd === "watchdog") {
 }
 
 if (cmd === "code") {
-  const { default: qrcode } = await import("qrcode-terminal");
+  const { default: qrcode } = await import("../src/vendor/qrcode-terminal/index.js");
   const config = loadConfig();
   const port = config.port || 8788;
   const baseFixed = (config.lookupUrl || "").replace(/\/+$/, ""); // worker = địa chỉ cố định (ưu tiên)

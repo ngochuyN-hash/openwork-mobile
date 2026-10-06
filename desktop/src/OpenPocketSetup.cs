@@ -5,13 +5,14 @@ using System.IO;
 using System.IO.Compression;
 using System.Windows.Forms;
 
-// Trình cài OpenPocket — MỘT file exe duy nhất gói trọn bridge + web + app,
-// và bridge/node_modules đã VENDOR SẴN trong gói (chỉ qrcode-terminal — see
-// desktop/build-setup.js), nên người dùng KHÔNG chạy npm install nữa.
-// Bấm đúp -> giải nén vào %LOCALAPPDATA%\OpenPocket -> tạo shortcut ->
-// mở app (app tự định danh + QR sau đó). Node.js vẫn cần trên máy để CHẠY
-// bridge (node.exe), nhưng thiếu Node KHÔNG còn chặn cài — chỉ một cảnh báo
-// + gợi ý tải trang. Báo thật khi shortcut/app tự mở thất bại, không nuốt lỗi.
+// Trình cài OpenPocket — MỘT file exe duy nhất gói trọn bridge + web + app.
+// Bridge zero-dependency (qrcode-terminal đã vendor thành src trong
+// bridge/src/vendor) — người dùng KHÔNG chạy npm install, gói không còn
+// node_modules. Bấm đúp -> giải nén vào %LOCALAPPDATA%\OpenPocket -> tạo
+// shortcut -> mở app (app tự định danh + QR sau đó). Node.js vẫn cần trên máy
+// để CHẠY bridge (node.exe), nhưng thiếu Node KHÔNG còn chặn cài — chỉ một
+// cảnh báo + gợi ý tải trang. Báo thật khi shortcut/app tự mở thất bại,
+// không nuốt lỗi.
 // C# 5 only (csc .NET 4): không string interpolation, không ?., không out var.
 
 namespace OpenPocket.Setup
@@ -29,8 +30,8 @@ namespace OpenPocket.Setup
             bool testMode = !string.IsNullOrEmpty(testDir);
             if (testMode) finalDir = testDir;
 
-            // Node.js vẫn cần để CHẠY bridge (node.exe — FindNodeExe của app),
-            // nhưng node_modules đã vendor trong gói nên cài KHÔNG bị chặn.
+            // Node.js vẫn cần để CHẠY bridge (node.exe — FindNodeExe của app);
+            // bridge zero-dependency nên cài KHÔNG bị chặn vì thiếu gói nào.
             // Hạ từ "bắt cài + mở trình duyệt + return 1" xuống một cảnh báo:
             // cài tiếp bình thường, chỉ hỏi có muốn mở trang tải Node không.
             if (!HasNode())

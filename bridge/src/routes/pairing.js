@@ -1,4 +1,4 @@
-import qrcode from "qrcode-terminal";
+import qrcode from "../vendor/qrcode-terminal/index.js";
 import { deny, isTokenAuthorized } from "../auth.js";
 import { readJsonBody, sendJson } from "../http-util.js";
 import { CODE_TTL_MINUTES } from "../pairing.js";

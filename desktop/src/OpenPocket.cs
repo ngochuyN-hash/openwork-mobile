@@ -53,8 +53,8 @@ namespace OpenPocket.Desktop
         private string nodeExe = "";
         // 1 PC, hết tài khoản: lần đầu mở app, app TỰ cấp định danh máy (room
         // ngầm + mật khẩu ngầm qua /api/tenant/create) — người dùng chỉ bấm
-        // Bật và quét QR. Dependency (node_modules) được VENDOR sẵn trong zip
-        // bởi người đóng gói — hết npm install lúc chạy nữa.
+        // Bật và quét QR. Bridge KHÔNG còn dependency npm nào (qrcode-terminal
+        // đã vendor thành src trong bridge/src/vendor) — không cần node_modules.
         private bool provisioning = false;
         private bool provisionDone = false;
         // Lỗi provision KHÔNG nuốt âm thầm nữa: giữ message + hiện lên hàng
@@ -332,9 +332,9 @@ namespace OpenPocket.Desktop
                 }
             }
 
-            // node_modules được VENDOR sẵn trong zip (người đóng gói lo) — hết
-            // npm install lúc chạy. Thiếu thì Bật Bridge báo rõ (EnsureBridgeDepsPresent)
-            // thay vì tự cài ngầm hàng phút.
+            // Bridge zero-dependency (qrcode-terminal đã vendor trong
+            // bridge/src/vendor) — không cần node_modules, chỉ cần node.exe
+            // để CHẠY. Thiếu gì Bật Bridge cũng báo rõ (EnsureBridgeDepsPresent).
 
             // Tìm node.exe
             nodeExe = FindNodeExe();
@@ -991,10 +991,10 @@ namespace OpenPocket.Desktop
             return "ows_" + BitConverter.ToString(entropy).Replace("-", "").ToLowerInvariant();
         }
 
-        // Dependency của bridge (node_modules) được VENDOR sẵn trong zip —
-        // KHÔNG còn npm install lúc chạy (khối cũ chạy ngầm tối đa 5 phút mà
-        // không nói gì, và giữ nút "Đang cài bridge" treo không hồi kết).
-        // Kiểm presence ĐỒNG BỘ: thiếu là bản zip đóng gói hỏng — báo rõ.
+        // Bridge zero-dependency (qrcode-terminal nằm trong bridge/src/vendor) —
+        // KHÔNG còn npm install, KHÔNG còn node_modules (khối cũ chạy ngầm tối
+        // đa 5 phút mà không nói gì, và giữ nút "Đang cài bridge" treo không
+        // hồi kết). Kiểm presence ĐỒNG BỘ: thiếu là bản zip đóng gói hỏng — báo rõ.
         private bool EnsureBridgeDepsPresent()
         {
             if (bridgeDir == "" || !File.Exists(Path.Combine(bridgeDir, "src", "index.js")))
@@ -1008,13 +1008,6 @@ namespace OpenPocket.Desktop
             {
                 MessageBox.Show(this,
                     "Node.js (node.exe) not found.\nInstall Node.js 20+ (nodejs.org), then tap Start Bridge again.",
-                    "Missing component", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return false;
-            }
-            if (!Directory.Exists(Path.Combine(bridgeDir, "node_modules")))
-            {
-                MessageBox.Show(this,
-                    "bridge\\node_modules is missing - the packaged zip lacks dependencies.\nGet the full zip (node_modules is vendored in), then tap Start Bridge again.",
                     "Missing component", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }

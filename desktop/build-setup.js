@@ -1,17 +1,14 @@
 // Build bộ cài OpenPocket — MỘT file OpenPocket-Setup.exe.
 //
 // Flow: assert web/dist is FRESH (never ship a stale bundle) → stage
-// (bridge + VENDORED bridge/node_modules + web/dist + OpenPocket.exe +
-// HUONG-DAN) → zip → NHÚNG zip vào exe trình cài (desktop/src/OpenPocketSetup.cs,
-// csc /res:) → OpenPocket-Setup.exe ở gốc dự án.
+// (bridge + web/dist + OpenPocket.exe + HUONG-DAN) → zip → NHÚNG zip vào exe
+// trình cài (desktop/src/OpenPocketSetup.cs, csc /res:) → OpenPocket-Setup.exe
+// ở gốc dự án.
 //
-// node_modules is VENDORED: the bridge has exactly one production dependency
-// (qrcode-terminal, no deps of its own — see bridge/package-lock.json). The
-// closure is computed from the lockfile and copied from the dev tree's
-// bridge/node_modules, so the END USER never runs npm install — the installer
-// only needs node.exe itself (to run the bridge). The dev tree's node_modules
-// may still carry removed packages (sharp, node-screenshots, …) — they are
-// NOT in the lockfile closure and therefore never staged.
+// The bridge is ZERO-dependency: qrcode-terminal is vendored as plain source
+// in bridge/src/vendor/ (staged with bridge/src like any other file), so there
+// is no node_modules to ship and the END USER never runs npm install — the
+// installer only needs node.exe itself (to run the bridge).
 //
 // Run: node desktop/build-setup.js                (full build)
 //      node desktop/build-setup.js --stage-only   (stop after staging, for checks)
@@ -70,59 +67,6 @@ function assertDistFresh() {
   }
 }
 
-// 0b. Production dependency closure from bridge/package-lock.json —
-// dependencies of dependencies included; devDependencies ignored.
-function productionClosure(lock) {
-  const packages = lock.packages || {};
-  const root = packages[""] || {};
-  const names = new Set();
-  const queue = Object.keys(root.dependencies || {});
-  while (queue.length > 0) {
-    const name = queue.shift();
-    if (names.has(name)) continue;
-    names.add(name);
-    const entry = packages["node_modules/" + name];
-    if (!entry) {
-      throw new Error(
-        'package-lock.json has no entry for "' + name + '"' +
-        " — refresh it: cd bridge && npm install"
-      );
-    }
-    for (const dep of Object.keys(entry.dependencies || {})) queue.push(dep);
-  }
-  return Array.from(names).sort();
-}
-
-// Stage bridge/node_modules with ONLY the lockfile closure. A package missing
-// or version-mismatched in the dev tree is a hard error (stale install must
-// not silently become a broken installer).
-function stageNodeModules() {
-  const lockPath = path.join(ROOT, "bridge", "package-lock.json");
-  const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
-  const names = productionClosure(lock);
-  const staged = [];
-  for (const name of names) {
-    const srcDir = path.join(ROOT, "bridge", "node_modules", name);
-    if (!fs.existsSync(path.join(srcDir, "package.json"))) {
-      throw new Error(
-        "bridge/node_modules/" + name + " is missing locally" +
-        " — install it: cd bridge && npm install"
-      );
-    }
-    const want = lock.packages["node_modules/" + name].version;
-    const have = JSON.parse(fs.readFileSync(path.join(srcDir, "package.json"), "utf8")).version;
-    if (have !== want) {
-      throw new Error(
-        "bridge/node_modules/" + name + " is " + have +
-        ", lockfile wants " + want + " — refresh: cd bridge && npm install"
-      );
-    }
-    fs.cpSync(srcDir, path.join(STAGE, "bridge", "node_modules", name), { recursive: true });
-    staged.push(name + "@" + want);
-  }
-  return staged;
-}
-
 // 1. Stage — bố cục đúng như app đòi (OpenPocket.exe nằm cạnh bridge\, web\)
 assertDistFresh();
 fs.rmSync(STAGE, { recursive: true, force: true });
@@ -132,18 +76,15 @@ fs.cpSync(path.join(ROOT, "bridge", "src"), path.join(STAGE, "bridge", "src"), {
 fs.cpSync(path.join(ROOT, "bridge", "scripts"), path.join(STAGE, "bridge", "scripts"), { recursive: true });
 fs.cpSync(path.join(ROOT, "bridge", "bin"), path.join(STAGE, "bridge", "bin"), { recursive: true });
 fs.copyFileSync(path.join(ROOT, "bridge", "package.json"), path.join(STAGE, "bridge", "package.json"));
-fs.copyFileSync(path.join(ROOT, "bridge", "package-lock.json"), path.join(STAGE, "bridge", "package-lock.json"));
 // No bridge/VERSION here: the OTA VERSION file is gone — package.json is the
 // single version source (bridge/src/index.js reads it).
 fs.cpSync(path.join(ROOT, "web", "dist"), path.join(STAGE, "web", "dist"), { recursive: true });
-const vendored = stageNodeModules();
 const exePath = path.join(ROOT, "desktop", "bin", "OpenPocket.exe");
 if (!fs.existsSync(exePath)) {
   throw new Error("desktop/bin/OpenPocket.exe not found — build it first: desktop\\build.bat");
 }
 fs.copyFileSync(exePath, path.join(STAGE, "OpenPocket.exe"));
 fs.copyFileSync(path.join(ROOT, "HUONG-DAN.txt"), path.join(STAGE, "HUONG-DAN.txt"));
-console.log("vendored node_modules:", vendored.join(", "));
 
 if (STAGE_ONLY) {
   console.log("Stage complete (no exe built):", STAGE);

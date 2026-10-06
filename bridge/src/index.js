@@ -1,5 +1,5 @@
 import { readFileSync, watch, writeFileSync, unlinkSync } from "node:fs";
-import qrcode from "qrcode-terminal";
+import qrcode from "./vendor/qrcode-terminal/index.js";
 import { loadConfig, saveConfig, bridgeDataDir, pairingBaseUrl } from "./config.js";
 import { ensureOwnerToken } from "./bootstrap.js";
 import { discoverServer, checkTokenActive, probeServerUrl } from "./discovery.js";
