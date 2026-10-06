@@ -57,3 +57,10 @@ worker/.wrangler/
 # GUI test build manifest (asInvoker copy for runtime testing)
 desktop/src/app-test.manifest
 OpenPocket-Setup.exe
+
+# room invite key baked into the desktop exe at build time (machine-local
+# secret: exe builds from this repo WITHOUT it cannot create rooms on the
+# worker — that is the point). src/InviteKey.cs is generated from it by the
+# build scripts and must never be committed either.
+desktop/invite.key
+desktop/src/InviteKey.cs

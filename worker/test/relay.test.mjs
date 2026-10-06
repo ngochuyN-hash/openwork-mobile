@@ -130,11 +130,28 @@ const jsonRes = (status, payload) =>
 // Slot machine: còn sống (heartbeat mới, URL tunnel hợp lệ)
 const slot = (url) => JSON.stringify({ url, updatedAt: Date.now() });
 
-/** Request /api/* giống app thật: JSON body + content-type. */
-function apiRequest(path, { method = "POST", body, headers = {} } = {}) {
-  const init = { method, headers: { "content-type": "application/json", ...headers } };
+// Mã mời test — fetchWorker mặc định đặt ROOM_CREATE_KEY bằng giá trị này,
+// đúng mô hình "chỉ exe chính chủ (có mã nhúng) mới tạo được phòng".
+const INVITE_KEY = "invite-test-0123456789abcdef";
+
+/** Request /api/* giống app thật: JSON body + content-type. `invite: false`
+ * mô phỏng exe lạ KHÔNG mang mã mời (chỉ có ý nghĩa với /api/tenant/create). */
+function apiRequest(path, { method = "POST", body, headers = {}, invite = true } = {}) {
+  const allHeaders = {
+    "content-type": "application/json",
+    ...(invite ? { "x-owm-invite": INVITE_KEY } : {}),
+    ...headers,
+  };
+  const init = { method, headers: allHeaders };
   if (method !== "GET" && body !== undefined) init.body = body;
   return new Request(`https://worker.test${path}`, init);
+}
+
+/** Bọc worker.fetch: mặc định môi trường có ROOM_CREATE_KEY = INVITE_KEY
+ * (như exe chính chủ). Muốn mô phỏng worker chưa cấu hình mã mời thì truyền
+ * ROOM_CREATE_KEY: undefined vào env; exe lạ thì apiRequest(..., invite:false). */
+function fetchWorker(request, env = {}) {
+  return worker.fetch(request, { ROOM_CREATE_KEY: INVITE_KEY, ...env });
 }
 
 // Body relay có thể là string (bootstrap) hoặc ArrayBuffer (relay nguyên bản)
@@ -155,7 +172,7 @@ test("bootstrap /api/pair: không tenant → 400 tenant_required, KHÔNG đụng
   const { calls, restore } = mockFetch(() => jsonRes(200, { unexpected: true }));
   t.after(restore);
 
-  const res = await worker.fetch(apiRequest("/api/pair", { body: '{"code":"owd_x"}' }), {
+  const res = await fetchWorker(apiRequest("/api/pair", { body: '{"code":"owd_x"}' }), {
     OWM_STATE: kv,
   });
 
@@ -176,7 +193,7 @@ test("bootstrap /api/pair: không tenant → kể cả machine:main tồn tại 
   const { calls, restore } = mockFetch(() => jsonRes(200, { unexpected: true }));
   t.after(restore);
 
-  const res = await worker.fetch(apiRequest("/api/pair", { body: '{"code":"owd_x"}' }), {
+  const res = await fetchWorker(apiRequest("/api/pair", { body: '{"code":"owd_x"}' }), {
     OWM_STATE: kv,
   });
 
@@ -191,7 +208,7 @@ test("bootstrap GET /api/state: không tenant → 400 tenant_required, không qu
   const { calls, restore } = mockFetch(() => jsonRes(200, { unexpected: true }));
   t.after(restore);
 
-  const res = await worker.fetch(apiRequest("/api/state", { method: "GET" }), { OWM_STATE: kv });
+  const res = await fetchWorker(apiRequest("/api/state", { method: "GET" }), { OWM_STATE: kv });
 
   assert.equal(res.status, 400);
   assert.equal((await res.json()).code, "tenant_required");
@@ -205,7 +222,7 @@ test("bootstrap /api/pair: body JSON hỏng + không tenant → vẫn tenant_req
   t.after(restore);
 
   for (const bad of ["{không phải json", "[]", '"chuỗi"', "5"]) {
-    const res = await worker.fetch(apiRequest("/api/pair", { body: bad }), { OWM_STATE: kv });
+    const res = await fetchWorker(apiRequest("/api/pair", { body: bad }), { OWM_STATE: kv });
     assert.equal(res.status, 400, `body ${JSON.stringify(bad)} phải trả 400`);
     assert.equal((await res.json()).code, "tenant_required");
   }
@@ -219,7 +236,7 @@ test("route thường (không phải bootstrap) không tenant → vẫn relay v�
   const { calls, restore } = mockFetch(() => jsonRes(200, { ok: true, devices: [] }));
   t.after(restore);
 
-  const res = await worker.fetch(apiRequest("/api/devices", { method: "GET" }), { OWM_STATE: kv });
+  const res = await fetchWorker(apiRequest("/api/devices", { method: "GET" }), { OWM_STATE: kv });
 
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { ok: true, devices: [] });
@@ -241,7 +258,7 @@ test("request có x-owm-tenant → relay đúng 1 lần tới phòng đó, khôn
   t.after(restore);
 
   const raw = JSON.stringify({ ping: 1 });
-  const res = await worker.fetch(
+  const res = await fetchWorker(
     apiRequest("/api/pair", { body: raw, headers: { "x-owm-tenant": "MyRoom" } }),
     { OWM_STATE: kv }
   );
@@ -263,7 +280,7 @@ test("GET /api/state: có tenant (header) → relay đúng 1 lần, GET không m
   const { calls, restore } = mockFetch(() => jsonRes(200, { edge: { tenant: "alpha", online: true } }));
   t.after(restore);
 
-  const res = await worker.fetch(
+  const res = await fetchWorker(
     apiRequest("/api/state", { method: "GET", headers: { "x-owm-tenant": "alpha" } }),
     { OWM_STATE: kv }
   );
@@ -283,7 +300,7 @@ test("relay: tunnel không nối được (fetch ném lỗi) → 502 JSON bridge
   });
   t.after(restore);
 
-  const res = await worker.fetch(
+  const res = await fetchWorker(
     apiRequest("/api/devices", { method: "GET", headers: { "x-owm-tenant": "myroom" } }),
     { OWM_STATE: kv }
   );
@@ -300,7 +317,7 @@ test("/api/tenant/create: KV list lỗi → 503 JSON kv_error, không ném ra ng
       throw new Error("kv down");
     },
   };
-  const res = await worker.fetch(
+  const res = await fetchWorker(
     apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "newroom", secret: "strongpass1" }) }),
     { OWM_STATE: failingKV }
   );
@@ -317,7 +334,7 @@ test("/__register: KV ghi lỗi → 503 JSON kv_write_failed, không ném ra ngo
     },
     list: async () => ({ keys: [] }),
   };
-  const res = await worker.fetch(
+  const res = await fetchWorker(
     apiRequest("/__register", {
       body: JSON.stringify({ url: "https://fresh.trycloudflare.com" }),
       headers: { "x-owm-secret": "main-secret" },
@@ -331,7 +348,7 @@ test("/__register: KV ghi lỗi → 503 JSON kv_write_failed, không ném ra ngo
 
 test("lỗi bất ngờ trong handle() → JSON worker_error thay vì trang 1101 HTML của Cloudflare", async (t) => {
   // URL hỏng làm new URL() ném ngay đầu handle() — đủ để chạm nhánh catch wrapper.
-  const res = await worker.fetch(
+  const res = await fetchWorker(
     { url: "://bad-url", method: "GET", headers: new Headers() },
     { OWM_STATE: mockKV() }
   );
@@ -359,7 +376,7 @@ test("FIX-3: POST /api/pair có tenant → 10 lượt/phút/IP, lượt 11 trả
   t.after(restore);
 
   const pairFrom = (ip) =>
-    worker.fetch(
+    fetchWorker(
       apiRequest("/api/pair", {
         body: '{"code":"owd_x"}',
         headers: { "x-owm-tenant": "alpha", "cf-connecting-ip": ip },
@@ -397,7 +414,7 @@ test("FIX-3: POST /api/pair không tenant → vẫn 400 tenant_required, không 
   const { calls, restore } = mockFetch(() => jsonRes(200, { unexpected: true }));
   t.after(restore);
 
-  const res = await worker.fetch(
+  const res = await fetchWorker(
     apiRequest("/api/pair", {
       body: '{"code":"owd_x"}',
       headers: { "cf-connecting-ip": "203.0.113.20" },
@@ -418,7 +435,7 @@ test('FIX-4: ALLOW_ROOM_CREATE = "0" → 403 room_create_disabled, không đụn
   const kv = mockKV({
     "tenant:cua-toi": JSON.stringify({ secretHash: sha256("matkhau1"), name: "Của tôi" }),
   });
-  const res = await worker.fetch(
+  const res = await fetchWorker(
     apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "newroom", secret: "strongpass1" }) }),
     { OWM_STATE: kv, ALLOW_ROOM_CREATE: "0" }
   );
@@ -464,7 +481,7 @@ function racingKV(winnerSecret, readBack = "winner") {
 
 test("FIX-4: race cướp tên phòng → đọc lại thấy secret lệch thì 409 taken, không trả created", async (t) => {
   const kv = racingKV("matkhau-cu-nguoi-khac");
-  const res = await worker.fetch(
+  const res = await fetchWorker(
     apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "newroom", secret: "strongpass1" }) }),
     { OWM_STATE: kv }
   );
@@ -483,7 +500,7 @@ test("FIX-4: read-after-write đọc hụt (null) → vẫn 200 created, không 
   // KV nhất quán theo colo có thể chưa thấy bản vừa ghi — đọc hụt KHÔNG phải
   // bằng chứng ai cướp, nên chỉ kêu "taken" khi ĐỌC ĐƯỢC và secret lệch.
   const kv = racingKV("matkhau-cu-nguoi-khac", "null");
-  const res = await worker.fetch(
+  const res = await fetchWorker(
     apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "newroom", secret: "strongpass1" }) }),
     { OWM_STATE: kv }
   );
@@ -498,7 +515,7 @@ test("FIX-4: read-after-write đọc hụt (null) → vẫn 200 created, không 
 test("FIX-4: không đặt ALLOW_ROOM_CREATE (hoặc \"1\") → vẫn tạo phòng như cũ, mặc định là MỞ", async (t) => {
   for (const flag of [undefined, "1"]) {
     const kv = mockKV();
-    const res = await worker.fetch(
+    const res = await fetchWorker(
       apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "newroom", secret: "strongpass1" }) }),
       flag === undefined ? { OWM_STATE: kv } : { OWM_STATE: kv, ALLOW_ROOM_CREATE: flag }
     );
@@ -538,7 +555,7 @@ test("FIX-2: static qua worker mang CSP + nosniff + no-referrer, header ASSETS g
     },
   };
 
-  const res = await worker.fetch(new Request("https://worker.test/rooms/abc/messages"), env);
+  const res = await fetchWorker(new Request("https://worker.test/rooms/abc/messages"), env);
 
   assert.equal(res.status, 200);
   assert.deepEqual(seen, ["https://worker.test/rooms/abc/messages"], "phải gọi ASSETS với request gốc");
@@ -554,7 +571,7 @@ test("FIX-2: static qua worker mang CSP + nosniff + no-referrer, header ASSETS g
 
 /** Đăng nhập web (POST /api/pair/tenant) — trả cả response lẫn số lần relay. */
 function signIn(kv, calls, user, secret, headers = {}) {
-  return worker.fetch(
+  return fetchWorker(
     apiRequest("/api/pair/tenant", {
       body: JSON.stringify({ user, secret }),
       headers,
@@ -568,7 +585,7 @@ test("SECRET-1: phòng tạo mới → KV chỉ còn secretHash, KHÔNG có mậ
   const { calls, restore } = mockFetch(() => jsonRes(200, { ok: true }));
   t.after(restore);
 
-  const res = await worker.fetch(
+  const res = await fetchWorker(
     apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "phongmoi", secret: "matkhau-toi" }) }),
     { OWM_STATE: kv }
   );
@@ -671,7 +688,7 @@ test("SECRET-1: /__register của bridge chấp nhận CẢ hash lẫn bản ghi
   t.after(restore);
 
   const reg = (user, secret) =>
-    worker.fetch(
+    fetchWorker(
       apiRequest("/__register", {
         body: JSON.stringify({ url: "https://x.trycloudflare.com", tenant: user }),
         headers: { "x-owm-secret": secret },
@@ -686,7 +703,7 @@ test("SECRET-1: /__register của bridge chấp nhận CẢ hash lẫn bản ghi
 
   // machine:main: KHÔNG có tenant, secret lấy từ env BRIDGE_SECRET (chưa, và
   // không được băm — env vẫn là nguồn sự thật plaintext của chủ worker)
-  const main = await worker.fetch(
+  const main = await fetchWorker(
     apiRequest("/__register", {
       body: JSON.stringify({ url: "https://main.trycloudflare.com" }),
       headers: { "x-owm-secret": "main-secret" },
@@ -696,7 +713,7 @@ test("SECRET-1: /__register của bridge chấp nhận CẢ hash lẫn bản ghi
   assert.equal(main.status, 200);
   assert.equal((await kv.get("machine:main", "json")).url, "https://main.trycloudflare.com");
 
-  const badMain = await worker.fetch(
+  const badMain = await fetchWorker(
     apiRequest("/__register", {
       body: JSON.stringify({ url: "https://x.trycloudflare.com" }),
       headers: { "x-owm-secret": "sai-secret" },
@@ -711,7 +728,7 @@ test("SECRET-1: /api/tenant/create với phòng CŨ + đúng mật khẩu → ex
     "tenant:cu": JSON.stringify({ secret: "matkhau-cu", name: "Tên Cũ", createdAt: 1699999999999 }),
   });
 
-  const res = await worker.fetch(
+  const res = await fetchWorker(
     apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "cu", secret: "matkhau-cu" }) }),
     { OWM_STATE: kv }
   );
@@ -731,7 +748,7 @@ test("SECRET-1: /api/tenant/create với phòng CŨ + sai mật khẩu → 401 t
     "tenant:cu": JSON.stringify({ secret: "matkhau-cu", name: "Tên Cũ", createdAt: 1699999999999 }),
   });
 
-  const res = await worker.fetch(
+  const res = await fetchWorker(
     apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "cu", secret: "mat-khau-sai" }) }),
     { OWM_STATE: kv }
   );
@@ -789,7 +806,7 @@ test("LIMIT-1: 2 phòng khác nhau CÙNG 1 IP → mỗi phòng 10 lượt riêng
 
   const SHARED_IP = "203.0.113.50";
   const pair = (room) =>
-    worker.fetch(
+    fetchWorker(
       apiRequest("/api/pair", {
         body: '{"code":"owd_x"}',
         headers: { "x-owm-tenant": room, "cf-connecting-ip": SHARED_IP },
@@ -834,7 +851,7 @@ test("LIMIT-1: cùng phòng vượt 10 lượt → 429, kể cả khi đổi IP"
   t.after(restore);
 
   const pair = (ip) =>
-    worker.fetch(
+    fetchWorker(
       apiRequest("/api/pair", {
         body: '{"code":"owd_x"}',
         headers: { "x-owm-tenant": "alpha", "cf-connecting-ip": ip },
@@ -867,7 +884,7 @@ test("LIMIT-1: /api/pair/tenant đoán sai ở phòng này không dùng lượt 
 
   const SHARED_IP = "198.51.100.77";
   const attempt = (user, secret) =>
-    worker.fetch(
+    fetchWorker(
       apiRequest("/api/pair/tenant", {
         body: JSON.stringify({ user, secret }),
         headers: { "cf-connecting-ip": SHARED_IP },
@@ -909,7 +926,7 @@ test("LIMIT-1: tên phòng rác (không qua TENANT_RE) đổi tên bucket nhưng
 
   const IP = "203.0.113.99";
   const junk = () =>
-    worker.fetch(
+    fetchWorker(
       apiRequest("/api/pair/tenant", {
         body: JSON.stringify({ user: "Không Hợp Lệ!!", secret: "x" }),
         headers: { "cf-connecting-ip": IP },
@@ -925,7 +942,7 @@ test("LIMIT-1: tên phòng rác (không qua TENANT_RE) đổi tên bucket nhưng
   // create-room: không truyền scope (lúc tạo chưa có phòng) → key KHÔNG có
   // tầng phòng, khoá theo IP y như trước.
   for (let i = 1; i <= 5; i += 1) {
-    const res = await worker.fetch(
+    const res = await fetchWorker(
       apiRequest("/api/tenant/create", {
         body: JSON.stringify({ user: `room-${i}`, secret: "strongpass1" }),
         headers: { "cf-connecting-ip": "192.0.2.10" },
@@ -934,7 +951,7 @@ test("LIMIT-1: tên phòng rác (không qua TENANT_RE) đổi tên bucket nhưng
     );
     assert.equal(res.status, 200, `lượt tạo phòng ${i}/5 phải được`);
   }
-  const over = await worker.fetch(
+  const over = await fetchWorker(
     apiRequest("/api/tenant/create", {
       body: JSON.stringify({ user: "room-6", secret: "strongpass1" }),
       headers: { "cf-connecting-ip": "192.0.2.10" },
@@ -957,7 +974,7 @@ test("LIMIT-1: tên phòng rác (không qua TENANT_RE) đổi tên bucket nhưng
 async function createWithFlag(flag, { seed = {} } = {}) {
   const kv = mockKV(seed);
   const env = flag === undefined ? { OWM_STATE: kv } : { OWM_STATE: kv, ALLOW_ROOM_CREATE: flag };
-  const res = await worker.fetch(
+  const res = await fetchWorker(
     apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "phongmoi", secret: "strongpass1" }) }),
     env
   );
@@ -990,7 +1007,8 @@ for (const [label, flag] of CREATE_OFF_CASES) {
   });
 }
 
-// Cờ "mở": 200 created — không đặt, hoặc viết theo kiểu bật.
+// Cờ "bật"/không đặt: với exe CÓ mã mời (mặc định của fetchWorker) vẫn tạo
+// phòng — cờ này không phải khóa chính, khóa chính là ROOM_CREATE_KEY (CREATE-2).
 const CREATE_ON_CASES = [
   ["không đặt", undefined],
   ["chuỗi \"1\"", "1"],
@@ -1003,7 +1021,7 @@ const CREATE_ON_CASES = [
 ];
 
 for (const [label, flag] of CREATE_ON_CASES) {
-  test(`CREATE-1: ALLOW_ROOM_CREATE = ${label} → vẫn tạo phòng, mặc định là MỞ`, async () => {
+  test(`CREATE-1: ALLOW_ROOM_CREATE = ${label} → exe có mã mời vẫn tạo phòng`, async () => {
     const { kv, res, payload } = await createWithFlag(flag);
 
     assert.equal(res.status, 200, `${label} phải mở cửa tạo phòng`);
@@ -1025,7 +1043,7 @@ test("CREATE-1: cờ tắt KHÔNG chặn việc đăng nhập phòng đã có", 
   const { calls, restore } = mockFetch(() => jsonRes(200, { ok: true }));
   t.after(restore);
 
-  const signIn = await worker.fetch(
+  const signIn = await fetchWorker(
     apiRequest("/api/pair/tenant", {
       body: JSON.stringify({ user: "cu", secret: "matkhau-cu" }),
       headers: { "cf-connecting-ip": "203.0.113.5" },
@@ -1035,7 +1053,7 @@ test("CREATE-1: cờ tắt KHÔNG chặn việc đăng nhập phòng đã có", 
   assert.equal(signIn.status, 200);
   assert.equal(calls.length, 1);
 
-  const create = await worker.fetch(
+  const create = await fetchWorker(
     apiRequest("/api/tenant/create", {
       body: JSON.stringify({ user: "phongmoi", secret: "strongpass1" }),
       headers: { "cf-connecting-ip": "203.0.113.5" },
@@ -1043,6 +1061,75 @@ test("CREATE-1: cờ tắt KHÔNG chặn việc đăng nhập phòng đã có", 
     { OWM_STATE: kv, ALLOW_ROOM_CREATE: "off" }
   );
   assert.equal(create.status, 403, "tạo phòng MỚI thì vẫn phải bị chặn");
+});
+
+// ---------- CREATE-2: cửa tạo phòng khóa bằng mã mời nhúng trong exe ----------
+
+test("CREATE-2: exe lạ không mang mã mời → 403 invite_required, không đụng KV", async () => {
+  const kv = mockKV();
+  const res = await fetchWorker(
+    apiRequest("/api/tenant/create", {
+      body: JSON.stringify({ user: "phongmoi", secret: "strongpass1" }),
+      invite: false,
+    }),
+    { OWM_STATE: kv }
+  );
+  assert.equal(res.status, 403);
+  const payload = await res.json();
+  assert.equal(payload.code, "invite_required");
+  assert.ok(payload.message.length > 10);
+  assert.equal(kv.reads.length, 0, "phải chặn ngay ở cổng, không đọc KV");
+  assert.equal(kv.writes.length, 0);
+});
+
+test("CREATE-2: worker chưa đặt ROOM_CREATE_KEY → cửa đóng, câu lỗi chỉ thẳng chủ worker", async () => {
+  const kv = mockKV();
+  const res = await fetchWorker(
+    apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "phongmoi", secret: "strongpass1" }) }),
+    { OWM_STATE: kv, ROOM_CREATE_KEY: undefined }
+  );
+  assert.equal(res.status, 403);
+  const payload = await res.json();
+  assert.equal(payload.code, "invite_required");
+  assert.match(payload.message, /ROOM_CREATE_KEY/);
+  assert.equal(kv.writes.length, 0);
+});
+
+test("CREATE-2: mã mời SAI → 403 kể cả body hợp lệ, không ghi KV", async () => {
+  const kv = mockKV();
+  const res = await fetchWorker(
+    apiRequest("/api/tenant/create", {
+      body: JSON.stringify({ user: "phongmoi", secret: "strongpass1" }),
+      headers: { "x-owm-invite": "sai-roi-nhe" },
+    }),
+    { OWM_STATE: kv }
+  );
+  assert.equal(res.status, 403);
+  assert.equal((await res.json()).code, "invite_required");
+  assert.equal(kv.writes.length, 0);
+});
+
+test("CREATE-2: mã mời ĐÚNG → tạo phòng như thường", async () => {
+  const kv = mockKV();
+  const res = await fetchWorker(
+    apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "phongmoi", secret: "strongpass1" }) }),
+    { OWM_STATE: kv }
+  );
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).created, true);
+  const saved = await kv.get("tenant:phongmoi", "json");
+  assert.equal(saved.secretHash, sha256("strongpass1"));
+});
+
+test("CREATE-2: ALLOW_ROOM_CREATE=0 tắt cứng TRÊN CẢ exe có mã mời", async () => {
+  const kv = mockKV();
+  const res = await fetchWorker(
+    apiRequest("/api/tenant/create", { body: JSON.stringify({ user: "phongmoi", secret: "strongpass1" }) }),
+    { OWM_STATE: kv, ALLOW_ROOM_CREATE: "0" }
+  );
+  assert.equal(res.status, 403);
+  assert.equal((await res.json()).code, "room_create_disabled");
+  assert.equal(kv.writes.length, 0);
 });
 
 // ---------- LIMIT-2: tầng trần THÔ theo IP, cộng dồn với trần theo phòng ----------
@@ -1065,7 +1152,7 @@ test("LIMIT-2: 1 IP đổi tên phòng hợp lệ liên tục → vẫn bị ch�
 
   const ATTACKER_IP = "203.0.113.66";
   const guess = (user, ip = ATTACKER_IP) =>
-    worker.fetch(
+    fetchWorker(
       apiRequest("/api/pair/tenant", {
         body: JSON.stringify({ user, secret: "doan-mat-khau" }),
         headers: { "cf-connecting-ip": ip },
@@ -1118,7 +1205,7 @@ test("LIMIT-2: nhà thật sau NAT đăng nhập 3 phòng với ĐÚNG mật kh�
   // tách bucket theo phòng sinh ra để bảo vệ. Đăng nhập đúng vẫn phải vào được.
   const NAT_IP = "198.51.100.31";
   const signIn = (user, secret) =>
-    worker.fetch(
+    fetchWorker(
       apiRequest("/api/pair/tenant", {
         body: JSON.stringify({ user, secret }),
         headers: { "cf-connecting-ip": NAT_IP },

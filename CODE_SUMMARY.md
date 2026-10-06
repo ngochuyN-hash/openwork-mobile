@@ -86,6 +86,7 @@ locally; FIX-3 and FIX-4 only exist once the worker is deployed.
 | FIX-2 | The web app opened through the **tunnel** URL carries no CSP at all — the shield only existed on the worker door | `bridge/src/static.js` — new `SECURITY_HEADERS` spread into the static `writeHead(200, …)`; the same two headers added to `worker/src/index.js` `withSecurityHeaders()` and `web/public/_headers` | restart bridge + deploy worker |
 | FIX-3 | A stranger who knows the room name can flood the pairing bucket (everyone behind cloudflared is `127.0.0.1` to the bridge) | `worker/src/index.js` — `POST /api/pair` with a room now goes through `rateLimited(request, "pair", 10)` → 429 `rate_limited` | deploy worker |
 | FIX-4 | Anyone knowing the worker URL can self-create rooms, and two concurrent creates race for one name | `worker/src/index.js` — env flag `ALLOW_ROOM_CREATE`; unset/`"1"` = open exactly as before, `"0"` → 403 `room_create_disabled`; **plus** read-after-write after the `put` — a record read back whose secret differs from the one just written → 409 `taken` | deploy worker (+ set the var) |
+| FIX-5 | Even with `ALLOW_ROOM_CREATE` on, anyone who knows the worker URL can still self-create rooms — the switch was all-or-nothing and the owner wants "only my exe opens rooms" | `worker/src/index.js` — `/api/tenant/create` now requires an `x-owm-invite` header matching the `ROOM_CREATE_KEY` dashboard secret (checked **after** the rate limit, so key probes still burn their 5/min bucket; secret unset → door closed). `desktop/` bakes the key into the exe at build time (gitignored `invite.key` → generated `src/InviteKey.cs`) and provisioning sends it; a build from the public repo carries no key → 403 `invite_required` | deploy worker (+ `wrangler secret put ROOM_CREATE_KEY`) + rebuild the exe |
 
 **FIX-1 — the master token must not travel to a revocable key.** The project's
 security model is *"lose the phone → revoke its key, you're clean"*, and this hole
@@ -146,6 +147,24 @@ the read comes back empty (`null`) rather than cry "taken" on a room it never sa
 The blast radius of what slips through is what the spec measured — the owner's
 bridge fails to register and the phone gets a wrong-password error; no data leak, no
 redirect to a stranger's machine.
+
+**FIX-5 — creating a room now needs the owner's exe, not just the URL.** The owner's
+call: "only my exe should be able to open rooms". `/api/tenant/create` requires an
+`x-owm-invite` header that must match the worker's `ROOM_CREATE_KEY` secret
+(dashboard-only, never in the repo), compared through `sameSecret` (length check +
+constant-time). The check sits **after** the `create-room` rate limit, so invite
+guessing still burns the 5/min/IP bucket, and the `ALLOW_ROOM_CREATE=0` hard-off
+still overrides everything. The desktop build scripts generate `src/InviteKey.cs`
+from the gitignored `desktop/invite.key` before csc runs (no key file → the exe
+still builds but warns), and silent provisioning sends the key as a request header;
+`ProvisionErrorText` maps the new 403 to two distinct sentences — "build has no
+invite key" vs "the worker only accepts the owner's build". Honest limit: a key
+baked into a distributed exe is extractable by a determined reverse engineer —
+this is an invite gate for the friend circle, not crypto against attackers.
+Tests: `worker/test/relay.test.mjs` gains 5 cases (stranger exe without the header /
+secret unset / wrong key / correct key creates / `ALLOW_ROOM_CREATE=0` precedence
+over a valid key) and every pre-existing create test now runs through a
+`fetchWorker` wrapper that plays the owner's exe — file total **53 pass**.
 
 **Tests.** `bridge/test/pairing-routes.test.js` (3 cases) drives real HTTP into
 `createApp` with a fake device minted through the real `PairingService.mintDevice()`:

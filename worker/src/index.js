@@ -3,7 +3,10 @@
 // Multi-tenant ("tòa nhà nhiều phòng"): mỗi bridge chiếm một PHÒNG riêng trên
 // KV, ai cũng mở được web nhưng chỉ đụng được máy của phòng mình:
 //   - `tenant:<id>`  = {secretHash, name, createdAt} — tài khoản do chủ worker cấp
-//     (worker/scripts/tenant.mjs add) hoặc tự tạo qua /api/tenant/create. KV chỉ
+//     (worker/scripts/tenant.mjs add) hoặc exe desktop tự tạo qua
+//     /api/tenant/create — cửa này yêu cầu mã mời (header x-owm-invite) nhúng
+//     trong exe lúc build, nên người chỉ biết URL worker không tự mở phòng.
+//     KV chỉ
 //     giữ sha256 mật khẩu, KHÔNG giữ bản gốc; phòng tạo bởi bản tenant.mjs cũ
 //     còn field `secret` plaintext thì vẫn đăng nhập được và được nâng lên
 //     secretHash ngay ở lần đăng nhập thành công (xem secretMatches()).
@@ -381,13 +384,13 @@ async function handle(request, env) {
       return relay(env, `machine:${tenant}`, request, url, body);
     }
 
-    // Tự tạo phòng (self-serve): người cài bridge gõ tên phòng + mật khẩu của
-    // chính mình là có phòng vĩnh viễn trên KV — không cần chủ worker cấp link
-    // mời. Phòng đã tồn tại + ĐÚNG mật khẩu = vào lại bình thường (cài lại máy
-    // lần nào cũng gõ lại y như cũ là xong); sai mật khẩu = 1 câu 401 chung.
-    // "main" bị cấm — đó là slot machine:main của chủ worker, nếu cho tạo
-    // tenant:main thì bridge lạ đăng ký đè luôn địa chỉ máy nhà. Trần 50 phòng
-    // + rate-limit chặn ngập KV nếu URL worker bị lộ.
+    // Tự tạo phòng (self-serve cho exe của chủ worker): người cài KHÔNG gõ gì —
+    // exe tự sinh tên phòng + mật khẩu rồi POST lên đây kèm mã mời nhúng trong
+    // exe (header x-owm-invite). Phòng đã tồn tại + ĐÚNG mật khẩu = vào lại
+    // bình thường (cài lại máy lần nào cũng thế là xong); sai mật khẩu = 1 câu
+    // 401 chung. "main" bị cấm — đó là slot machine:main của chủ worker, nếu
+    // cho tạo tenant:main thì bridge lạ đăng ký đè luôn địa chỉ máy nhà.
+    // Trần 50 phòng + rate-limit chặn ngập KV nếu URL worker bị lộ.
     if (url.pathname === "/api/tenant/create" && request.method === "POST") {
       // Cửa tạo phòng có thể khóa lại bằng var môi trường ALLOW_ROOM_CREATE.
       // Phòng đã có vẫn đăng nhập/gõ lại mật khẩu bình thường (cờ này chỉ
@@ -397,6 +400,24 @@ async function handle(request, env) {
       }
       if (await rateLimited(request, "create-room", 5)) {
         return json({ code: "rate_limited", message: "Too many rooms created - wait about 1 minute and try again." }, 429);
+      }
+      // Khóa chính của cửa: mã mời ROOM_CREATE_KEY (secret trên dashboard,
+      // KHÔNG nằm trong repo) phải khớp header x-owm-invite mà exe chủ worker
+      // nhúng vào lúc build (desktop/invite.key → src/InviteKey.cs). Chưa đặt
+      // secret = cửa đóng luôn — an toàn khi quên cấu hình, người lạ chỉ biết
+      // URL không mở được phòng. Đặt SAU rate-limit để lượt dò mã vẫn bị đếm.
+      const expectedInvite = String(env.ROOM_CREATE_KEY ?? "").trim();
+      const gotInvite = (request.headers.get("x-owm-invite") || "").trim();
+      if (!expectedInvite || !gotInvite || !(await sameSecret(gotInvite, expectedInvite))) {
+        return json(
+          {
+            code: "invite_required",
+            message: expectedInvite
+              ? "Only the owner's app build can create rooms here - the invite key was missing or wrong."
+              : "This worker has no ROOM_CREATE_KEY configured yet - the owner must set it (dashboard secret) before rooms can be created.",
+          },
+          403
+        );
       }
       const body = await readJson(request);
       const user = String(body?.user ?? "").trim().toLowerCase();

@@ -856,6 +856,12 @@ namespace OpenPocket.Desktop
                         HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url + "/api/tenant/create");
                         req.Method = "POST";
                         req.ContentType = "application/json";
+                        // Mã mời nhúng trong exe lúc build (src\InviteKey.cs sinh
+                        // từ desktop\invite.key): worker chỉ mở cửa tạo phòng cho
+                        // bản build của chủ worker — exe tự biên dịch từ source
+                        // (không có invite.key) sẽ bị 403 invite_required.
+                        if (InviteConfig.RoomInviteKey.Length > 0)
+                            req.Headers["x-owm-invite"] = InviteConfig.RoomInviteKey;
                         req.ContentLength = body.Length;
                         req.Timeout = 15000;
                         req.ReadWriteTimeout = 15000;
@@ -957,6 +963,13 @@ namespace OpenPocket.Desktop
         {
             if (status == 403 && code == "room_create_disabled")
                 return "Room creation is turned off on the worker. Ask the worker owner to re-enable it (ALLOW_ROOM_CREATE).";
+            // 403 "invite_required": worker yêu cầu mã mời mà exe này không có
+            // (build từ source thiếu invite.key) hoặc mã không khớp secret
+            // ROOM_CREATE_KEY của worker — bản chính chủ thì không bao giờ gặp.
+            if (status == 403 && code == "invite_required")
+                return InviteConfig.RoomInviteKey.Length == 0
+                    ? "This build carries no invite key (invite.key was missing at build time) - it cannot create rooms. Use the app build from the worker owner."
+                    : "This worker only accepts the owner's app build - the invite key did not match.";
             if (status == 409 && code == "taken")
                 return "That room name was taken while creating. Press Retry - the app will pick a new name automatically.";
             if (status == 429 && code == "rate_limited")
