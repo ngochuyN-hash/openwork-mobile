@@ -1074,7 +1074,11 @@ namespace OpenPocket.Desktop
             int port = BridgeConfig.Port(config);
             string token = BridgeConfig.MobileToken(config);
             var payload = new Dictionary<string, object>();
-            foreach (string key in new string[] { "lookupUrl", "lookupTenant", "lookupSecret", "machineName" })
+            // Whitelist 4 key nằm trong IdentityKeys.cs — SINH TỰ ĐỘNG từ
+            // shared/identity-keys.txt (cùng nguồn với bridge/src/identity.js,
+            // candidate 2 review 07/10). Thêm key: sửa file txt đó + build lại,
+            // đừng sửa mảng tay tại đây nữa.
+            foreach (string key in IdentityKeys.All)
             {
                 if (config.ContainsKey(key)) payload[key] = config[key];
             }
