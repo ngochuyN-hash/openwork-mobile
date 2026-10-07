@@ -7,14 +7,18 @@ namespace OpenPocket.Desktop
 {
     // ================= AUTOSTART TASK — task scheduler "OpenPocketBridge" =======
     // Tách khỏi OpenPocket.cs (tách module candidate 7, 06/10): task tồn tại?,
-    // /run theo lệnh Bật Bridge, tạo (.vbs KHÔNG BOM + schtasks /Create ONLOGON),
-    // xoá. 07/10 (lệnh user "autostart là 1 phần chức năng exe"): thêm TỰ LÀNH —
-    //Healthy()/NeedsRepair() soi TRIGGER thật qua /XML thay vì chỉ hỏi "tồn tại",
-    // và EnableWatchdog() cài máy canh 5 phút chạy `openpocket ensure` (bridge
-    // chết ngầm hoặc boot/resume không phát logon-event — sự cố sáng 07/10 —
-    // đều tự hồi sinh trong 5 phút). Tên task phải khớp AUTOSTART_TASK_NAME /
-    // WATCHDOG_TASK_NAME trong bridge/src/autostart.js. Mọi MessageBox thuộc
-    // form — module chỉ trả kết quả + lời lỗi.
+    // /run theo lệnh Bật Bridge, tạo (.vbs KHÔNG BOM), xoá. 07/10 (lệnh user
+    // "autostart là 1 phần chức năng exe"): thêm TỰ LÀNH — Healthy()/NeedsRepair()
+    // soi TRIGGER thật qua /XML thay vì chỉ hỏi "tồn tại", và EnableWatchdog()
+    // cài máy canh 5 phút chạy `openpocket ensure` (bridge chết ngầm tự hồi sinh).
+    // Task được tạo bằng /XML (không phải /TR) để ÉP 3 CỜ CHỐNG-PIN: schtasks
+    // mặc định DisallowStartIfOnBatteries=true + StopIfGoingOnBatteries=true +
+    // StartWhenAvailable=false — laptop chạy pin là task bị SKIP im lặng cả ngày
+    // (bắt gặp thật 07/10: logon-trigger không chạy, /run kẹt Queued, watch dog
+    // bị tính missed — máy đang BatteryStatus=1/53%).
+    // Tên task phải khớp AUTOSTART_TASK_NAME / WATCHDOG_TASK_NAME trong
+    // bridge/src/autostart.js (CLI tạo task cùng khuôn XML — giữ 2 bên khớp).
+    // Mọi MessageBox thuộc form — module chỉ trả kết quả + lời lỗi.
     internal static class AutostartTask
     {
         // Phải khớp AUTOSTART_TASK_NAME trong bridge/src/autostart.js
@@ -62,11 +66,17 @@ namespace OpenPocket.Desktop
             return QueryTaskXml(TaskName, out xml) && xml.Contains("LogonTrigger");
         }
 
-        // Tồn tại nhưng trigger chết — cần dựng lại bằng Enable().
+        // Tồn tại nhưng cần dựng lại bằng Enable(): trigger chết, hoặc task mang
+        // cờ mặc định của schtasks KHÔNG chạy được khi pin (sự cố 07/10 — laptop
+        // đang pin, task bị skip im lặng, missed run không bao giờ chạy bù vì
+        // StartWhenAvailable=false).
         public static bool NeedsRepair()
         {
             string xml;
-            return QueryTaskXml(TaskName, out xml) && !xml.Contains("LogonTrigger");
+            if (!QueryTaskXml(TaskName, out xml)) return false;
+            if (!xml.Contains("LogonTrigger")) return true;
+            return xml.Contains("<DisallowStartIfOnBatteries>true</DisallowStartIfOnBatteries>")
+                || xml.Contains("<StopIfGoingOnBatteries>true</StopIfGoingOnBatteries>");
         }
 
         // Bật bridge qua task có sẵn — PHẢI kiểm exit code: trước đây /run hụt
@@ -100,10 +110,78 @@ namespace OpenPocket.Desktop
             return true;
         }
 
-        // Tạo task tự khởi động: .vbs chạy node bridge ẩn cửa sổ + schtasks
-        // /Create ONLOGON /RL HIGHEST. error chỉ khác "" khi NẠI LỆCH (Process
-        // văng) — task tạo hổng (schtasks exit != 0) trả false, error rỗng,
-        // checkbox về false mà không hiện hộp (giữ y hành vi cũ).
+        // Khuôn task XML — bắt chước y XML schtasks tự sinh (đã verify trên máy
+        // thật) và LẬT 3 CỜ PIN như mô tả đầu module. Đường dẫn trong Arguments
+        // chỉ cần escape & < > (nháy kép hợp lệ trong text node).
+        private static string XmlEscape(string s)
+        {
+            return s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+        }
+
+        private static string BuildTaskXml(string triggerXml, string vbsPath)
+        {
+            return "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\r\n" +
+                "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\r\n" +
+                "  <Principals>\r\n" +
+                "    <Principal id=\"Author\">\r\n" +
+                "      <LogonType>InteractiveToken</LogonType>\r\n" +
+                "      <RunLevel>HighestAvailable</RunLevel>\r\n" +
+                "    </Principal>\r\n" +
+                "  </Principals>\r\n" +
+                "  <Settings>\r\n" +
+                "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\r\n" +
+                "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\r\n" +
+                "    <StartWhenAvailable>true</StartWhenAvailable>\r\n" +
+                "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\r\n" +
+                "    <Enabled>true</Enabled>\r\n" +
+                "    <Hidden>false</Hidden>\r\n" +
+                "  </Settings>\r\n" +
+                "  <Triggers>\r\n" + triggerXml + "\r\n" +
+                "  </Triggers>\r\n" +
+                "  <Actions Context=\"Author\">\r\n" +
+                "    <Exec>\r\n" +
+                "      <Command>wscript.exe</Command>\r\n" +
+                "      <Arguments>\"" + XmlEscape(vbsPath) + "\"</Arguments>\r\n" +
+                "    </Exec>\r\n" +
+                "  </Actions>\r\n" +
+                "</Task>\r\n";
+        }
+
+        private const string LogonTriggerXml =
+            "    <LogonTrigger>\r\n      <Enabled>true</Enabled>\r\n    </LogonTrigger>";
+
+        private const string WatchdogTriggerXml =
+            "    <TimeTrigger>\r\n" +
+            "      <Repetition>\r\n        <Interval>PT5M</Interval>\r\n        <StopAtDurationEnd>false</StopAtDurationEnd>\r\n      </Repetition>\r\n" +
+            "      <Enabled>true</Enabled>\r\n" +
+            "      <StartBoundary>2020-01-01T00:00:00</StartBoundary>\r\n" +
+            "    </TimeTrigger>";
+
+        // Tạo task từ XML: ghi file UTF-16 (BOM — declaration khai báo UTF-16,
+        // schtasks đọc theo declaration nhưng ghi Unicode cho khớp chuẩn),
+        // rồi /Create /XML /F (ghi đè task cũ, xoá luôn instance Queued cũ).
+        private static bool CreateTaskFromXml(string taskName, string triggerXml, string vbsPath)
+        {
+            string dataDir = BridgeConfig.DataDir();
+            if (!Directory.Exists(dataDir)) Directory.CreateDirectory(dataDir);
+            string xmlPath = Path.Combine(dataDir, taskName + ".task.xml");
+            File.WriteAllText(xmlPath, BuildTaskXml(triggerXml, vbsPath), Encoding.Unicode);
+
+            var psi = new ProcessStartInfo("schtasks.exe",
+                "/Create /TN " + taskName + " /XML \"" + xmlPath + "\" /F");
+            psi.CreateNoWindow = true;
+            psi.UseShellExecute = false;
+            var p = Process.Start(psi);
+            // Timeout 10s — schtasks không được treo vô hạn; quá hạn coi như
+            // tạo chưa xong.
+            bool exited = p.WaitForExit(10000);
+            return exited && p.ExitCode == 0;
+        }
+
+        // Tạo task tự khởi động: .vbs chạy node bridge ẩn cửa sổ + task ONLOGON
+        // pin-proof. error chỉ khác "" khi NẠI LỆCH (Process văng) — task tạo
+        // hổng (schtasks exit != 0) trả false, error rỗng, checkbox về false mà
+        // không hiện hộp (giữ y hành vi cũ).
         public static bool Enable(string bridgeDir, string nodeExe, out string error)
         {
             error = "";
@@ -130,15 +208,7 @@ namespace OpenPocket.Desktop
                 // bao giờ boot (bắt gặp thật 13/09, phải printf tay mới chữa được)
                 File.WriteAllText(vbsPath, vbsContent, new UTF8Encoding(false));
 
-                var psi = new ProcessStartInfo("schtasks.exe",
-                    "/Create /TN " + TaskName + " /SC ONLOGON /TR \"\\\"wscript.exe\\\" \\\"" + vbsPath + "\\\"\" /RL HIGHEST /F");
-                psi.CreateNoWindow = true;
-                psi.UseShellExecute = false;
-                var p = Process.Start(psi);
-                // Timeout 10s — schtasks trên UI thread không được treo vô hạn;
-                // quá hạn thì chưa thể đọc ExitCode, coi như tạo chưa xong.
-                bool exited = p.WaitForExit(10000);
-                return exited && p.ExitCode == 0;
+                return CreateTaskFromXml(TaskName, LogonTriggerXml, vbsPath);
             }
             catch (Exception ex)
             {
@@ -163,9 +233,9 @@ namespace OpenPocket.Desktop
 
         // ===== MÁY CANH — task 5 phút chạy `openpocket ensure` =====
         // Bridge chết ngầm (kill ngoài CLI, crash) hoặc máy bật lại mà không có
-        // logon-event mới (Fast Startup resume) đều được dựng lại trong 5 phút —
-        // task MINUTE chạy theo giờ hệ thống, không phụ thuộc ai đăng nhập.
-        // Cài/xoá CÙNG checkbox autostart: hai task là MỘT tính năng.
+        // logon-event mới (Fast Startup resume) — và kể cả đang CHẠY PIN — đều
+        // được dựng lại trong 5 phút. Cài/xoá CÙNG checkbox autostart: hai task
+        // là MỘT tính năng.
         public static bool WatchdogExists()
         {
             string xml;
@@ -196,13 +266,7 @@ namespace OpenPocket.Desktop
                     "sh.Run \"cmd /c \"\"\"\"" + nodeExe.Replace("\"", "\"\"") + "\"\" \"\"" + cliPath.Replace("\"", "\"\"") + "\"\" ensure >> \"\"" + logPath.Replace("\"", "\"\"") + "\"\" 2>&1\"\"\", 0, False\r\n";
                 File.WriteAllText(vbsPath, vbsContent, new UTF8Encoding(false));
 
-                var psi = new ProcessStartInfo("schtasks.exe",
-                    "/Create /TN " + WatchdogName + " /SC MINUTE /MO 5 /TR \"\\\"wscript.exe\\\" \\\"" + vbsPath + "\\\"\" /RL HIGHEST /F");
-                psi.CreateNoWindow = true;
-                psi.UseShellExecute = false;
-                var p = Process.Start(psi);
-                bool exited = p.WaitForExit(10000);
-                return exited && p.ExitCode == 0;
+                return CreateTaskFromXml(WatchdogName, WatchdogTriggerXml, vbsPath);
             }
             catch (Exception ex)
             {

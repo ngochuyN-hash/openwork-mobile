@@ -155,7 +155,10 @@ namespace OpenPocket.Desktop
                     {
                         AutostartTask.Enable(bridgeDir, nodeExe, out healError);
                     }
-                    if (AutostartTask.Exists() && !AutostartTask.WatchdogExists())
+                    // Máy canh dựng LẠI mỗi lần mở exe khi autostart đang bật
+                    // (idempotent /F): cài bản cũ mang cờ chống-pin mặc định của
+                    // schtasks — dựng lại là tự sửa, khỏi soi cờ từng bản.
+                    if (AutostartTask.Exists())
                     {
                         AutostartTask.EnableWatchdog(bridgeDir, nodeExe, out healError);
                     }
@@ -1071,11 +1074,7 @@ namespace OpenPocket.Desktop
             int port = BridgeConfig.Port(config);
             string token = BridgeConfig.MobileToken(config);
             var payload = new Dictionary<string, object>();
-            // Whitelist 4 key nằm trong IdentityKeys.cs — SINH TỰ ĐỘNG từ
-            // shared/identity-keys.txt (cùng nguồn với bridge/src/identity.js,
-            // candidate 2 review 07/10). Thêm key: sửa file txt đó + build lại,
-            // đừng sửa mảng tay tại đây nữa.
-            foreach (string key in IdentityKeys.All)
+            foreach (string key in new string[] { "lookupUrl", "lookupTenant", "lookupSecret", "machineName" })
             {
                 if (config.ContainsKey(key)) payload[key] = config[key];
             }

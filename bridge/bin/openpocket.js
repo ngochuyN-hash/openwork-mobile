@@ -207,6 +207,62 @@ if (cmd === "logs") {
   process.exit(0);
 }
 
+// ===== Tạo task bằng /XML — chip mềm với PIN =====
+// schtasks /Create mặc định DisallowStartIfOnBatteries=true +
+// StopIfGoingOnBatteries=true + StartWhenAvailable=false: laptop đang chạy pin
+// là task bị SKIP im lặng (bắt gặp thật 07/10 — logon-trigger không chạy,
+// /run kẹt Queued chờ AC, watch dog bị tính missed). Tạo bằng XML ép 3 cờ ngược
+// lại: chạy được cả khi pin, không tự chết khi rút sạc, lỡ nhịp thì chạy bù.
+// Khuôn bắt chước y XML schtasks tự sinh; GUI (desktop/src/AutostartTask.cs)
+// tạo task cùng khuôn — giữ 2 bên khớp.
+function xmlEscape(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function buildTaskXml(triggerXml, vbsPath) {
+  return `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+  </Settings>
+  <Triggers>
+${triggerXml}
+  </Triggers>
+  <Actions Context="Author">
+    <Exec>
+      <Command>wscript.exe</Command>
+      <Arguments>"${xmlEscape(vbsPath)}"</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+`;
+}
+// schtasks đọc /XML theo declaration — ghi UTF-16LE kèm BOM cho khớp chuẩn.
+function writeTaskXml(xmlPath, xml) {
+  writeFileSync(xmlPath, "\ufeff" + xml, "utf16le");
+}
+const LOGON_TRIGGER_XML = `    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>`;
+const WATCHDOG_TRIGGER_XML = `    <TimeTrigger>
+      <Repetition>
+        <Interval>PT5M</Interval>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+      <Enabled>true</Enabled>
+      <StartBoundary>2020-01-01T00:00:00</StartBoundary>
+    </TimeTrigger>`;
+
 if (cmd === "autostart") {
   // Tự chạy bridge khi đăng nhập Windows — qua Task Scheduler (schtasks),
   // không cần file .ps1/.cmd lẻ. Task chạy ẩn (bridge tự windowsHide),
@@ -236,9 +292,11 @@ if (cmd === "autostart") {
       ].join("\r\n") + "\r\n",
       "utf8"
     );
+    const xmlPath = join(bridgeDataDir(), `${AUTOSTART_TASK_NAME}.task.xml`);
+    writeTaskXml(xmlPath, buildTaskXml(LOGON_TRIGGER_XML, vbsPath));
     const created = spawnSync(
       "schtasks",
-      ["/Create", "/TN", AUTOSTART_TASK_NAME, "/SC", "ONLOGON", "/TR", `"wscript.exe" "${vbsPath}"`, "/RL", "HIGHEST", "/F"],
+      ["/Create", "/TN", AUTOSTART_TASK_NAME, "/XML", xmlPath, "/F"],
       { stdio: "inherit" }
     );
     if (created.status !== 0) {
@@ -305,9 +363,11 @@ if (cmd === "watchdog") {
       ].join("\r\n") + "\r\n",
       "utf8"
     );
+    const xmlPath = join(bridgeDataDir(), `${WATCHDOG_TASK_NAME}.task.xml`);
+    writeTaskXml(xmlPath, buildTaskXml(WATCHDOG_TRIGGER_XML, vbsPath));
     const created = spawnSync(
       "schtasks",
-      ["/Create", "/TN", WATCHDOG_TASK_NAME, "/SC", "MINUTE", "/MO", "5", "/TR", `"wscript.exe" "${vbsPath}"`, "/RL", "HIGHEST", "/F"],
+      ["/Create", "/TN", WATCHDOG_TASK_NAME, "/XML", xmlPath, "/F"],
       { stdio: "inherit" }
     );
     if (created.status !== 0) {
