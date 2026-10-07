@@ -29,6 +29,16 @@ Why the sizes differed: `qrcode-terminal` auto-picks a larger QR version for lon
 
 Also removes a stale header comment in `shared/contract.js` claiming the worker had not adopted the contract yet — `worker/src/index.js:30` imports it.
 
+## Task Scheduler surface has ONE owner: the CLI — GUI shells out — 2026-10-07 (desktop + bridge CLI)
+
+| Symptom | Where it's fixed |
+| --- | --- |
+| The battery-proof task XML, the no-BOM VBS wrappers and the task names existed as two hand-synced copies (C# + JS) held together by a comment promise — the exact logic behind the real 07/10 battery incident, with ZERO tests in both languages | `bridge/src/autostart.js` is the only owner: `buildTaskXml` / `writeTaskXml` (UTF-16LE BOM) / `buildTaskVbs` / `assessTaskXml` + the two trigger XML constants, pinned by `bridge/test/task-xml.test.js` (6 tests: flags, escaping, BOM, quoting, watchdog variant, assessment) |
+| The GUI could not test any of it (no C# test harness) and string-matched `schtasks /query /xml` on its own | `desktop/src/AutostartTask.cs` is a thin adapter: it shells out to `openpocket tasks --json` (both tasks' status in one node spawn), `autostart --enable/--disable/--run --json`, `watchdog --install/--uninstall` and parses JSON — no schtasks parsing or XML building left in C# |
+| The watchdog task was graded by LogonTrigger criteria, so a healthy watchdog read as permanently "unhealthy" | `assessTaskXml(xml, triggerTag)` grades autostart by `LogonTrigger` and the watchdog by `TimeTrigger` |
+
+Dead interface removed with its test: `buildAutostartAction` (a /TR-style command string) survived only to feed its own assertion. GUI semantics unchanged: never create a missing task (the self-heal repairs only an existing broken one), a failed `/run` must surface as an error, unticking removes both tasks.
+
 ## Desktop GUI split into modules; config.json has ONE writer — 2026-10-06 (desktop + bridge)
 
 Candidates 7 + 3 of the 03/10 architecture review, closed together. `desktop/src/OpenPocket.cs` went 1998 → **1051 lines** and now holds only the main form (layout + orchestration); everything with a clean seam moved verbatim (comments kept) into its own file under `desktop/src/`: **Ui.cs** (224 — `RoundedButton` self-drawn buttons, `ButtonKind`, `Ui.RoundedPath`, `Ui.SafeInvoke`, the app icon), **BridgeConfig.cs** (70 — config path/data dir/load + port/token readers), **BridgeProcess.cs** (203 — find node.exe, dependency presence, port probe, direct start, the precise WMI stop, log wipe), **TunnelState.cs** (100 — tunnel URL from `tunnel-state.json` + 32 KB log tail + 429 backoff minutes), **AutostartTask.cs** (127 — schtasks query/run/create (.vbs without BOM)/delete), **BridgeHttp.cs** (48 — POST localhost with the Bearer master token), **Provisioning.cs** (103 — pure helpers of the machine-identity flow: room/secret minting, HTTP error extraction, fix-carrying error sentences), **PairingQrDialog.cs** (285 — the QR popup). `build.bat`/`build-test.bat` compile all ten files (C# 5 — no inline `out var`).

@@ -14,7 +14,11 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bridgeDataDir, loadConfig, saveConfig } from "../src/config.js";
-import { AUTOSTART_TASK_NAME, WATCHDOG_TASK_NAME, bridgeEntryPath } from "../src/autostart.js";
+import {
+  AUTOSTART_TASK_NAME, WATCHDOG_TASK_NAME, bridgeEntryPath,
+  buildTaskXml, writeTaskXml, buildTaskVbs, assessTaskXml,
+  LOGON_TRIGGER_XML, WATCHDOG_TRIGGER_XML,
+} from "../src/autostart.js";
 import { loadTunnelState } from "../src/tunnel.js";
 // Hình dạng link ghép (#p= / #t= / &m=) thuộc shared contract — CLI từng tự
 // tay ghép ngoài contract (contract.js xưng "chỗ duy nhất" nhưng CLI sinh
@@ -212,61 +216,41 @@ if (cmd === "logs") {
   process.exit(0);
 }
 
-// ===== Tạo task bằng /XML — chip mềm với PIN =====
-// schtasks /Create mặc định DisallowStartIfOnBatteries=true +
-// StopIfGoingOnBatteries=true + StartWhenAvailable=false: laptop đang chạy pin
-// là task bị SKIP im lặng (bắt gặp thật 07/10 — logon-trigger không chạy,
-// /run kẹt Queued chờ AC, watch dog bị tính missed). Tạo bằng XML ép 3 cờ ngược
-// lại: chạy được cả khi pin, không tự chết khi rút sạc, lỡ nhịp thì chạy bù.
-// Khuôn bắt chước y XML schtasks tự sinh; GUI (desktop/src/AutostartTask.cs)
-// tạo task cùng khuôn — giữ 2 bên khớp.
-function xmlEscape(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+// ===== Tạo task bằng /XML — khuân nằm ở src/autostart.js (chân lý duy nhất)
+// buildTaskXml / writeTaskXml / buildTaskVbs / assessTaskXml + 2 trigger XML
+// import từ trên. Comment vì sao phải tạo bằng /XML (3 cờ chống-pin, sự cố
+// 07/10) nằm ngay đầu phần đó trong src/autostart.js.
+
+// Hỏi Task Scheduler: /xml khi hỏi được (export XML cần quyền đủ), rớt thì
+// hỏi /query thường để ít nhất biết task còn tồn tại. Trả {exists, xml}.
+function queryTask(taskName) {
+  const xmlQ = spawnSync("schtasks", ["/Query", "/TN", taskName, "/xml"], { stdio: "pipe", encoding: "utf8", windowsHide: true });
+  if (xmlQ.status === 0) return { exists: true, xml: xmlQ.stdout || "" };
+  const plainQ = spawnSync("schtasks", ["/Query", "/TN", taskName], { stdio: "pipe", encoding: "utf8", windowsHide: true });
+  return { exists: plainQ.status === 0, xml: "" };
 }
-function buildTaskXml(triggerXml, vbsPath) {
-  return `<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <Principals>
-    <Principal id="Author">
-      <LogonType>InteractiveToken</LogonType>
-      <RunLevel>HighestAvailable</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <Enabled>true</Enabled>
-    <Hidden>false</Hidden>
-  </Settings>
-  <Triggers>
-${triggerXml}
-  </Triggers>
-  <Actions Context="Author">
-    <Exec>
-      <Command>wscript.exe</Command>
-      <Arguments>"${xmlEscape(vbsPath)}"</Arguments>
-    </Exec>
-  </Actions>
-</Task>
-`;
+
+// Trạng thái một task — assessTaskXml (src/autostart.js) là chỗ duy nhất
+// quyết healthy/needsRepair; mỗi task kỳ vọng trigger riêng (autostart =
+// LogonTrigger, watchdog = TimeTrigger 5 phút). XML không hỏi được (user
+// thường) thì không dám khẳng định trigger sống: healthy/needsRepair = false,
+// giữ thần tính bảo thủ như bản C# cũ.
+function taskStatus(taskName, triggerTag) {
+  const q = queryTask(taskName);
+  const a = assessTaskXml(q.xml, triggerTag);
+  return { exists: q.exists, healthy: q.exists && a.healthy, needsRepair: q.exists && a.needsRepair };
 }
-// schtasks đọc /XML theo declaration — ghi UTF-16LE kèm BOM cho khớp chuẩn.
-function writeTaskXml(xmlPath, xml) {
-  writeFileSync(xmlPath, "\ufeff" + xml, "utf16le");
+
+if (cmd === "tasks") {
+  // Trạng thái CẢ HAI task dạng JSON — interface cho GUI desktop: một lần
+  // spawn node thay vì GUI tự chạy schtasks rồi string-match XML (bản sao C#
+  // đã xoá 07/10).
+  console.log(JSON.stringify({
+    autostart: taskStatus(AUTOSTART_TASK_NAME, "LogonTrigger"),
+    watchdog: taskStatus(WATCHDOG_TASK_NAME, "TimeTrigger"),
+  }));
+  process.exit(0);
 }
-const LOGON_TRIGGER_XML = `    <LogonTrigger>
-      <Enabled>true</Enabled>
-    </LogonTrigger>`;
-const WATCHDOG_TRIGGER_XML = `    <TimeTrigger>
-      <Repetition>
-        <Interval>PT5M</Interval>
-        <StopAtDurationEnd>false</StopAtDurationEnd>
-      </Repetition>
-      <Enabled>true</Enabled>
-      <StartBoundary>2020-01-01T00:00:00</StartBoundary>
-    </TimeTrigger>`;
 
 if (cmd === "autostart") {
   // Tự chạy bridge khi đăng nhập Windows — qua Task Scheduler (schtasks),
@@ -278,23 +262,40 @@ if (cmd === "autostart") {
   }
   const sub = (args[1] || "--status").toLowerCase();
   const withOpenwork = args.includes("--with-openwork");
+  if (sub === "--run") {
+    // Cho GUI: chạy task bridge CÓ SẴN (schtasks /run). --json để GUI parse
+    // được exit + lời lỗi thay vì string-match tiếng người.
+    const run = spawnSync("schtasks", ["/Run", "/TN", AUTOSTART_TASK_NAME], { stdio: "pipe", encoding: "utf8", windowsHide: true });
+    const errText = run.status === 0 ? "" : ((run.stderr || run.stdout || "").trim() || `schtasks exit ${run.status}`);
+    if (args.includes("--json")) {
+      console.log(JSON.stringify({ ok: run.status === 0, error: errText }));
+      process.exit(0);
+    }
+    if (run.status !== 0) {
+      console.log("Không chạy được task — mở terminal Run as Administrator rồi thử lại: " + errText);
+      process.exit(1);
+    }
+    console.log("✅ Đã chạy task bridge.");
+    process.exit(0);
+  }
   if (sub === "--enable") {
     // /RL HIGHEST: bridge (và daemon điều khiển màn hình sinh ra từ nó) chạy
     // quyền admin — SendInput mới chạm được vào app đang chạy Administrator
     // (UIPI chặn input chiều thường -> admin). Đánh đổi: lệnh từ điện thoại
     // cũng mang quyền admin, bù bằng khóa thiết bị/phòng sẵn có.
-    // Task chay qua wrapper VBS AN CUA SO: task ONLOGON interactive bat buoc
-    // (SendInput phai nam trong desktop cua user), nhung node truc tiep se co
-    // cua so console den - user dong nham la bridge chet mat log (da gap that).
-    // VBS chay node khong console + gom stdout/stderr vao bridge-task.log.
+    // Task chay qua wrapper VBS AN CUA SO (buildTaskVbs trong src/autostart.js;
+    // GHI bằng writeFileSync "utf8" KHÔNG BOM — lý do nằm ở comment đó):
+    // node trực tiếp sẽ có cửa sổ console đen - user đóng nhầm là bridge mất
+    // log (đã gặp thật).
     const vbsPath = join(bridgeDataDir(), "bridge-task.vbs");
     writeFileSync(
       vbsPath,
-      [
-        'Set sh = CreateObject("WScript.Shell")',
-        `sh.CurrentDirectory = "${join(BIN_DIR, "..")}"`,
-        `sh.Run "cmd /c """""${process.execPath}"" ""${bridgeEntryPath()}"" >> ""${join(bridgeDataDir(), "bridge-task.log")}" 2>&1""", 0, False`,
-      ].join("\r\n") + "\r\n",
+      buildTaskVbs({
+        nodeExecPath: process.execPath,
+        entryPath: bridgeEntryPath(),
+        logPath: join(bridgeDataDir(), "bridge-task.log"),
+        workDir: join(BIN_DIR, ".."),
+      }),
       "utf8"
     );
     const xmlPath = join(bridgeDataDir(), `${AUTOSTART_TASK_NAME}.task.xml`);
@@ -330,10 +331,17 @@ if (cmd === "autostart") {
     console.log("🛑 Đã tắt tự chạy.");
     process.exit(0);
   }
-  // --status (mặc định): task còn trong Scheduler không?
-  const queried = spawnSync("schtasks", ["/Query", "/TN", AUTOSTART_TASK_NAME], { stdio: "pipe", encoding: "utf8" });
-  if (queried.status === 0) {
-    console.log(`✅ Tự chạy đang BẬT (task "${AUTOSTART_TASK_NAME}" trong Task Scheduler).`);
+  // --status (mặc định): task còn trong Scheduler không + trigger/cờ có lành
+  // không (soi XML qua assessTaskXml — cùng chân lý với `tasks --json`).
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(taskStatus(AUTOSTART_TASK_NAME, "LogonTrigger")));
+    process.exit(0);
+  }
+  const st = taskStatus(AUTOSTART_TASK_NAME, "LogonTrigger");
+  if (st.exists) {
+    console.log(st.healthy
+      ? `✅ Tự chạy đang BẬT (task "${AUTOSTART_TASK_NAME}" trong Task Scheduler).`
+      : `⚠️ Task "${AUTOSTART_TASK_NAME}" còn nhưng trigger/cờ pin không lành — mở lại OpenPocket.exe là tự dựng lại (hoặc chạy: openpocket autostart --enable).`);
     try {
       const config = loadConfig();
       console.log(config.autoLaunchOpenWork
@@ -361,11 +369,13 @@ if (cmd === "watchdog") {
     const self = fileURLToPath(import.meta.url);
     writeFileSync(
       vbsPath,
-      [
-        'Set sh = CreateObject("WScript.Shell")',
-        `sh.CurrentDirectory = "${join(BIN_DIR, "..")}"`,
-        `sh.Run "cmd /c """""${process.execPath}"" ""${self}"" ensure >> ""${join(bridgeDataDir(), "watchdog.log")}" 2>&1""", 0, False`,
-      ].join("\r\n") + "\r\n",
+      buildTaskVbs({
+        nodeExecPath: process.execPath,
+        entryPath: self,
+        logPath: join(bridgeDataDir(), "watchdog.log"),
+        workDir: join(BIN_DIR, ".."),
+        extraArgs: " ensure",
+      }),
       "utf8"
     );
     const xmlPath = join(bridgeDataDir(), `${WATCHDOG_TASK_NAME}.task.xml`);
@@ -480,6 +490,7 @@ Dùng:
   openpocket status   Xem bridge có chạy không + phòng
   openpocket logs     Xem log (tail 50 dòng, Ctrl+C để thoát)
   openpocket code     Xem mã ghép + QR quét bằng điện thoại
+  openpocket tasks --json   Trạng thái 2 task scheduler dạng JSON (GUI desktop dùng)
   openpocket autostart --enable [--with-openwork]   Tự chạy bridge khi đăng nhập Windows
   openpocket autostart --status                     Xem tự chạy đang bật hay tắt
   openpocket autostart --disable                    Tắt tự chạy

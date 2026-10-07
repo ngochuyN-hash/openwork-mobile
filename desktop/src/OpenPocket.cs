@@ -151,18 +151,18 @@ namespace OpenPocket.Desktop
                 try
                 {
                     string healError;
-                    if (AutostartTask.NeedsRepair())
+                    if (AutostartTask.NeedsRepair(bridgeDir, nodeExe))
                     {
                         AutostartTask.Enable(bridgeDir, nodeExe, out healError);
                     }
                     // Máy canh dựng LẠI mỗi lần mở exe khi autostart đang bật
                     // (idempotent /F): cài bản cũ mang cờ chống-pin mặc định của
                     // schtasks — dựng lại là tự sửa, khỏi soi cờ từng bản.
-                    if (AutostartTask.Exists())
+                    if (AutostartTask.Exists(bridgeDir, nodeExe))
                     {
                         AutostartTask.EnableWatchdog(bridgeDir, nodeExe, out healError);
                     }
-                    SafeInvoke(delegate { chkAutostart.Checked = AutostartTask.Healthy(); });
+                    SafeInvoke(delegate { chkAutostart.Checked = AutostartTask.Healthy(bridgeDir, nodeExe); });
                 }
                 catch { }
             });
@@ -570,8 +570,9 @@ namespace OpenPocket.Desktop
 
             // Kiểm tra autostart task — soi TRIGGER thật (Healthy), không chỉ
             // "tồn tại": task chết vẫn tồn tại và từng sáng đèn oan. Phần tự
-            // lành chạy nền ở cuối ctor.
-            chkAutostart.Checked = AutostartTask.Healthy();
+            // lành chạy nền ở cuối ctor. Hỏi qua CLI (tasks --json) — đây là
+            // nhịp node spawn hiếm hoi trên UI thread, chỉ chạy 1 lần lúc mở.
+            chkAutostart.Checked = AutostartTask.Healthy(bridgeDir, nodeExe);
         }
 
         // ================= LẦN ĐẦU CHẠY: ĐỊNH DANH MÁY + TỰ CÀI =================
@@ -886,13 +887,13 @@ namespace OpenPocket.Desktop
                     btnStartBridge.Text = "Start Bridge";
                     try
                     {
-                        if (AutostartTask.Exists())
+                        if (AutostartTask.Exists(bridgeDir, nodeExe))
                         {
-                            // Chạy task có sẵn — PHẢI kiểm exit code: trước đây
+                            // Chạy task có sẵn — PHẢI kiểm kết quả: trước đây
                             // /run hụt (task hỏng, thiếu quyền…) mà không ai hay,
                             // đèn xanh chỉ là mơ hồ của tick sau.
                             string runError;
-                            if (!AutostartTask.RunExisting(out runError))
+                            if (!AutostartTask.RunExisting(bridgeDir, nodeExe, out runError))
                             {
                                 MessageBox.Show(this, runError, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                                 return;
@@ -1041,8 +1042,8 @@ namespace OpenPocket.Desktop
                 }
                 else
                 {
-                    AutostartTask.Disable();
-                    AutostartTask.DisableWatchdog(); // tắt là tắt cả cặp
+                    AutostartTask.Disable(bridgeDir, nodeExe);
+                    AutostartTask.DisableWatchdog(bridgeDir, nodeExe); // tắt là tắt cả cặp
                     chkAutostart.Checked = false;
                 }
             }

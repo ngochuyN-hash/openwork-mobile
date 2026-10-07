@@ -5,7 +5,7 @@ import { isProxyPathAllowed, isMethodAllowed, normalizeDotSegments, filenameFrom
 import { isAuthorized, isTokenAuthorized, requestToken } from "../src/auth.js";
 import { hashToken } from "../src/bootstrap.js";
 import { candidateExePaths, findOpenWorkExe } from "../src/openwork-launch.js";
-import { AUTOSTART_TASK_NAME, buildAutostartAction, bridgeEntryPath } from "../src/autostart.js";
+import { AUTOSTART_TASK_NAME, bridgeEntryPath } from "../src/autostart.js";
 import { listDirs, makeDir } from "../src/fslist.js";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -147,11 +147,9 @@ test("tìm OpenWork.exe: ưu tiên env -> config -> chỗ hay gặp", () => {
   }
 });
 
-test("lệnh autostart schtasks bọc ngoặc kép kỹ đường dẫn có dấu cách", () => {
+test("tên task + entry bridge cho task scheduler", () => {
   assert.equal(AUTOSTART_TASK_NAME, "OpenPocketBridge");
   assert.match(bridgeEntryPath(), /index\.js$/);
-  const action = buildAutostartAction();
-  assert.match(action, /^".+" ".+index\.js"$/);
 });
 
 test("listDirs: chỉ trả thư mục, bỏ ẩn/rác hệ thống, sắp A→Z", async () => {
