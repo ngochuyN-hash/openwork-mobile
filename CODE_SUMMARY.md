@@ -39,6 +39,15 @@ Also removes a stale header comment in `shared/contract.js` claiming the worker 
 
 Dead interface removed with its test: `buildAutostartAction` (a /TR-style command string) survived only to feed its own assertion. GUI semantics unchanged: never create a missing task (the self-heal repairs only an existing broken one), a failed `/run` must surface as an error, unticking removes both tasks.
 
+## GUI reads tunnel state over the bridge API; the file read is fallback only — 2026-10-07 (desktop)
+
+| Symptom | Where it's fixed |
+| --- | --- |
+| The GUI reached past the bridge's HTTP interface into on-disk internals: it regex-"parsed" `tunnel-state.json` (`Regex.IsMatch`) and scraped the cloudflared log tail — the third independent copy of the trycloudflare URL regex (the others live in `bridge/src/tunnel.js` and `worker/src/index.js`) | `CheckStatus` in `desktop/src/OpenPocket.cs` asks `GET /api/state` — tunnel phase/URL/nextRetryAt straight from the bridge — through the new `BridgeHttp.GetSync` (the adapter was POST-only; that absence is why the GUI scraped). The GET runs on the UI thread so its timeout is 2s; localhost normally answers in <50ms |
+| A bridge-side shape change (renamed/nested field) would have broken the GUI silently — nothing pinned the file contract | `TunnelState.cs` JSON-parses the fallback file with `JavaScriptSerializer` (a rename now degrades to an empty fallback instead of a regex miss); `UrlFromLog` is deleted — a task-run bridge never printed the URL to its log, so the 05/10 file fix had already made it dead weight |
+
+Display semantics: while the bridge runs and the tunnel phase is "starting", the GUI now shows "Connecting..." instead of the stale "up" URL the old file/log fallbacks could keep painting green.
+
 ## Desktop GUI split into modules; config.json has ONE writer — 2026-10-06 (desktop + bridge)
 
 Candidates 7 + 3 of the 03/10 architecture review, closed together. `desktop/src/OpenPocket.cs` went 1998 → **1051 lines** and now holds only the main form (layout + orchestration); everything with a clean seam moved verbatim (comments kept) into its own file under `desktop/src/`: **Ui.cs** (224 — `RoundedButton` self-drawn buttons, `ButtonKind`, `Ui.RoundedPath`, `Ui.SafeInvoke`, the app icon), **BridgeConfig.cs** (70 — config path/data dir/load + port/token readers), **BridgeProcess.cs** (203 — find node.exe, dependency presence, port probe, direct start, the precise WMI stop, log wipe), **TunnelState.cs** (100 — tunnel URL from `tunnel-state.json` + 32 KB log tail + 429 backoff minutes), **AutostartTask.cs** (127 — schtasks query/run/create (.vbs without BOM)/delete), **BridgeHttp.cs** (48 — POST localhost with the Bearer master token), **Provisioning.cs** (103 — pure helpers of the machine-identity flow: room/secret minting, HTTP error extraction, fix-carrying error sentences), **PairingQrDialog.cs** (285 — the QR popup). `build.bat`/`build-test.bat` compile all ten files (C# 5 — no inline `out var`).

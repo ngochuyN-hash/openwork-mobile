@@ -28,9 +28,9 @@ namespace OpenPocket.Desktop
     //   Ui.cs            — nút bo góc tự vẽ, path bo tròn, icon app, SafeInvoke
     //   BridgeConfig.cs  — đường dẫn + đọc config.json của bridge
     //   BridgeProcess.cs — tìm node, bật/dừng đúng tiến trình bridge, dọn log
-    //   TunnelState.cs   — đọc URL tunnel + backoff 429 từ đĩa (state + log)
-    //   AutostartTask.cs — task scheduler autostart + watchdog (query/repair/run/create)
-    //   BridgeHttp.cs    — POST API localhost (Bearer master token)
+    //   TunnelState.cs   — FALLBACK đọc tunnel-state.json (nguồn chính: GET /api/state)
+    //   AutostartTask.cs — adapter mỏng: shell-out qua CLI `openpocket tasks/autostart/watchdog`
+    //   BridgeHttp.cs    — POST/GET API localhost (Bearer master token)
     //   Provisioning.cs  — hàm thuần của luồng định danh máy (room + secret)
     //   PairingQrDialog.cs — popup QR ghép nối
     public class MainForm : Form
@@ -741,16 +741,51 @@ namespace OpenPocket.Desktop
             // lệnh lưu đang bay, kẻo ghi đè mất chữ user đang gõ
             currentTenant = config.ContainsKey("lookupTenant") ? Convert.ToString(config["lookupTenant"]) : "";
 
-            // 3. Đọc tunnel URL: nguồn chính là tunnel-state.json (bridge tự ghi
-            // URL vào đó mỗi lần bắt được tunnel), quét log chỉ là dự phòng —
-            // bridge chạy bằng task scheduler thì stdout không phải TTY nên
-            // printPairing bỏ qua, log KHÔNG còn dòng URL nào để quét và dòng
-            // trạng thái kẹt "Connecting..." mãi dù tunnel đã lên. Nút Restart
-            // tunnel vẫn cho phép chủ động thử ngay khi 429.
+            // 3. Trạng thái tunnel: bridge chạy thì hỏi qua INTERFACE HTTP của
+            // nó (GET /api/state → tunnel:{phase,url,nextRetryAt}) — hết luồn
+            // qua đĩa/log như trước (regex "parse" JSON + scrape log đã xoá,
+            // 07/10). Nguồn chính là API; file tunnel-state.json chỉ còn là
+            // FALLBACK khi bridge không trả lời được (vừa kill / kẹt socket).
+            // GET chạy trên UI thread nên timeout ngắn: localhost thường
+            // <50ms, kẹt tối đa 2s rồi lọt xuống fallback file. Lưu ý: bridge
+            // chạy mà phase "starting" (tunnel đang lên) thì hiện Connecting
+            // luôn — không đọc file kẻo dính URL "up" STALE của lần trước.
             string dataDir = BridgeConfig.DataDir();
-            int backoffMin = TunnelState.BackoffMinutes(dataDir);
-            tunnelUrl = TunnelState.UrlFromState(dataDir);
-            if (string.IsNullOrEmpty(tunnelUrl)) tunnelUrl = TunnelState.UrlFromLog(dataDir);
+            int backoffMin = -1;
+            tunnelUrl = "";
+            bool apiOk = false;
+            if (isBridgeRunning)
+            {
+                string stateError;
+                var state = BridgeHttp.GetSync(port, BridgeConfig.MobileToken(config), "/api/state", 2000, out stateError);
+                if (state != null)
+                {
+                    apiOk = true;
+                    var t = state.ContainsKey("tunnel") ? state["tunnel"] as Dictionary<string, object> : null;
+                    if (t != null)
+                    {
+                        string phase = Convert.ToString(t.ContainsKey("phase") ? t["phase"] : "");
+                        if (phase == "up")
+                            tunnelUrl = Convert.ToString(t.ContainsKey("url") && t["url"] != null ? t["url"] : "");
+                        if (phase == "backoff")
+                        {
+                            try
+                            {
+                                long nextRetryAt = Convert.ToInt64(t.ContainsKey("nextRetryAt") ? t["nextRetryAt"] : 0);
+                                long epochNow = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
+                                long remainingMs = nextRetryAt - epochNow;
+                                if (remainingMs > 0) backoffMin = (int)Math.Ceiling(remainingMs / 60000.0);
+                            }
+                            catch { }
+                        }
+                    }
+                }
+            }
+            if (!apiOk)
+            {
+                backoffMin = TunnelState.BackoffMinutes(dataDir);
+                tunnelUrl = TunnelState.UrlFromState(dataDir);
+            }
             if (backoffMin > 0)
             {
                 lblStatusTunnel.Text = "● Cloudflare: waiting to reopen the tunnel (429)";

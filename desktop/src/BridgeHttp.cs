@@ -17,16 +17,30 @@ namespace OpenPocket.Desktop
         // Trả dict JSON khi 2xx, null khi lỗi (error mang mô tả).
         public static Dictionary<string, object> PostSync(int port, string token, string path, string json, out string error)
         {
+            return RequestSync("POST", port, token, path, json, 8000, out error);
+        }
+
+        // GET đồng bộ — cùng seam với POST (Bearer master token, chỉ header).
+        // timeoutMs do caller quyết: GUI đọc /api/state trên UI thread mỗi tick
+        // 3.5s nên phải NGẮN (localhost thường <50ms; kẹt thì lọt fallback).
+        public static Dictionary<string, object> GetSync(int port, string token, string path, int timeoutMs, out string error)
+        {
+            return RequestSync("GET", port, token, path, null, timeoutMs, out error);
+        }
+
+        private static Dictionary<string, object> RequestSync(string method, int port, string token, string path, string json, int timeoutMs, out string error)
+        {
             error = null;
             try
             {
                 var req = (HttpWebRequest)WebRequest.Create("http://127.0.0.1:" + port + path);
-                req.Method = "POST";
-                req.ContentType = "application/json";
+                req.Method = method;
                 req.Headers.Add("Authorization", "Bearer " + token);
-                req.Timeout = 8000;
+                req.Timeout = timeoutMs;
+                req.ReadWriteTimeout = timeoutMs;
                 if (json != null)
                 {
+                    req.ContentType = "application/json";
                     byte[] body = Encoding.UTF8.GetBytes(json);
                     req.ContentLength = body.Length;
                     using (Stream stream = req.GetRequestStream()) stream.Write(body, 0, body.Length);
