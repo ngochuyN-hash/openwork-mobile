@@ -29,7 +29,7 @@ namespace OpenPocket.Desktop
     //   BridgeConfig.cs  — đường dẫn + đọc config.json của bridge
     //   BridgeProcess.cs — tìm node, bật/dừng đúng tiến trình bridge, dọn log
     //   TunnelState.cs   — đọc URL tunnel + backoff 429 từ đĩa (state + log)
-    //   AutostartTask.cs — task scheduler "OpenPocketBridge" (query/run/create)
+    //   AutostartTask.cs — task scheduler autostart + watchdog (query/repair/run/create)
     //   BridgeHttp.cs    — POST API localhost (Bearer master token)
     //   Provisioning.cs  — hàm thuần của luồng định danh máy (room + secret)
     //   PairingQrDialog.cs — popup QR ghép nối
@@ -138,6 +138,31 @@ namespace OpenPocket.Desktop
             refreshTimer.Interval = 3500;
             refreshTimer.Tick += delegate { CheckStatus(); };
             refreshTimer.Start();
+
+            // Tự lành autostart khi mở exe (lệnh user 07/10: "autostart là 1 phần
+            // chức năng exe"). Chạy NỀN cho khỏi khựng UI — mỗi lệnh schtasks có
+            // thể ngốn tới 10s. Hai việc: (1) task autostart TỒN TẠI mà trigger
+            // chết thì dựng lại; (2) thiếu máy canh (watchdog 5 phút chạy
+            // `openpocket ensure`) thì cài — bridge chết ngầm hoặc máy bật lại
+            // mà không có logon-event mới (Fast Startup) được hồi sinh trong 5
+            // phút. TUYỆT ĐỐI không tạo task MỚI thay người dùng đã tắt (luật
+            // giữ từ bản cũ): thiếu task = thôi, có task hỏng = sửa.
+            ThreadPool.QueueUserWorkItem(delegate {
+                try
+                {
+                    string healError;
+                    if (AutostartTask.NeedsRepair())
+                    {
+                        AutostartTask.Enable(bridgeDir, nodeExe, out healError);
+                    }
+                    if (AutostartTask.Exists() && !AutostartTask.WatchdogExists())
+                    {
+                        AutostartTask.EnableWatchdog(bridgeDir, nodeExe, out healError);
+                    }
+                    SafeInvoke(delegate { chkAutostart.Checked = AutostartTask.Healthy(); });
+                }
+                catch { }
+            });
         }
 
         private void ResolvePaths()
@@ -540,8 +565,10 @@ namespace OpenPocket.Desktop
             var config = BridgeConfig.Load();
             currentTenant = config.ContainsKey("lookupTenant") ? Convert.ToString(config["lookupTenant"]) : "";
 
-            // Kiểm tra autostart task
-            chkAutostart.Checked = AutostartTask.Exists();
+            // Kiểm tra autostart task — soi TRIGGER thật (Healthy), không chỉ
+            // "tồn tại": task chết vẫn tồn tại và từng sáng đèn oan. Phần tự
+            // lành chạy nền ở cuối ctor.
+            chkAutostart.Checked = AutostartTask.Healthy();
         }
 
         // ================= LẦN ĐẦU CHẠY: ĐỊNH DANH MÁY + TỰ CÀI =================
@@ -1003,11 +1030,16 @@ namespace OpenPocket.Desktop
                     else
                     {
                         chkAutostart.Checked = true;
+                        // Máy canh đi cùng autostart — hụt thì lần mở exe sau
+                        // sẽ tự cài lại (khối tự lành ở ctor).
+                        string watchdogError;
+                        AutostartTask.EnableWatchdog(bridgeDir, nodeExe, out watchdogError);
                     }
                 }
                 else
                 {
                     AutostartTask.Disable();
+                    AutostartTask.DisableWatchdog(); // tắt là tắt cả cặp
                     chkAutostart.Checked = false;
                 }
             }
