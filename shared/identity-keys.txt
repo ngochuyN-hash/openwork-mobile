@@ -1,0 +1,10 @@
+# Whitelist định danh máy — MỘT nguồn chân lý cho CẢ bridge (JS) lẫn GUI
+# desktop (C#). bridge/src/identity.js đọc file này lúc chạy; desktop/build.bat
+# và desktop/build-test.bat sinh src/IdentityKeys.cs từ đây lúc build (cùng
+# khuôn với InviteKey.cs). Thêm/đổi key = sửa ĐÚNG file này rồi build lại exe —
+# hai bên không thể trôi khỏi nhau vì cùng đọc một nơi.
+# Dòng trống và dòng bắt đầu bằng # bị bỏ qua; mỗi dòng còn lại ĐÚNG MỘT key.
+lookupUrl
+lookupTenant
+lookupSecret
+machineName

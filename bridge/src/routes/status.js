@@ -1,4 +1,5 @@
-import { bridgeDataDir, saveConfig } from "../config.js";
+import { bridgeDataDir } from "../config.js";
+import { applyIdentity, sanitizeMachineName } from "../identity.js";
 import { readEngineRegistry } from "../discovery.js";
 import { readJsonBody, sendJson } from "../http-util.js";
 
@@ -53,19 +54,17 @@ export function createStatusRoutes(ctx) {
   // Đổi tên máy (ô "Tên máy" trong GUI desktop): cập nhật config trong RAM +
   // file NGAY — đăng nhập mới trên điện thoại thấy tên mới qua /api/pair/
   // tenant, /api/state cũng báo theo. Không cần restart bridge.
+  // Adapter mỏng của identity.js (candidate 1, 07/10): route chỉ đọc body,
+  // kiểm tên rỗng cho đúng lỗi invalid_name cũ, còn whitelist/sanitize/ghi/log
+  // là việc của applyIdentity — cùng một seam với /api/config/identity.
   async function machineName({ req, res }) {
     try {
       const body = await readJsonBody(req);
-      const name = String(body?.name ?? "")
-        .replace(/[\r\n"']/g, "")
-        .trim()
-        .slice(0, 60);
+      const name = sanitizeMachineName(body?.name);
       if (!name) {
         return sendJson(res, 400, { code: "invalid_name", message: "Machine name is empty." });
       }
-      ctx.config.machineName = name;
-      saveConfig(ctx.config);
-      console.log(`[bridge] new machine name: ${name}`);
+      applyIdentity(ctx.config, { machineName: name });
       sendJson(res, 200, { ok: true, machineName: name });
     } catch {
       sendJson(res, 400, { code: "invalid_body", message: "Invalid JSON body" });

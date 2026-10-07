@@ -18,7 +18,18 @@ if exist "invite.key" set /p INVITE_KEY=<invite.key
 >> src\InviteKey.cs echo     public const string RoomInviteKey = "%INVITE_KEY%";
 >> src\InviteKey.cs echo }
 
-"%CSC%" /target:winexe /optimize /codepage:65001 /win32icon:src\app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket-test.exe src\InviteKey.cs src\Ui.cs src\BridgeConfig.cs src\BridgeProcess.cs src\TunnelState.cs src\AutostartTask.cs src\BridgeHttp.cs src\Provisioning.cs src\PairingQrDialog.cs src\OpenPocket.cs
+rem Sinh src\IdentityKeys.cs tu shared\identity-keys.txt - y het build.bat
+rem (candidate 2, review 07/10): whitelist 4 key dinh danh may, mot nguoi dung.
+> src\IdentityKeys.cs echo // Sinh tu dong boi build-test.bat tu shared\identity-keys.txt - KHONG sua tay, KHONG commit.
+>> src\IdentityKeys.cs echo internal static class IdentityKeys
+>> src\IdentityKeys.cs echo {
+>> src\IdentityKeys.cs echo     public static readonly string[] All = new string[]
+>> src\IdentityKeys.cs echo     {
+for /f "usebackq eol=# delims=" %%k in ("%~dp0..\shared\identity-keys.txt") do >> src\IdentityKeys.cs echo         "%%k",
+>> src\IdentityKeys.cs echo     };
+>> src\IdentityKeys.cs echo }
+
+"%CSC%" /target:winexe /optimize /codepage:65001 /win32icon:src\app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket-test.exe src\InviteKey.cs src\IdentityKeys.cs src\Ui.cs src\BridgeConfig.cs src\BridgeProcess.cs src\TunnelState.cs src\AutostartTask.cs src\BridgeHttp.cs src\Provisioning.cs src\PairingQrDialog.cs src\OpenPocket.cs
 if %ERRORLEVEL% equ 0 (
     echo [OK] Bien dich thanh cong: desktop\bin\OpenPocket-test.exe
 ) else (
