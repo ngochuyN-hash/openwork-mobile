@@ -90,7 +90,7 @@ export function buildTaskVbs({ nodeExecPath, entryPath, logPath, workDir, extraA
   return [
     'Set sh = CreateObject("WScript.Shell")',
     `sh.CurrentDirectory = "${workDir}"`,
-    `sh.Run "cmd /c """""${nodeExecPath}"" ""${entryPath}""${extraArgs} >> ""${logPath}" 2>&1""", 0, False`,
+    `sh.Run "cmd /c """"${nodeExecPath}"" ""${entryPath}""${extraArgs} >> ""${logPath}"" 2>&1""", 0, False`,
   ].join("\r\n") + "\r\n";
 }
 

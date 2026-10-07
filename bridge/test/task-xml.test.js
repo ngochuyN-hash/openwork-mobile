@@ -52,8 +52,8 @@ test("VBS wrapper: bọc ngoặc kép chuẩn cho đường dẫn có dấu các
   assert.ok(vbs.startsWith('Set sh = CreateObject("WScript.Shell")\r\n'));
   assert.ok(vbs.includes('sh.CurrentDirectory = "C:\\repo"'));
   assert.ok(
-    vbs.includes('sh.Run "cmd /c """""C:\\Program Files\\node.exe"" ""C:\\repo\\src\\index.js"" >> ""C:\\data dir\\bridge-task.log" 2>&1""", 0, False'),
-    "dòng sh.Run phải đúng khuôn đã chạy thật"
+    vbs.includes('sh.Run "cmd /c """"C:\\Program Files\\node.exe"" ""C:\\repo\\src\\index.js"" >> ""C:\\data dir\\bridge-task.log"" 2>&1""", 0, False'),
+    "dòng sh.Run phải đúng khuôn đã chạy thật (khuôn 5 nháy là VBScript compile error 800A04...)"
   );
   assert.ok(vbs.endsWith("\r\n"));
 });
