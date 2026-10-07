@@ -88,7 +88,7 @@ namespace OpenPocket.Desktop
         public static void StartDirect(string bridgeDir, string nodeExe)
         {
             string entry = Path.Combine(bridgeDir, "src", "index.js");
-            string logPath = Path.Combine(BridgeConfig.DataDir(), "bridge-task.log");
+            string logPath = Path.Combine(BridgeConfig.DataDir(), HostContract.LogTask);
             var psi = new ProcessStartInfo("cmd.exe",
                 "/c \"\"" + nodeExe + "\" \"" + entry + "\" >> \"" + logPath + "\" 2>&1\"");
             psi.WorkingDirectory = bridgeDir;
@@ -107,7 +107,7 @@ namespace OpenPocket.Desktop
                 // Dừng task nếu task đang có instance chạy
                 try
                 {
-                    var psiEnd = new ProcessStartInfo("schtasks.exe", "/end /tn OpenPocketBridge");
+                    var psiEnd = new ProcessStartInfo("schtasks.exe", "/end /tn " + HostContract.AutostartTaskName);
                     psiEnd.CreateNoWindow = true;
                     psiEnd.UseShellExecute = false;
                     Process.Start(psiEnd).WaitForExit(3000);
@@ -115,7 +115,7 @@ namespace OpenPocket.Desktop
                 catch { }
 
                 // 1. Kill theo pid file (bridge do `openpocket start` mở)
-                string pidFile = Path.Combine(BridgeConfig.DataDir(), "bridge.pid");
+                string pidFile = Path.Combine(BridgeConfig.DataDir(), HostContract.PidFileName);
                 if (File.Exists(pidFile))
                 {
                     string pidStr = File.ReadAllText(pidFile).Trim();
@@ -181,8 +181,7 @@ namespace OpenPocket.Desktop
         // vấp handle của tiến trình ghi.
         public static void WipeLogs(bool deleteFiles)
         {
-            string[] names = new string[] { "bridge.log", "bridge-task.log", "watchdog.log" };
-            foreach (string name in names)
+            foreach (string name in HostContract.LogNames)
             {
                 string path = Path.Combine(BridgeConfig.DataDir(), name);
                 if (deleteFiles)

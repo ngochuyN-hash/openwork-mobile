@@ -566,7 +566,7 @@ namespace OpenPocket.Desktop
         private void LoadConfigToUi()
         {
             var config = BridgeConfig.Load();
-            currentTenant = config.ContainsKey("lookupTenant") ? Convert.ToString(config["lookupTenant"]) : "";
+            currentTenant = config.ContainsKey(HostContract.ConfigKeyLookupTenant) ? Convert.ToString(config[HostContract.ConfigKeyLookupTenant]) : "";
 
             // Kiểm tra autostart task — soi TRIGGER thật (Healthy), không chỉ
             // "tồn tại": task chết vẫn tồn tại và từng sáng đèn oan. Phần tự
@@ -585,14 +585,14 @@ namespace OpenPocket.Desktop
             {
                 var config = BridgeConfig.Load();
                 bool dirty = false;
-                if (!config.ContainsKey("lookupUrl") || string.IsNullOrEmpty(Convert.ToString(config["lookupUrl"])))
+                if (!config.ContainsKey(HostContract.ConfigKeyLookupUrl) || string.IsNullOrEmpty(Convert.ToString(config[HostContract.ConfigKeyLookupUrl])))
                 {
-                    config["lookupUrl"] = Provisioning.DefaultWorkerUrl;
+                    config[HostContract.ConfigKeyLookupUrl] = Provisioning.DefaultWorkerUrl;
                     dirty = true;
                 }
-                if (!config.ContainsKey("machineName") || string.IsNullOrEmpty(Convert.ToString(config["machineName"])))
+                if (!config.ContainsKey(HostContract.ConfigKeyMachineName) || string.IsNullOrEmpty(Convert.ToString(config[HostContract.ConfigKeyMachineName])))
                 {
-                    config["machineName"] = Environment.MachineName;
+                    config[HostContract.ConfigKeyMachineName] = Environment.MachineName;
                     dirty = true;
                 }
                 if (dirty) SaveConfig(config);
@@ -609,8 +609,8 @@ namespace OpenPocket.Desktop
         {
             if (provisionDone || provisioning) return;
             var config = BridgeConfig.Load();
-            string tenant = config.ContainsKey("lookupTenant") ? Convert.ToString(config["lookupTenant"]) : "";
-            string secret = config.ContainsKey("lookupSecret") ? Convert.ToString(config["lookupSecret"]) : "";
+            string tenant = config.ContainsKey(HostContract.ConfigKeyLookupTenant) ? Convert.ToString(config[HostContract.ConfigKeyLookupTenant]) : "";
+            string secret = config.ContainsKey(HostContract.ConfigKeyLookupSecret) ? Convert.ToString(config[HostContract.ConfigKeyLookupSecret]) : "";
             if (!string.IsNullOrEmpty(tenant) && !string.IsNullOrEmpty(secret)) { provisionDone = true; return; }
 
             provisioning = true;
@@ -625,7 +625,7 @@ namespace OpenPocket.Desktop
                 string user = Provisioning.NewRoomId();
                 string pass = Provisioning.NewSecret();
                 var cfg = BridgeConfig.Load();
-                string url = cfg.ContainsKey("lookupUrl") ? Convert.ToString(cfg["lookupUrl"]).Trim().TrimEnd('/') : "";
+                string url = cfg.ContainsKey(HostContract.ConfigKeyLookupUrl) ? Convert.ToString(cfg[HostContract.ConfigKeyLookupUrl]).Trim().TrimEnd('/') : "";
                 if (string.IsNullOrEmpty(url)) url = Provisioning.DefaultWorkerUrl;
                 var jss = new JavaScriptSerializer();
                 while (true)
@@ -659,11 +659,11 @@ namespace OpenPocket.Desktop
                         if (ok)
                         {
                             var save = BridgeConfig.Load();
-                            save["lookupTenant"] = user;
-                            save["lookupSecret"] = pass;
-                            save["lookupUrl"] = url;
-                            if (!save.ContainsKey("machineName") || string.IsNullOrEmpty(Convert.ToString(save["machineName"])))
-                                save["machineName"] = Environment.MachineName;
+                            save[HostContract.ConfigKeyLookupTenant] = user;
+                            save[HostContract.ConfigKeyLookupSecret] = pass;
+                            save[HostContract.ConfigKeyLookupUrl] = url;
+                            if (!save.ContainsKey(HostContract.ConfigKeyMachineName) || string.IsNullOrEmpty(Convert.ToString(save[HostContract.ConfigKeyMachineName])))
+                                save[HostContract.ConfigKeyMachineName] = Environment.MachineName;
                             SaveConfig(save);
                             break;
                         }
@@ -739,7 +739,7 @@ namespace OpenPocket.Desktop
 
             // 2. Tên máy — chỉ nạp lại vào ô khi ô KHÔNG đang focus và KHÔNG có
             // lệnh lưu đang bay, kẻo ghi đè mất chữ user đang gõ
-            currentTenant = config.ContainsKey("lookupTenant") ? Convert.ToString(config["lookupTenant"]) : "";
+            currentTenant = config.ContainsKey(HostContract.ConfigKeyLookupTenant) ? Convert.ToString(config[HostContract.ConfigKeyLookupTenant]) : "";
 
             // 3. Trạng thái tunnel: bridge chạy thì hỏi qua INTERFACE HTTP của
             // nó (GET /api/state → tunnel:{phase,url,nextRetryAt}) — hết luồn
@@ -761,17 +761,17 @@ namespace OpenPocket.Desktop
                 if (state != null)
                 {
                     apiOk = true;
-                    var t = state.ContainsKey("tunnel") ? state["tunnel"] as Dictionary<string, object> : null;
+                    var t = state.ContainsKey(HostContract.StateTunnelField) ? state[HostContract.StateTunnelField] as Dictionary<string, object> : null;
                     if (t != null)
                     {
-                        string phase = Convert.ToString(t.ContainsKey("phase") ? t["phase"] : "");
-                        if (phase == "up")
-                            tunnelUrl = Convert.ToString(t.ContainsKey("url") && t["url"] != null ? t["url"] : "");
-                        if (phase == "backoff")
+                        string phase = Convert.ToString(t.ContainsKey(HostContract.StateTunnelKeyPhase) ? t[HostContract.StateTunnelKeyPhase] : "");
+                        if (phase == HostContract.TunnelPhaseUp)
+                            tunnelUrl = Convert.ToString(t.ContainsKey(HostContract.StateTunnelKeyUrl) && t[HostContract.StateTunnelKeyUrl] != null ? t[HostContract.StateTunnelKeyUrl] : "");
+                        if (phase == HostContract.TunnelPhaseBackoff)
                         {
                             try
                             {
-                                long nextRetryAt = Convert.ToInt64(t.ContainsKey("nextRetryAt") ? t["nextRetryAt"] : 0);
+                                long nextRetryAt = Convert.ToInt64(t.ContainsKey(HostContract.StateTunnelKeyNextRetryAt) ? t[HostContract.StateTunnelKeyNextRetryAt] : 0);
                                 long epochNow = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
                                 long remainingMs = nextRetryAt - epochNow;
                                 if (remainingMs > 0) backoffMin = (int)Math.Ceiling(remainingMs / 60000.0);
@@ -1034,10 +1034,10 @@ namespace OpenPocket.Desktop
         private void ActionOpenLogs()
         {
             string dataDir = BridgeConfig.DataDir();
-            string logPath = Path.Combine(dataDir, "bridge.log");
+            string logPath = Path.Combine(dataDir, HostContract.LogBridge);
             if (!File.Exists(logPath))
             {
-                logPath = Path.Combine(dataDir, "bridge-task.log");
+                logPath = Path.Combine(dataDir, HostContract.LogTask);
             }
             if (File.Exists(logPath))
             {

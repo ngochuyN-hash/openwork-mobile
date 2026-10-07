@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { bridgeDataDir } from "./config.js";
+import { HOST_CONTRACT } from "../../shared/host-contract.js";
 
 // Auto Cloudflare Quick Tunnel (học từ 9Remote): bridge tự tải cloudflared,
 // tự chạy tunnel ra internet, tự dò URL trycloudflare.com từ log, tự khởi động
@@ -72,7 +73,7 @@ const SPAWN_FLAGS = ["--protocol", "http2", "--edge-ip-version", "4"];
 // tiến trình mới gõ cửa 429 ngay từ giây đầu — limit Cloudflare đếm theo IP,
 // không quan tâm tiến trình nào gõ, nên cứ restart là tự gia hạn mãi.
 export function tunnelStateFile() {
-  return join(bridgeDataDir(), "tunnel-state.json");
+  return join(bridgeDataDir(), HOST_CONTRACT.tunnelStateFileName);
 }
 export function loadTunnelState() {
   try {
@@ -91,6 +92,18 @@ export function saveTunnelState(state) {
 export function rateLimitDelayMs(streak) {
   return Math.min(120_000 * 2 ** Math.max(0, streak - 1), 600_000);
 }
+// Shape của trạng thái tunnel lộ qua /api/state (routes/status.js trả
+// `tunnel: getState()`) — tách ra làm hàm thuần để bridge/test khoá keys vào
+// shared/host-contract.js (GUI C# đọc qua bản sinh ra từ cùng nguồn).
+// ĐỪNG đổi tên field ở đây mà không sửa contract: GUI sẽ báo trạng thái
+// tunnel sai im lặng. (File fallback tunnel-state.json dùng `nextAttemptAt`
+// — tên khác có chủ ý, xem contract.)
+export const tunnelStateSnapshot = (phase, url, streak, nextRetryAt) => ({
+  phase,
+  url,
+  streak,
+  nextRetryAt,
+});
 // Độ chờ thử lại thường (không phải 429): 5s nhân đôi, trần 60s.
 export function plainRetryDelayMs(attempt) {
   return Math.min(5000 * 2 ** Math.max(0, attempt - 1), 60_000);
@@ -170,7 +183,7 @@ export async function startQuickTunnel(targetPort, { onUrl, log = console.log } 
   if (persisted?.phase === "backoff" && Number.isInteger(persisted.streak)) {
     rateLimitStreak = Math.max(1, persisted.streak);
   }
-  const getState = () => ({ phase, url: currentUrl, streak: rateLimitStreak, nextRetryAt });
+  const getState = () => tunnelStateSnapshot(phase, currentUrl, rateLimitStreak, nextRetryAt);
 
   const runOnce = async () => {
     attempt += 1;

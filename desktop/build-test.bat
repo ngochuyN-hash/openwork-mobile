@@ -29,7 +29,15 @@ for /f "usebackq eol=# delims=" %%k in ("%~dp0..\shared\identity-keys.txt") do >
 >> src\IdentityKeys.cs echo     };
 >> src\IdentityKeys.cs echo }
 
-"%CSC%" /target:winexe /optimize /codepage:65001 /win32icon:src\app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket-test.exe src\InviteKey.cs src\IdentityKeys.cs src\Ui.cs src\BridgeConfig.cs src\BridgeProcess.cs src\TunnelState.cs src\AutostartTask.cs src\BridgeHttp.cs src\Provisioning.cs src\PairingQrDialog.cs src\OpenPocket.cs
+rem Sinh src\HostContract.cs tu shared\host-contract.js - y het build.bat
+rem (candidate 1, review 07/10): kien thuc host mot nguon, C# nhan ban sinh ra.
+node "%~dp0gen-host-contract.mjs"
+if not exist "src\HostContract.cs" (
+    echo [ERROR] Khong sinh duoc src\HostContract.cs - can node.exe tren may build
+    exit /b 1
+)
+
+"%CSC%" /target:winexe /optimize /codepage:65001 /win32icon:src\app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket-test.exe src\InviteKey.cs src\IdentityKeys.cs src\HostContract.cs src\Ui.cs src\BridgeConfig.cs src\BridgeProcess.cs src\TunnelState.cs src\AutostartTask.cs src\BridgeHttp.cs src\Provisioning.cs src\PairingQrDialog.cs src\OpenPocket.cs
 if %ERRORLEVEL% equ 0 (
     echo [OK] Bien dich thanh cong: desktop\bin\OpenPocket-test.exe
 ) else (

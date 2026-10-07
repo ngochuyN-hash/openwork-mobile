@@ -16,13 +16,13 @@ namespace OpenPocket.Desktop
         public static string GetConfigPath()
         {
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            return Path.Combine(appData, "openwork-bridge", "config.json");
+            return Path.Combine(appData, HostContract.DataDirName, HostContract.ConfigFileName);
         }
 
         public static string DataDir()
         {
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            return Path.Combine(appData, "openwork-bridge");
+            return Path.Combine(appData, HostContract.DataDirName);
         }
 
         public static Dictionary<string, object> Load()
@@ -49,22 +49,23 @@ namespace OpenPocket.Desktop
             File.WriteAllText(GetConfigPath(), json, Encoding.UTF8);
         }
 
-        // Cổng bridge chuẩn hoá: 8788 khi config thiếu/sai — cùng mặc định với
-        // bridge/src/config.js (loadConfig).
+        // Cổng bridge chuẩn hoá: mặc định khi config thiếu/sai — cùng mặc định
+        // với bridge/src/config.js (loadConfig). Giá trị nằm trong
+        // HostContract (sinh từ shared/host-contract.js).
         public static int Port(Dictionary<string, object> config)
         {
-            int port = 8788;
-            if (config != null && config.ContainsKey("port"))
+            int port = HostContract.BridgePort;
+            if (config != null && config.ContainsKey(HostContract.ConfigKeyPort))
             {
                 int p;
-                if (int.TryParse(Convert.ToString(config["port"]), out p) && p > 0) port = p;
+                if (int.TryParse(Convert.ToString(config[HostContract.ConfigKeyPort]), out p) && p > 0) port = p;
             }
             return port;
         }
 
         public static string MobileToken(Dictionary<string, object> config)
         {
-            return (config != null && config.ContainsKey("mobileToken")) ? Convert.ToString(config["mobileToken"]) : "";
+            return (config != null && config.ContainsKey(HostContract.ConfigKeyMobileToken)) ? Convert.ToString(config[HostContract.ConfigKeyMobileToken]) : "";
         }
     }
 }

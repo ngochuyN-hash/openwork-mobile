@@ -69,3 +69,8 @@ desktop/src/InviteKey.cs
 # shared/identity-keys.txt (bridge reads it at runtime; build scripts turn it
 # into this C# file). Same generated-file pattern as InviteKey.cs above.
 desktop/src/IdentityKeys.cs
+
+# generated host contract — the committed source of truth is
+# shared/host-contract.js (bridge imports it directly; gen-host-contract.mjs
+# turns it into this C# file at build time). Same pattern as IdentityKeys.cs.
+desktop/src/HostContract.cs

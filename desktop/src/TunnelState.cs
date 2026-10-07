@@ -17,12 +17,14 @@ namespace OpenPocket.Desktop
     // và bridge chạy bằng task không in URL ra log nên nó vô dụng từ đó.
     internal static class TunnelState
     {
-        // tunnel-state.json → dict gọn; null khi file thiếu / JSON hỏng.
+        // tunnel-state.json → dict gọn; null khi file thiếu / JSON hỏng. Tên
+        // file + key nằm trong HostContract (sinh từ shared/host-contract.js
+        // — cùng nguồn với bridge/src/tunnel.js nơi ghi file này).
         private static Dictionary<string, object> Load(string dataDir)
         {
             try
             {
-                string path = Path.Combine(dataDir, "tunnel-state.json");
+                string path = Path.Combine(dataDir, HostContract.TunnelStateFileName);
                 if (!File.Exists(path)) return null;
                 return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(path));
             }
@@ -34,8 +36,8 @@ namespace OpenPocket.Desktop
         {
             var st = Load(dataDir);
             if (st == null) return "";
-            if (Convert.ToString(st.ContainsKey("phase") ? st["phase"] : "") != "up") return "";
-            return Convert.ToString(st.ContainsKey("url") && st["url"] != null ? st["url"] : "");
+            if (Convert.ToString(st.ContainsKey(HostContract.TunnelKeyPhase) ? st[HostContract.TunnelKeyPhase] : "") != HostContract.TunnelPhaseUp) return "";
+            return Convert.ToString(st.ContainsKey(HostContract.TunnelKeyUrl) && st[HostContract.TunnelKeyUrl] != null ? st[HostContract.TunnelKeyUrl] : "");
         }
 
         // Số PHÚT còn lại phải chờ khi phase "backoff" (Cloudflare 429),
@@ -46,9 +48,9 @@ namespace OpenPocket.Desktop
         {
             var st = Load(dataDir);
             if (st == null) return -1;
-            if (Convert.ToString(st.ContainsKey("phase") ? st["phase"] : "") != "backoff") return -1;
+            if (Convert.ToString(st.ContainsKey(HostContract.TunnelKeyPhase) ? st[HostContract.TunnelKeyPhase] : "") != HostContract.TunnelPhaseBackoff) return -1;
             long nextAttemptAt;
-            try { nextAttemptAt = Convert.ToInt64(st.ContainsKey("nextAttemptAt") ? st["nextAttemptAt"] : 0); }
+            try { nextAttemptAt = Convert.ToInt64(st.ContainsKey(HostContract.TunnelKeyNextAttemptAt) ? st[HostContract.TunnelKeyNextAttemptAt] : 0); }
             catch { return -1; }
             long epochNow = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
             long remainingMs = nextAttemptAt - epochNow;

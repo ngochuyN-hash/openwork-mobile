@@ -150,8 +150,8 @@ namespace OpenPocket.Desktop
             {
                 var dict = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(stdout);
                 if (Convert.ToBoolean(dict["ok"])) return true;
-                error = "Could not start the bridge - the OpenPocketBridge task failed: "
-                    + Convert.ToString(dict["error"]);
+                error = "Could not start the bridge - the " + HostContract.AutostartTaskName
+                    + " task failed: " + Convert.ToString(dict["error"]);
                 return false;
             }
             catch (Exception ex)

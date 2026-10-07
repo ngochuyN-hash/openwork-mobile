@@ -4,7 +4,7 @@ import { loadConfig, saveConfig, bridgeDataDir, pairingBaseUrl } from "./config.
 import { ensureOwnerToken } from "./bootstrap.js";
 import { discoverServer, checkTokenActive, probeServerUrl } from "./discovery.js";
 import { openworkFilePath } from "./paths.js";
-import { startQuickTunnel } from "./tunnel.js";
+import { startQuickTunnel, tunnelStateSnapshot } from "./tunnel.js";
 import { startLookup } from "./lookup.js";
 import { PairingService, CODE_TTL_MINUTES } from "./pairing.js";
 import { launchOpenWork } from "./openwork-launch.js";
@@ -16,6 +16,7 @@ import { createStaticHandler } from "./static.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { buildPairingUrl } from "../../shared/contract.js";
+import { HOST_CONTRACT } from "../../shared/host-contract.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Single version source of truth: bridge/package.json (the OTA VERSION file is gone).
@@ -51,7 +52,8 @@ const state = {
 // là ô ghi trống: index.js thay chúng bằng controller thật ngay khi
 // startQuickTunnel chạy xong bên dưới (xem onListening).
 const tunnel = {
-  getState: () => ({ phase: "starting", url: "", streak: 0, nextRetryAt: 0 }),
+  // Shape qua shared/host-contract.js (xem tunnelStateSnapshot trong tunnel.js).
+  getState: () => tunnelStateSnapshot("starting", "", 0, 0),
   // Restart thủ công — false = tunnel không chạy (OPENWORK_BRIDGE_TUNNEL=0 / chưa lên)
   restart: () => false,
 };
@@ -223,7 +225,7 @@ const onListening = () => {
   // chỉ `openpocket start` ghi, instance từ task VBS là vô hình với CLI — hai
   // bên cùng start thì EADDRINUSE chồng nhau (sự cố sáng 13/09).
   try {
-    writeFileSync(join(bridgeDataDir(), "bridge.pid"), String(process.pid));
+    writeFileSync(join(bridgeDataDir(), HOST_CONTRACT.pidFileName), String(process.pid));
   } catch {}
   console.log("");
   console.log(`OpenWork Mobile bridge v${BRIDGE_VERSION}`);
@@ -303,7 +305,7 @@ process.on("SIGINT", () => {
     tunnelController?.stop(); // kill the cloudflared child too — no orphan tunnel
   } catch {}
   try {
-    unlinkSync(join(bridgeDataDir(), "bridge.pid"));
+    unlinkSync(join(bridgeDataDir(), HOST_CONTRACT.pidFileName));
   } catch {}
   wipeLogs(); // tắt là xóa sạch log (owner 13/09)
   process.exit(0);

@@ -6,8 +6,9 @@
 import { statSync, truncateSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { bridgeDataDir } from "./config.js";
+import { HOST_CONTRACT } from "../../shared/host-contract.js";
 
-export const LOG_NAMES = ["bridge.log", "bridge-task.log", "watchdog.log"];
+export const LOG_NAMES = Object.values(HOST_CONTRACT.logNames);
 
 // Xóa sạch nội dung (truncate về 0 byte, giữ nguyên file).
 export function wipeLogs(dir = bridgeDataDir()) {

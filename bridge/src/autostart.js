@@ -1,14 +1,17 @@
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFileSync } from "node:fs";
+import { HOST_CONTRACT } from "../../shared/host-contract.js";
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
-// Tên task trong Task Scheduler. Export để unit test + dùng chung với bin/openpocket.js.
-export const AUTOSTART_TASK_NAME = "OpenPocketBridge";
+// Tên task trong Task Scheduler. Export để unit test + dùng chung với
+// bin/openpocket.js. Nguồn là shared/host-contract.js — GUI C# nhận bản sinh
+// ra từ cùng file đó, hai bên không thể trôi khỏi nhau.
+export const AUTOSTART_TASK_NAME = HOST_CONTRACT.autostartTaskName;
 // Task máy canh (5 phút/lần chạy `openpocket ensure`) — bridge chết ngầm là
 // tự hồi sinh, khỏi đợi reboot hay ai đó mở tay.
-export const WATCHDOG_TASK_NAME = "OpenPocketBridgeWatchdog";
+export const WATCHDOG_TASK_NAME = HOST_CONTRACT.watchdogTaskName;
 
 export function bridgeEntryPath() {
   return join(SRC_DIR, "index.js");

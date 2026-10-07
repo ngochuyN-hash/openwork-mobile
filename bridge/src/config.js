@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { HOST_CONTRACT } from "../../shared/host-contract.js";
 
 // Bridge runtime config lives OUTSIDE the repo (it holds secrets):
 //   Windows: %APPDATA%\openwork-bridge\config.json
@@ -12,11 +13,11 @@ export function bridgeDataDir() {
   const override = (process.env.OPENWORK_BRIDGE_DIR || "").trim();
   if (override) return override;
   const appData = process.env.APPDATA;
-  if (appData) return join(appData, "openwork-bridge");
-  return join(homedir(), ".openwork-bridge");
+  if (appData) return join(appData, HOST_CONTRACT.dataDirName);
+  return join(homedir(), "." + HOST_CONTRACT.dataDirName);
 }
 
-const CONFIG_FILE = "config.json";
+const CONFIG_FILE = HOST_CONTRACT.configFileName;
 
 export function loadConfig() {
   const dir = bridgeDataDir();
@@ -40,7 +41,7 @@ export function loadConfig() {
     // Owner token we mint into OpenWork's tokens.json (empty until bootstrapped).
     ownerToken: typeof parsed.ownerToken === "string" ? parsed.ownerToken : "",
     // Port of the bridge HTTP server (binds 127.0.0.1 only).
-    port: Number.isInteger(parsed.port) && parsed.port > 0 ? parsed.port : 8788,
+    port: Number.isInteger(parsed.port) && parsed.port > 0 ? parsed.port : HOST_CONTRACT.bridgePort,
     // Last known openwork-server port, to probe first on next start.
     lastServerPort: Number.isInteger(parsed.lastServerPort) && parsed.lastServerPort > 0 ? parsed.lastServerPort : 0,
     // Optional public URL (when fronting the bridge yourself) — used for the pairing QR.
@@ -116,7 +117,7 @@ export function saveConfig(config) {
  * link via the worker is refused at the door (400 tenant_required), so a
  * lookupUrl without lookupTenant must NOT win; fall back to the current
  * tunnel URL, then the manually configured public URL, then localhost. */
-export function pairingBaseUrl({ lookupUrl = "", lookupTenant = "" } = {}, tunnelUrl = "", publicUrl = "", port = 8788) {
+export function pairingBaseUrl({ lookupUrl = "", lookupTenant = "" } = {}, tunnelUrl = "", publicUrl = "", port = HOST_CONTRACT.bridgePort) {
   const room = String(lookupTenant).trim();
   const url = String(lookupUrl).trim();
   const worker = room && url ? url.replace(/\/+$/, "") : "";
