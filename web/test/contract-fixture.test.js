@@ -84,3 +84,15 @@ test("contract: worker đã import contract — không còn literal xuyên tần
     assert.ok(relayTest.includes(`"${literal}"`), `relay test mất assertion cho "${literal}"`);
   }
 });
+
+test("contract: sse.js cũng đi qua contract — không còn literal header trôi nổi", () => {
+  // Sồn cuối của candidate 4 (review 07/10): dòng này từng hardcode
+  // "x-owm-tenant" ngoài hợp đồng — đổi header một ngày nào đó thì SSE đứt
+  // im lặng, không test nào bảo vệ. Giờ phải import HEADER_TENANT như api.js.
+  const sseSrc = readFileSync(join(ROOT, "web", "src", "lib", "sse.js"), "utf8");
+  assert.ok(
+    sseSrc.includes('from "../../../shared/contract.js"'),
+    "web/src/lib/sse.js phải import shared/contract.js"
+  );
+  assert.ok(!sseSrc.includes(`"${HEADER_TENANT}"`), "sse.js còn literal header ngoài contract");
+});

@@ -13,7 +13,7 @@ OpenWork is a desktop app (Electron, open source) for running AI coding agents �
 | Manage existing sessions & workspaces | The bridge plugs straight into the openwork-server API already shipped inside OpenWork desktop |
 | Manage files while away | File manager: browse / view / **edit + save** / upload / download |
 | Stay lightweight | Bridge = 1 Node process, **zero npm dependencies** (`qrcode-terminal` is vendored under `bridge/src/vendor/`); web bundle ~99KB raw (JS 77KB + CSS 20KB, ~31KB gzipped); no separate database |
-| Remote interaction that stays connected | Event stream over fetch (auth token travels in the Authorization header, never on the URL) with backoff reconnect + offline queue (messages composed offline are sent when back online) |
+| Remote interaction that stays connected | Event stream over fetch (auth token travels in the Authorization header, never on the URL; request headers — token and room alike — are built from the shared contract constants) with backoff reconnect + offline queue (messages composed offline are sent when back online) |
 | No APK, works on iOS | Web/PWA — open the link and it self-connects; "Add to Home Screen" behaves like a real app |
 | Completely free | Cloudflare Quick Tunnel (no account needed) + OpenCode Zen free models |
 

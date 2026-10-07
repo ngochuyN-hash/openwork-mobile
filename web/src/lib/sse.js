@@ -6,6 +6,7 @@
 //  khi rời trang, không phụ thuộc hành vi reconnect mù của trình duyệt
 //  - tự bóc `type` từ JSON: engine opencode phát event KHÔNG TÊN trên dòng
 //  `data:` (EventSource của bản cũ không nghe được mấy dòng này)
+import { HEADER_TENANT } from "../../../shared/contract.js";
 import { getToken, getTenant } from "../api.js";
 
 function headersFor() {
@@ -13,7 +14,9 @@ function headersFor() {
   const tenant = getTenant();
   const headers = { accept: "text/event-stream" };
   if (token) headers.authorization = `Bearer ${token}`;
-  if (tenant) headers["x-owm-tenant"] = tenant;
+  // Header phòng đi qua contract (api.js cũng dùng đúng hằng này) — sồn cuối
+  // của candidate 4 review 07/10: literal ở đây từng sống ngoài hợp đồng.
+  if (tenant) headers[HEADER_TENANT] = tenant;
   return headers;
 }
 
