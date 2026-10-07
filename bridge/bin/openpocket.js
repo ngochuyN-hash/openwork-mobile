@@ -15,6 +15,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bridgeDataDir, loadConfig, saveConfig } from "../src/config.js";
 import { AUTOSTART_TASK_NAME, WATCHDOG_TASK_NAME, bridgeEntryPath } from "../src/autostart.js";
+import { loadTunnelState } from "../src/tunnel.js";
+// Hình dạng link ghép (#p= / #t= / &m=) thuộc shared contract — CLI từng tự
+// tay ghép ngoài contract (contract.js xưng "chỗ duy nhất" nhưng CLI sinh
+// TRƯỚC contract). 07/10: kéo vào cùng một seam với bridge/web/worker.
+import { buildPairingUrl } from "../../shared/contract.js";
 
 const BIN_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -171,17 +176,17 @@ if (cmd === "status") {
     console.log(`   Phòng: ${config.lookupTenant}${config.machineName ? ` (${config.machineName})` : ""}`);
   }
   // Trạng thái đường hầm (tunnel-state.json do bridge/src/tunnel.js ghi) —
-  // đang bị Cloudflare 429 thì nói rõ: đừng restart, càng restart càng lâu.
-  try {
-    const st = JSON.parse(readFileSync(join(bridgeDataDir(), "tunnel-state.json"), "utf8"));
-    if (st.phase === "backoff" && Number(st.nextAttemptAt) > Date.now()) {
-      const mins = Math.ceil((Number(st.nextAttemptAt) - Date.now()) / 60_000);
-      console.log(`   🚧 Tunnel: Cloudflare đang tạm chặn mở đường hầm (429) — tự thử lại sau ~${mins} phút.`);
-      console.log("      ĐỪNG restart bridge — càng restart càng bị gia hạn. Điện thoại tự vào lại khi xong.");
-    } else if (st.phase === "up" && st.url) {
-      console.log(`   🌍 Tunnel: ${st.url}`);
-    }
-  } catch {}
+  // đọc qua loadTunnelState của chính tunnel.js (một seam, hết tự tay
+  // JSON.parse). Đang bị Cloudflare 429 thì nói rõ: đừng restart, càng
+  // restart càng lâu.
+  const st = loadTunnelState();
+  if (st && st.phase === "backoff" && Number(st.nextAttemptAt) > Date.now()) {
+    const mins = Math.ceil((Number(st.nextAttemptAt) - Date.now()) / 60_000);
+    console.log(`   🚧 Tunnel: Cloudflare đang tạm chặn mở đường hầm (429) — tự thử lại sau ~${mins} phút.`);
+    console.log("      ĐỪNG restart bridge — càng restart càng bị gia hạn. Điện thoại tự vào lại khi xong.");
+  } else if (st && st.phase === "up" && st.url) {
+    console.log(`   🌍 Tunnel: ${st.url}`);
+  }
   console.log("   Chạy: openpocket code  để xem mã ghép + QR.");
   process.exit(0);
 }
@@ -399,7 +404,6 @@ if (cmd === "code") {
   const config = loadConfig();
   const port = config.port || 8788;
   const baseFixed = (config.lookupUrl || "").replace(/\/+$/, ""); // worker = địa chỉ cố định (ưu tiên)
-  const mSuffix = config.lookupTenant ? `&m=${encodeURIComponent(config.lookupTenant)}` : "";
 
   // 1) Lấy mã ĐANG SỐNG từ API của bridge (đúng nhất — log có thể stale).
   let live = null;
@@ -438,7 +442,7 @@ if (cmd === "code") {
 
   // Base cho QR: worker cố định (nếu có) > tunnel hiện tại > localhost.
   const pairBase = baseFixed || live.baseUrl || `http://127.0.0.1:${port}`;
-  const pairUrl = `${pairBase}/#p=${live.code}${mSuffix}`;
+  const pairUrl = buildPairingUrl({ base: pairBase, value: live.code, tenant: config.lookupTenant });
   const minutesLeft = live.secondsLeft != null ? Math.ceil(live.secondsLeft / 60) : null;
 
   console.log("");
@@ -450,7 +454,12 @@ if (cmd === "code") {
 
   // 3) Mã vĩnh viễn — đọc từ config máy này (chỉ in tại máy, đừng chia sẻ).
   if (config.mobileToken) {
-    const masterUrl = `${baseFixed || `http://127.0.0.1:${port}`}/#t=${config.mobileToken}${mSuffix}`;
+    const masterUrl = buildPairingUrl({
+      base: baseFixed || `http://127.0.0.1:${port}`,
+      kind: "master",
+      value: config.mobileToken,
+      tenant: config.lookupTenant,
+    });
     console.log("");
     console.log("⭐ MÃ VĨNH VIỄN (không hết hạn, chỉ dùng tại máy — đừng chụp/chia sẻ):");
     console.log(`   ${config.mobileToken}`);

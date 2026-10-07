@@ -2,9 +2,9 @@
 // biết, dù chúng chạy ở 3 môi trường khác nhau:
 //   - bridge: Node ESM thuần (`import "../../shared/contract.js"`),
 //   - web: browser, bundle qua Vite (rollup theo relative import ra ngoài root),
-//   - worker: Cloudflare Worker, bundle qua esbuild (chưa import file này —
-//     đang giữa đợt WIP; web/test/contract-fixture.test.js khoá literal của
-//     worker vào các giá trị dưới đây cho tới khi worker chuyển hẳn).
+//   - worker: Cloudflare Worker, bundle qua esbuild (import từ 07/10 —
+//     worker/src/index.js; web/test/contract-fixture.test.js vẫn khoá literal
+//     của worker như một lớp kiểm thứ hai).
 //
 // Vì sao cần: trước 06/10 các khoá hash `#p=`/`#t=`/`&m=`, header
 // `x-owm-tenant`/`x-owm-secret`/`x-owm-invite`, mã lỗi `tenant_required`/
