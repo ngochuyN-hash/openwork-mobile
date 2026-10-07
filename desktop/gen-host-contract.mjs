@@ -1,16 +1,36 @@
-// Sinh desktop/src/HostContract.cs từ shared/host-contract.js (host contract,
-// candidate 1 review 07/10). Cùng mô hình với InviteKey.cs / IdentityKeys.cs:
-// file sinh ra là TÁC PHẨM — KHONG sua tay, KHONG commit, build.bat chạy lại
-// mỗi lần build. build.bat + build-test.bat gọi:
-//     node "%~dp0gen-host-contract.mjs"
-// Bên JS không cần file sinh này — nó import shared/host-contract.js trực tiếp.
+// Sinh hai file C# từ các nguồn chung trong shared/ (không sửa tay, không
+// commit — build.bat/build-test.bat chạy lại mỗi lần build):
+//   src/HostContract.cs ← shared/host-contract.js (kien thuc host, 07/10)
+//   src/ErrorCode.cs    ← shared/contract.js  (ma loi xuyen tang exe so, 07/10)
+// Bên JS không cần file sinh — import trực tiếp hai file nguồn.
 import { writeFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOST_CONTRACT } from "../shared/host-contract.js";
+import { ErrorCode } from "../shared/contract.js";
 
 // lookupTenant → LookupTenant; nextAttemptAt → NextAttemptAt
 const pascal = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+// TENANT_REQUIRED → TenantRequired
+const pascalFromScreaming = (k) => k.toLowerCase().split("_").map(pascal).join("");
+
+/** Dựng ErrorCode.cs từ shared/contract.js — mã lỗi xuyên tầng mà exe desktop
+ * so trong Provisioning.ErrorText (taken/full/room_create_disabled/...).
+ * Trước đây exe gõ tay chuỗi "taken"... worker đổi mã là câu hướng dẫn rơi về
+ * câu chung; giờ hai bên đọc một nguồn, drift bị chặn như HostContract. */
+export function renderErrorCodeCs(codes = ErrorCode) {
+  const lines = [];
+  lines.push("// Sinh tu dong boi desktop\\gen-host-contract.mjs tu shared\\contract.js");
+  lines.push("// - KHONG sua tay, KHONG commit (giong HostContract.cs).");
+  lines.push("// Ma loi xuyen tang: worker phat, exe desktop so/de hien (Provisioning.ErrorText).");
+  lines.push("internal static class ErrorCode");
+  lines.push("{");
+  for (const [key, value] of Object.entries(codes)) {
+    lines.push(`    public const string ${pascalFromScreaming(key)} = "${value}";`);
+  }
+  lines.push("}");
+  return lines.join("\r\n") + "\r\n";
+}
 
 /** Dựng nội dung C# (thuần, không đụng đĩa — bridge/test khoá lại bằng test). */
 export function renderHostContractCs(c = HOST_CONTRACT) {
@@ -63,7 +83,11 @@ export function renderHostContractCs(c = HOST_CONTRACT) {
 
 const thisFile = fileURLToPath(import.meta.url);
 if (process.argv[1] && realpathSync(process.argv[1]) === thisFile) {
-  const out = join(dirname(thisFile), "src", "HostContract.cs");
-  writeFileSync(out, renderHostContractCs());
-  console.log(`[gen] ${out} written from shared/host-contract.js`);
+  const srcDir = join(dirname(thisFile), "src");
+  const hostOut = join(srcDir, "HostContract.cs");
+  writeFileSync(hostOut, renderHostContractCs());
+  console.log(`[gen] ${hostOut} written from shared/host-contract.js`);
+  const codesOut = join(srcDir, "ErrorCode.cs");
+  writeFileSync(codesOut, renderErrorCodeCs());
+  console.log(`[gen] ${codesOut} written from shared/contract.js`);
 }

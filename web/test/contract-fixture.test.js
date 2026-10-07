@@ -22,8 +22,10 @@ import {
   HEADER_TENANT,
   HEADER_BRIDGE_SECRET,
   HEADER_INVITE,
+  REGISTER_PATH,
   ErrorCode,
   TOKEN_PREFIX_SOURCE,
+  normalizeTenant,
   buildPairingUrl,
 } from "../../shared/contract.js";
 import { parseHashParam } from "../src/lib/route.js";
@@ -46,6 +48,13 @@ test("contract: giá trị canonical khóa cứng — đổi tên là phải s�
   assert.equal(ErrorCode.BRIDGE_OFFLINE, "bridge_offline");
   assert.equal(ErrorCode.INVITE_REQUIRED, "invite_required");
   assert.equal(ErrorCode.INVALID_BODY, "invalid_body");
+  // Mã exe desktop so trong Provisioning.ErrorText (nhập ErrorCode 07/10):
+  assert.equal(ErrorCode.TAKEN, "taken");
+  assert.equal(ErrorCode.FULL, "full");
+  assert.equal(ErrorCode.ROOM_CREATE_DISABLED, "room_create_disabled");
+  // Cửa đăng ký tunnel bridge→worker (nhập hợp đồng 07/10):
+  assert.equal(REGISTER_PATH, "/__register");
+  assert.equal(normalizeTenant("  PC-Ab12 "), "pc-ab12");
   assert.equal(TOKEN_PREFIX_SOURCE, "(?:owm|owd|owt)_");
 });
 

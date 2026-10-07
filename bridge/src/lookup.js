@@ -11,6 +11,9 @@
 // Worker từ chối (401/400) thì backoff luỹ thừa, chỉ log 1 dòng rõ ràng —
 // trước đây config lệch phòng là hét 401 mỗi 15 giây cả trăm dòng (13/09).
 import { randomBytes } from "node:crypto";
+// Đường + header + shape payload cửa đăng ký thuộc shared contract (07/10) —
+// trước đây bridge tự ghép chuỗi đường và header secret tay tại đây.
+import { REGISTER_PATH, HEADER_BRIDGE_SECRET, normalizeTenant } from "../../shared/contract.js";
 
 export const HEARTBEAT_MS = 15 * 60 * 1000;
 const AUTH_BACKOFF_BASE_MS = 15_000;
@@ -39,7 +42,7 @@ export function startLookup({
   let failStreak = 0;
   let lastFailStatus = 0;
   let lastDownKey = ""; // pha "tunnel chết" đã gửi gần nhất (bucket theo heartbeatMs)
-  const tenantKey = String(tenant ?? "").trim().toLowerCase();
+  const tenantKey = normalizeTenant(tenant);
 
   function noteAuthFailure(status) {
     failStreak += 1;
@@ -58,9 +61,9 @@ export function startLookup({
   async function register(payload) {
     if (now() < blockedUntil) return;
     try {
-      const response = await fetchImpl(`${workerUrl.replace(/\/+$/, "")}/__register`, {
+      const response = await fetchImpl(`${workerUrl.replace(/\/+$/, "")}${REGISTER_PATH}`, {
         method: "POST",
-        headers: { "content-type": "application/json", "x-owm-secret": secret },
+        headers: { "content-type": "application/json", [HEADER_BRIDGE_SECRET]: secret },
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(10_000),
       });

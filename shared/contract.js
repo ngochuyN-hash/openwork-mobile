@@ -35,6 +35,26 @@ export const HEADER_BRIDGE_SECRET = "x-owm-secret";
 // của chủ worker (bridge không gửi; OpenPocket.exe gửi từ src/InviteKey.cs).
 export const HEADER_INVITE = "x-owm-invite";
 
+// --- Cửa đăng ký tunnel bridge→worker ----------------------------------------
+// Đường RIÊNG của bridge (không qua /api/*, không relay): bridge báo "máy tôi
+// đang ở địa chỉ này" — worker ghi slot KV rồi relay mọi /api/* tới đó.
+// Auth bằng HEADER_BRIDGE_SECRET. Payload từ bridge/src/lookup.js:
+//   {url}                       — đăng ký/heartbeat URL tunnel (có phòng: +tenant)
+//   {url:"", tunnelDown:true, retryAt} — "máy sống, hầm đang chờ Cloudflare mở lại"
+// Worker trả {ok:true}; LỖI trả envelope {error} — KHÁC với {code, message} của
+// /api/*, là envelope cũ của cửa này, giữ nguyên (bridge chỉ nhìn response.ok):
+// invalid_tenant/unauthorized (401) · invalid_url (400) · kv_write_failed (503).
+// Mã đó là nội bộ cửa nên để literal tại worker; cái XUYÊN tầng ở đây chỉ là
+// đường + header + shape payload.
+export const REGISTER_PATH = "/__register";
+
+// --- Tên phòng chuẩn hoá ------------------------------------------------------
+// Worker so tên phòng làm KV key, bridge đăng ký (lookup.js), web điền từ link
+// — cả ba phải ra CÙNG một chuỗi thì kẻ này mới tìm thấy máy của kẻ kia.
+export function normalizeTenant(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
 // --- Mã lỗi máy-đọc (trường `code` trong JSON trả về) ------------------------
 // Chỉ những mã XUYÊN tầng (tầng A phát, tầng B so/hiện) mới nằm ở đây; mã nội
 // bộ của một tầng cứ để literal tại chỗ.
@@ -55,6 +75,14 @@ export const ErrorCode = {
   INVITE_REQUIRED: "invite_required",
   // body JSON hỏng — bridge + worker cùng phát.
   INVALID_BODY: "invalid_body",
+  // worker từ chối TẠO PHÒNG vì tên đã có (401 khi sai mật khẩu, 409 khi vừa
+  // bị chen) — exe desktop so để hiện "bấm Retry, app tự đổi tên".
+  TAKEN: "taken",
+  // worker từ chối tạo phòng vì hết 50 slot — exe desktop so để chỉ đường "hỏi chủ worker".
+  FULL: "full",
+  // worker đang KHOÁ cửa tạo phòng (ALLOW_ROOM_CREATE=false) — exe desktop so
+  // để báo chính xác lý do thay vì "lỗi lạ".
+  ROOM_CREATE_DISABLED: "room_create_disabled",
 };
 
 // --- Bộ tiền tố chìa ----------------------------------------------------------

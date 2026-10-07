@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { startLookup } from "../src/lookup.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -216,4 +219,11 @@ test("startLookup: 401 thì backoff — không hét mỗi tick một lần", asy
   } finally {
     server.close();
   }
+});
+
+test("lookup: dựng request đăng ký qua shared contract — hết literal đường/header", () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "src", "lookup.js"), "utf8");
+  assert.ok(src.includes('from "../../shared/contract.js"'), "lookup.js phải import shared/contract.js");
+  assert.ok(!src.includes('"/__register"'), "lookup.js còn literal đường /__register");
+  assert.ok(!src.includes('"x-owm-secret"'), "lookup.js còn literal header x-owm-secret");
 });

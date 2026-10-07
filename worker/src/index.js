@@ -27,9 +27,18 @@
 // Hợp đồng dùng chung với bridge + web (mã lỗi xuyên tầng, tên header, ?_m=):
 // một nguồn chân lý ở shared/contract.js — wrangler/esbuild bundle theo
 // relative import bình thường.
-import { ErrorCode, HEADER_TENANT, HEADER_BRIDGE_SECRET, HEADER_INVITE, TENANT_QUERY_KEY } from "../../shared/contract.js";
+import { ErrorCode, HEADER_TENANT, HEADER_BRIDGE_SECRET, HEADER_INVITE, TENANT_QUERY_KEY, REGISTER_PATH, normalizeTenant } from "../../shared/contract.js";
 
-const MAIN_KEY = "machine:main";
+// Nhãn kệ KV — MỘT chỗ biết cách đặt tên khoá. Trước đây prefix `machine:`/
+// `tenant:` rải ~20 chỗ trong file; đổi cách gọi khoá là phải sổ từng nơi, sót
+// một chỗ là dữ liệu cũ thành hàng vô chủ (máy offline, phòng biến mất).
+const kvKey = {
+  machine: (id) => `machine:${id}`,
+  tenant: (id) => `tenant:${id}`,
+  machinePrefix: "machine:",
+  tenantPrefix: "tenant:",
+};
+const MAIN_KEY = kvKey.machine("main");
 const STALE_MS = 20 * 60 * 1000; // bridge heartbeat 15 phút/lần — quá 20 phút coi như offline
 const TENANT_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 const TUNNEL_RE = /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i;
@@ -113,7 +122,7 @@ async function upgradeTenantRecord(env, tenant, record) {
   if (record?.secretHash || !record?.secret) return false;
   try {
     await env.OWM_STATE.put(
-      `tenant:${tenant}`,
+      kvKey.tenant(tenant),
       JSON.stringify({
         secretHash: await sha256Hex(record.secret),
         name: record.name ?? tenant,
@@ -220,8 +229,8 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
     // Slot biến mất khác máy tắt: nếu cả phòng không còn trên KV (bị dọn dẹp)
     // thì 401 để app về lại màn ghép mã — quét QR là vào lại được, đừng treo
     // vĩnh viễn câu "offline" không có lối ra.
-    const tenantId = slotKey.startsWith("machine:") ? slotKey.slice("machine:".length) : "";
-    if (tenantId && (await env.OWM_STATE.get(`tenant:${tenantId}`)) === null) {
+    const tenantId = slotKey.startsWith(kvKey.machinePrefix) ? slotKey.slice(kvKey.machinePrefix.length) : "";
+    if (tenantId && (await env.OWM_STATE.get(kvKey.tenant(tenantId))) === null) {
       return json({ code: "unpaired", message: "This room was deleted - pair again with a new pairing code." }, 401);
     }
     return json(
@@ -334,17 +343,18 @@ function withSecurityHeaders(page) {
 async function handle(request, env) {
   const url = new URL(request.url);
 
-  // 1. Bridge đăng ký địa chỉ tunnel hiện tại của phòng mình
-  if (url.pathname === "/__register" && request.method === "POST") {
+  // 1. Bridge đăng ký địa chỉ tunnel hiện tại của phòng mình (shape: REGISTER_PATH
+  // trong shared/contract.js)
+  if (url.pathname === REGISTER_PATH && request.method === "POST") {
     const body = await readJson(request);
-    const tenant = String(body?.tenant ?? "").trim().toLowerCase();
+    const tenant = normalizeTenant(body?.tenant);
     if (tenant) {
       if (!TENANT_RE.test(tenant)) return json({ error: "invalid_tenant" }, 400);
-      const record = await env.OWM_STATE.get(`tenant:${tenant}`, "json").catch(() => null);
+      const record = await env.OWM_STATE.get(kvKey.tenant(tenant), "json").catch(() => null);
       if (!(await secretMatches(record, request.headers.get(HEADER_BRIDGE_SECRET)))) {
         return json({ error: "unauthorized" }, 401);
       }
-      return storeRegister(env, `machine:${tenant}`, body);
+      return storeRegister(env, kvKey.machine(tenant), body);
     }
     // Luồng cũ của chủ worker (không tenant): secret môi trường -> machine:main
     if (!env.BRIDGE_SECRET || !(await sameSecret(request.headers.get(HEADER_BRIDGE_SECRET), env.BRIDGE_SECRET))) {
@@ -372,21 +382,21 @@ async function handle(request, env) {
       // cạn, kéo /__register theo → mọi phòng mất heartbeat. Chi tiết lý do và
       // vì sao không áp trần này cho /api/pair: xem rateLimited() ở trên.
       const body = await readJson(request);
-      const tenant = String(body?.user ?? "").trim().toLowerCase();
+      const tenant = normalizeTenant(body?.user);
       if (await rateLimited(request, "pair-tenant", 10, TENANT_RE.test(tenant) ? tenant : "", 30)) {
         return json({ code: ErrorCode.RATE_LIMITED, message: "Too many sign-in attempts - wait about 1 minute and try again." }, 429);
       }
       if (!TENANT_RE.test(tenant)) {
         return json({ code: ErrorCode.INVALID_CREDENTIALS, message: "Wrong login name or password." }, 401);
       }
-      const record = await env.OWM_STATE.get(`tenant:${tenant}`, "json").catch(() => null);
+      const record = await env.OWM_STATE.get(kvKey.tenant(tenant), "json").catch(() => null);
       if (!(await secretMatches(record, String(body?.secret ?? "")))) {
         return json({ code: ErrorCode.INVALID_CREDENTIALS, message: "Wrong login name or password." }, 401);
       }
       // Đăng nhập đúng rồi: bản ghi kiểu cũ ({secret} plaintext) được nâng lên
       // {secretHash} ngay tại đây, không cần ai chạy script dọn dẹp.
       await upgradeTenantRecord(env, tenant, record);
-      return relay(env, `machine:${tenant}`, request, url, body);
+      return relay(env, kvKey.machine(tenant), request, url, body);
     }
 
     // Tự tạo phòng (self-serve cho exe của chủ worker): người cài KHÔNG gõ gì —
@@ -401,7 +411,7 @@ async function handle(request, env) {
       // Phòng đã có vẫn đăng nhập/gõ lại mật khẩu bình thường (cờ này chỉ
       // chặn người lạ tự mở phòng mới lấp đầy 50 slot KV).
       if (roomCreateDisabled(env)) {
-        return json({ code: "room_create_disabled", message: "Creating new rooms is turned off on this worker - ask the owner for an invite." }, 403);
+        return json({ code: ErrorCode.ROOM_CREATE_DISABLED, message: "Creating new rooms is turned off on this worker - ask the owner for an invite." }, 403);
       }
       if (await rateLimited(request, "create-room", 5)) {
         return json({ code: ErrorCode.RATE_LIMITED, message: "Too many rooms created - wait about 1 minute and try again." }, 429);
@@ -425,7 +435,7 @@ async function handle(request, env) {
         );
       }
       const body = await readJson(request);
-      const user = String(body?.user ?? "").trim().toLowerCase();
+      const user = normalizeTenant(body?.user);
       const secret = String(body?.secret ?? "");
       if (!TENANT_RE.test(user) || ["main", "admin", "root", "api", "www"].includes(user)) {
         return json({ code: "invalid_user", message: "Room name must be 2-32 characters of a-z, 0-9 or dashes." }, 400);
@@ -435,7 +445,7 @@ async function handle(request, env) {
       }
       let name = String(body?.name ?? "").replace(/[\r\n"']/g, "").trim().slice(0, 60);
       if (!name) name = user;
-      const existing = await env.OWM_STATE.get(`tenant:${user}`, "json").catch(() => null);
+      const existing = await env.OWM_STATE.get(kvKey.tenant(user), "json").catch(() => null);
       if (existing) {
         if (await secretMatches(existing, secret)) {
           // Gõ lại đúng mật khẩu của phòng đã có = đăng nhập thành công, nên
@@ -443,20 +453,20 @@ async function handle(request, env) {
           await upgradeTenantRecord(env, user, existing);
           return json({ ok: true, existed: true, user, name: existing.name || name });
         }
-        return json({ code: "taken", message: "That room name is already taken and the password does not match." }, 401);
+        return json({ code: ErrorCode.TAKEN, message: "That room name is already taken and the password does not match." }, 401);
       }
       let rooms;
       try {
-        rooms = await env.OWM_STATE.list({ prefix: "tenant:" });
+        rooms = await env.OWM_STATE.list({ prefix: kvKey.tenantPrefix });
       } catch (error) {
         console.error("[worker] tenant/create: KV list failed:", error?.stack ?? String(error));
         return json({ code: "kv_error", message: "The worker is busy (KV error) - try again in a few minutes." }, 503);
       }
       if (rooms.keys.length >= 50) {
-        return json({ code: "full", message: "No room slots left - contact the worker owner." }, 403);
+        return json({ code: ErrorCode.FULL, message: "No room slots left - contact the worker owner." }, 403);
       }
       await env.OWM_STATE.put(
-        `tenant:${user}`,
+        kvKey.tenant(user),
         JSON.stringify({ secretHash: await sha256Hex(secret), name, createdAt: Date.now() })
       );
       // KV không có CAS nên hai lần tạo cùng tên có thể cùng thấy `existing =
@@ -468,16 +478,14 @@ async function handle(request, env) {
       // quán theo colo nên cũng có thể chưa thấy bản vừa ghi — nên chỉ kêu
       // "taken" khi đã ĐỌC ĐƯỢC bản ghi và secret nó lệch, không kêu khi đọc
       // hụt (`null`).
-      const saved = await env.OWM_STATE.get(`tenant:${user}`, "json").catch(() => null);
+      const saved = await env.OWM_STATE.get(kvKey.tenant(user), "json").catch(() => null);
       if (saved && !(await secretMatches(saved, secret))) {
-        return json({ code: "taken", message: "Another room just took that name - try a different one." }, 409);
+        return json({ code: ErrorCode.TAKEN, message: "Another room just took that name - try a different one." }, 409);
       }
       return json({ ok: true, created: true, user, name });
     }
 
-    const tenant = (request.headers.get(HEADER_TENANT) || url.searchParams.get(TENANT_QUERY_KEY) || "")
-      .trim()
-      .toLowerCase();
+    const tenant = normalizeTenant(request.headers.get(HEADER_TENANT) || url.searchParams.get(TENANT_QUERY_KEY));
     if (tenant && !TENANT_RE.test(tenant)) {
       return json({ code: ErrorCode.BRIDGE_OFFLINE, message: "Invalid machine code (room)." }, 503);
     }
@@ -521,7 +529,7 @@ async function handle(request, env) {
         400
       );
     }
-    return relay(env, tenant ? `machine:${tenant}` : MAIN_KEY, request, url);
+    return relay(env, tenant ? kvKey.machine(tenant) : MAIN_KEY, request, url);
   }
 
   // 3. Còn lại: static web app (web/dist) qua assets binding

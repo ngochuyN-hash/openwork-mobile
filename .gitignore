@@ -73,4 +73,7 @@ desktop/src/IdentityKeys.cs
 # generated host contract — the committed source of truth is
 # shared/host-contract.js (bridge imports it directly; gen-host-contract.mjs
 # turns it into this C# file at build time). Same pattern as IdentityKeys.cs.
+# ErrorCode.cs is generated the same way from shared/contract.js (the
+# cross-tier error codes the desktop exe compares).
 desktop/src/HostContract.cs
+desktop/src/ErrorCode.cs

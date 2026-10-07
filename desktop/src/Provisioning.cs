@@ -75,24 +75,27 @@ namespace OpenPocket.Desktop
         // worker). Không map được thì vẫn phải có "bấm ↻" trong câu.
         public static string ErrorText(int status, string code)
         {
-            if (status == 403 && code == "room_create_disabled")
+            // Mã lỗi so ở đây là ErrorCode.* — sinh từ shared/contract.js lúc
+            // build (src\ErrorCode.cs): worker đổi mã là exe theo theo, không
+            // còn chuỗi gõ tay trôi nổi.
+            if (status == 403 && code == ErrorCode.RoomCreateDisabled)
                 return "Room creation is turned off on the worker. Ask the worker owner to re-enable it (ALLOW_ROOM_CREATE).";
             // 403 "invite_required": worker yêu cầu mã mời mà exe này không có
             // (build từ source thiếu invite.key) hoặc mã không khớp secret
             // ROOM_CREATE_KEY của worker — bản chính chủ thì không bao giờ gặp.
-            if (status == 403 && code == "invite_required")
+            if (status == 403 && code == ErrorCode.InviteRequired)
                 return InviteConfig.RoomInviteKey.Length == 0
                     ? "This build carries no invite key (invite.key was missing at build time) - it cannot create rooms. Use the app build from the worker owner."
                     : "This worker only accepts the owner's app build - the invite key did not match.";
-            if (status == 409 && code == "taken")
+            if (status == 409 && code == ErrorCode.Taken)
                 return "That room name was taken while creating. Press Retry - the app will pick a new name automatically.";
-            if (status == 429 && code == "rate_limited")
+            if (status == 429 && code == ErrorCode.RateLimited)
                 return "Too many attempts - wait a minute and press Retry.";
             if (status == 503 || status == 502)
                 return "Worker unreachable - check your connection and press Retry.";
             // 403 "full": hết 50 slot phòng trên worker — cùng dạng "không tự
             // sửa được, phải hỏi chủ worker", nên cũng phải kèm đường sửa.
-            if (status == 403 && code == "full")
+            if (status == 403 && code == ErrorCode.Full)
                 return "No room slots left on the worker - ask the worker owner for an invite.";
             if (status == 0)
                 return "Cannot reach the identity server - check your connection, then press Retry.";
