@@ -11,7 +11,7 @@ OpenWork is a desktop app (Electron, open source) for running AI coding agents �
 | Original requirement | How it is met |
 |---|---|
 | Manage existing sessions & workspaces | The bridge plugs straight into the openwork-server API already shipped inside OpenWork desktop |
-| Manage files while away | File manager: browse / view / **edit + save** / upload / download |
+| Manage files while away | File manager: browse / view / **edit + save** / upload / download. The folder-picker seam behind it (`/api/fs/ls`, `/api/fs/mkdir`) has a deliberate error→status map (`fsStatus` in `bridge/src/routes/fs.js`, route-tested in `bridge/test/fs-routes.test.js` since 07/10 — unknown internal errors are 500, not a fake 403 "no permission") |
 | Stay lightweight | Bridge = 1 Node process, **zero npm dependencies** (`qrcode-terminal` is vendored under `bridge/src/vendor/`); web bundle ~99KB raw (JS 77KB + CSS 20KB, ~31KB gzipped); no separate database |
 | Remote interaction that stays connected | Event stream over fetch (auth token travels in the Authorization header, never on the URL; request headers — token and room alike — are built from the shared contract constants) with backoff reconnect + offline queue (messages composed offline are sent when back online) |
 | No APK, works on iOS | Web/PWA — open the link and it self-connects; "Add to Home Screen" behaves like a real app |
