@@ -1,0 +1,83 @@
+/* ---------- Page header ---------- */
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+.page-head .hint {
+  color: var(--text-dim);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.page-actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+/* Bảng kỹ thuật gập trong Settings ("Chi tiết kỹ thuật") — 8 dòng pid/port/
+   dataDir không phải thứ người dùng cần hằng ngày, mở sẵn chỉ làm màn
+   Settings nặng nề. <details> gốc của trình duyệt nên không cần JS. */
+.tech-details {
+  margin-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-3);
+}
+.tech-details > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  margin: 0 -6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+.tech-details > summary::-webkit-details-marker {
+  display: none;
+}
+.tech-details > summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: none;
+  margin-right: 8px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--dur-ui) var(--ease);
+}
+.tech-details[open] > summary::before {
+  transform: rotate(45deg);
+}
+.tech-details > summary:active {
+  background: var(--bg-hover);
+}
+.kv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: var(--sp-2);
+}
+.kv-table th,
+.kv-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 6px 8px 6px 0;
+}
+.kv-table th {
+  color: var(--text-dim);
+  font-weight: 400;
+  white-space: nowrap;
+  width: 1%;
+}
+.kv-table td {
+  min-width: 0;
+  word-break: break-word;
+}

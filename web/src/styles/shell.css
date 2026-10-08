@@ -1,0 +1,141 @@
+/* ---------- Top bar: logo lục giác chính chủ + title ---------- */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 60px;
+  padding: calc(var(--sp-4) + var(--sat)) var(--sp-4) var(--sp-2);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+.topbar .logo-mark {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  object-fit: contain;
+}
+.topbar .title {
+  font-weight: 650;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar .sub {
+  color: var(--text-faint);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 3px 9px;
+  white-space: nowrap;
+}
+/* Nút Trở lại ghim trên topbar (sticky sẵn): cuộn đâu vẫn bấm được. */
+.topbar-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 6px 10px 6px 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-btn);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.topbar-back:active {
+  background: var(--bg-hover);
+}
+
+/* ---------- Bottom nav nổi ---------- */
+.bottomnav-wrap {
+  position: fixed;
+  bottom: calc(6px + var(--sab)); /* v5.5b: dời sát đáy hơn (10→6px) */
+  left: var(--sp-4);
+  right: var(--sp-4);
+  z-index: 10;
+}
+.bottomnav {
+  display: flex;
+  max-width: 420px;
+  margin: 0 auto;
+  background: color-mix(in srgb, var(--bg-raised) 92%, transparent);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-nav);
+  box-shadow: var(--shadow-float);
+  padding: 6px;
+}
+.bottomnav button {
+  flex: 1;
+  min-height: 50px;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  padding: var(--sp-1) var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  border-radius: 14px;
+}
+/* Tab đang mở tô màu CẢ Ô (icon + nhãn) — không chỉ mỗi icon như trước. */
+.bottomnav button.active {
+  background: var(--primary);
+  color: var(--primary-fg);
+}
+.nav-pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 16px;
+  border-radius: 999px;
+}
+.bottomnav svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* ---------- FAB ---------- */
+.fab {
+  position: fixed;
+  right: calc(var(--sp-4) + var(--sar));
+  bottom: calc(86px + var(--sab));
+  z-index: 11;
+  width: 54px;
+  height: 54px;
+  border: none;
+  border-radius: 16px;
+  background: var(--primary);
+  color: var(--primary-fg);
+  box-shadow: var(--shadow-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.fab:active {
+  filter: brightness(0.9);
+}

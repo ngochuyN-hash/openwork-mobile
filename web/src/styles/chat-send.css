@@ -1,0 +1,18 @@
+/* Nút gửi morph thành nút dừng khi agent đang chạy (như ChatGPT/Gemini). */
+.composer .btn-send.stop {
+  background: var(--danger);
+  color: #fff;
+}
+.permission-card {
+  border: 1px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  border-radius: var(--radius);
+  padding: var(--sp-3);
+  margin: var(--sp-3) 0;
+  font-size: 13.5px;
+}
+.permission-card .actions {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}

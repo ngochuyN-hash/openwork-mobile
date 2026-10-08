@@ -1,0 +1,243 @@
+/* File đính kèm chờ gửi trong khung chat. */
+.attach-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-raised);
+  font-size: 12.5px;
+}
+.attach-chip .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.attach-chip .size {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.attach-chip button {
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px;
+  min-width: 32px;
+  min-height: 32px;
+  position: relative; /* anchor ::after — vùng chạm ≥44px (skill), hình giữ 32px */
+}
+.attach-chip button::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+}
+.composer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: var(--sp-2);
+  padding: var(--sp-3) 0 calc(var(--sp-3) + var(--sab));
+  background: linear-gradient(transparent, var(--bg) 30%);
+}
+/* Nút "về tin mới nhất": absolute so với chính `.composer` (sticky ⇒ đã là
+   containing block), neo NGAY TRÊN mép trên của nó nên không phải đoán chiều
+   cao composer và không đẩy layout khi bật/tắt.
+   `bottom: 100%` là mép trên của padding box; cộng thêm --sp-3 để pill nằm
+   TRỌN ngoài composer. (Dùng `100% - 8px` thì mép dưới của pill rơi vào
+   trong padding của composer, dán vào mép trên chứ không tách ra.) */
+.jump-latest {
+  position: absolute;
+  bottom: calc(100% + var(--sp-3));
+  right: 0;
+  z-index: 1; /* nằm sau nội dung composer trong thứ tự DOM (xem chat.jsx) */
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 44px; /* chạm ≥44px (skill) */
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-raised) 92%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-float);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform var(--dur-tap) var(--ease);
+  animation: jump-in var(--dur-move) var(--ease);
+}
+.jump-latest:active {
+  transform: scale(0.97);
+}
+.jump-latest span {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.jump-latest svg {
+  color: var(--text-dim);
+}
+@keyframes jump-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .jump-latest {
+    animation: none;
+  }
+  .jump-latest:active {
+    transform: none;
+  }
+}
+.composer textarea {
+  flex: 1;
+  min-height: 46px;
+  max-height: 140px;
+  border-radius: 12px;
+}
+.composer .btn-send {
+  width: 46px;
+  height: 46px;
+  min-height: 46px;
+  padding: 0;
+  border-radius: 12px;
+  background: var(--primary);
+  color: var(--primary-fg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.composer .model-picker {
+  margin-bottom: 6px;
+  font-size: 16px; /* skill: select ≥16px — iOS zoom khi focus nếu nhỏ hơn */
+  padding: 6px 8px;
+}
+/* Model picker kiểu desktop: pill mở bottom sheet, thay <select> phẳng. */
+.composer .model-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin-bottom: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+  /* Nút bấm tay trên điện thoại: luật dự án là vùng chạm tối thiểu 44px
+     (padding 7px × 2 + dòng chữ chỉ ~35px). Dùng cho cả pill chọn model lẫn
+     pill mức suy luận / chọn agent trong composer. */
+  min-height: 44px;
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.model-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.model-sheet {
+  display: flex;
+  flex-direction: column;
+  max-height: min(70vh, 480px);
+}
+.model-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text-dim);
+}
+.model-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  padding: 2px 0;
+  font-size: 16px; /* skill: ≥16px chống iOS zoom */
+  color: var(--text);
+}
+.model-list {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0 -6px;
+  padding: 0 6px;
+}
+.model-group {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  padding: 10px 8px 4px;
+}
+.model-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px; /* skill: touch target ≥44px */
+  padding: 8px;
+  text-align: left;
+  border: none;
+  border-radius: 10px;
+  background: none;
+  color: var(--text);
+  font-size: 14.5px;
+}
+.model-option:active {
+  background: var(--bg-hover);
+}
+.model-option.selected {
+  background: var(--bg-hover);
+  color: var(--text);
+  font-weight: 600;
+}
+.model-option-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.model-option-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.model-option-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.model-empty {
+  padding: 18px 8px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13.5px;
+}
