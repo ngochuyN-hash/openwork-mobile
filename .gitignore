@@ -44,6 +44,13 @@ worker/ota-publish/
 /IDENTITY.md
 /TOOLS.md
 /HEARTBEAT.md
+# same category: workspace instructions + daily memory notes. AGENTS.md is the
+# agent's briefing; memory/*.md are dated session logs. Both name the owner and
+# quote live infrastructure (tunnel hostnames, worker URLs, PIDs). Untracked but
+# NOT ignored = one `git add -A` away from the public mirror.
+/AGENTS.md
+/memory/
+/MEMORY.md
 
 # publishing washer hook is machine-local (never published to the remote)
 .githooks/
