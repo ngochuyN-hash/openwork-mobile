@@ -200,7 +200,9 @@ worker/          # Cloudflare Worker "openpocket" — fixed URL + multi-tenant
   scripts/tenant.mjs # issue/delete rooms (user/pass accounts) on KV
 web/             # PWA Preact + Vite → builds to web/dist served by the bridge
   src/pages/     # pairing (two ways in: 8-char code / permanent key + room box) · workspaces · sessions · chat · files · settings (bridge status + paired devices)
-  src/components/# ui.jsx (Loading/Skeleton/Empty/Banner/Confirm/SwipeRow) · icons.jsx (SVG set) · model-picker.jsx · chat-message-parts.jsx · chat-sheets.jsx
+  src/components/# ui.jsx (Loading/Skeleton/Empty/Banner/Confirm/SwipeRow) · icons.jsx (SVG set) · model-picker.jsx · chat-message-parts.jsx · chat-sheets.jsx · chat-composer.jsx · chat-transcript.jsx
+  src/hooks/     # chat page state split out of pages/chat.jsx — use-chat-scroll · use-chat-events (SSE) · use-chat-options (model/effort/agent) · use-offline-queue · use-session-actions · use-session-meta (rename/share/compact)
+  src/styles/    # CSS split by section; src/styles.css is just the ordered @import list (order = cascade order)
   src/lib/       # pure, unit-tested logic — blob-cache (object-URL LRU for file previews) · markdown · sse · chat-stream · chat-events · chat-file-refs · chat-scroll · file-viewer · session-* · route · net · settings-state
   test/          # real unit suites — 27 files, 443 tests (api contract + blob cache · markdown · chat stream · chat events + file refs · session helpers · file viewer · contract fixture)
   .zcode/skills/ # pwa-workspace-ui: internal design skill (tokens · ui-rules · pwa-checklist)
