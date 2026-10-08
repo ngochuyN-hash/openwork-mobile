@@ -139,7 +139,7 @@ namespace OpenPocket.Setup
                 using (Process p = Process.Start(psi))
                 {
                     string outp = p.StandardOutput.ReadToEnd();
-                    p.WaitForExit();
+                    p.WaitForExit(5000);
                     if (string.IsNullOrEmpty(outp)) return false;
                     string first = outp.Trim().Split('\r')[0].Trim();
                     return first.Length > 0 && File.Exists(first);

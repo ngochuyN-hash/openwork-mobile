@@ -25,7 +25,7 @@ import { SettingsPage } from "./pages/settings.jsx";
 //   #/ws/:id/search        -> tìm phiên trong workspace này
 //   #/ws/:id/chat/:sid     -> chat
 //   #/ws/:id/files         -> files
-//   #/settings             -> settings (gồm mục "Máy của tôi" — chùm chìa nhiều máy)
+//   #/settings             -> settings (My machine: OpenWork trên máy tính + bảo trì tunnel; Paired devices)
 function parseHash() {
   return parseHashRoute(location.hash);
 }
@@ -280,7 +280,7 @@ function StatusBanners({ state, onRecheck, view }) {
     // truthy, ép ra true sẽ GIẤU mất khối sửa đúng lúc người dùng cần. Dùng
     // helper chung thay vì viết tay để không lệch với settings.jsx.
     const openworkFound = openworkFoundOf(state?.openwork, state?.openworkExeFound);
-    // Trang Cài đặt ĐÃ có sẵn bộ chọn trong thẻ "Máy của tôi" (settings.jsx
+    // Trang Cài đặt ĐÃ có sẵn bộ chọn trong thẻ "My machine" (settings.jsx
     // gọi cùng <OpenWorkFix> này). Banners render ở mọi route, nên không chặn
     // thì ở #/settings có HAI ô "Chỉ đường dẫn" trùng nhãn, HAI danh sách
     // "Dùng" trùng nội dung, và lỗi chỉ hiện ở bản banner (pathErr/pathMsg của

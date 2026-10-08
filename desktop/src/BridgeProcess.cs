@@ -25,7 +25,7 @@ namespace OpenPocket.Desktop
                 p.StartInfo.CreateNoWindow = true;
                 p.Start();
                 string outStr = p.StandardOutput.ReadLine();
-                p.WaitForExit();
+                p.WaitForExit(5000); // where.exe is instant; never hang the caller on it
                 if (!string.IsNullOrEmpty(outStr) && File.Exists(outStr.Trim()))
                     return outStr.Trim();
             }
