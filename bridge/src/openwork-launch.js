@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join, win32 } from "node:path";
 import { homedir } from "node:os";
 import { discoverServer } from "./discovery.js";
 
@@ -51,7 +51,9 @@ export function isOpenWorkExeName(candidatePath) {
   const p = String(candidatePath ?? "").trim();
   if (!p) return false;
   // Windows không phân biệt hoa/thường trong tên file, nên so cũng vậy.
-  return basename(p).toLowerCase() === "openwork.exe";
+  // win32.basename (không phải basename): path do điện thoại gõ luôn là kiểu
+  // Windows, và basename của Linux/macOS không tách được dấu "\".
+  return win32.basename(p).toLowerCase() === "openwork.exe";
 }
 
 // Dọn đường dẫn người dùng gõ/dán từ điện thoại trước khi kiểm tra.
