@@ -150,7 +150,7 @@ function assertNotRateLimited(res) {
 // Message lỗi đi điện thoại: phải là tiếng Việt có dấu. Kiểm bằng CHỮ CÓ DẤU
 // riêng của tiếng Việt (đ/ă/â/ê/ô/ơ/ư + nguyên âm tổ hợp) chứ không phải " có
 // ký tự Latin-Extended", vì ký tự đó lọt vào cả tên đường dẫn rò ra (ví dụ
-// C:SERS<USER>\...). Vì vậy cấm thêm đường dẫn thô trong message.
+// C:\Users\<name>\...). Vì vậy cấm thêm đường dẫn thô trong message.
 
 function assertErrorMessage(body) {
   assert.ok(body && typeof body.message === "string", "phải có message");
