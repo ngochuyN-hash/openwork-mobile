@@ -54,7 +54,7 @@ export function RenameSheet({ initial, error, busy, inputRef, onSave, onClose })
           <button type="button" class="btn ghost" onClick={onClose} disabled={busy}>
             Cancel
           </button>
-          <button type="button" class="btn primary" onClick={onSave} disabled={busy}>
+          <button type="button" class="btn primary" onClick={() => onSave(draft)} disabled={busy}>
             {busy ? "Saving…" : "Save name"}
           </button>
         </div>

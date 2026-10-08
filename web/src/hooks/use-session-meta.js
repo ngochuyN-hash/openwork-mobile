@@ -50,9 +50,11 @@ export function useSessionMeta({
     setRenaming(true);
   }
 
-  async function saveRename() {
+  /** `typed` là chữ người dùng đang gõ trong sheet (state ô nhập nằm ở sheet,
+   *  `renameDraft` chỉ là giá trị khởi tạo lúc mở). */
+  async function saveRename(typed) {
     if (renameLockRef.current) return;
-    const clean = normalizeSessionTitle(renameDraft);
+    const clean = normalizeSessionTitle(typed);
     if (!clean.ok) {
       setRenameErr(clean.error); // giữ nguyên nội dung ô nhập, không đóng sheet
       return;
