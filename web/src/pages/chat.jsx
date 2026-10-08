@@ -1,52 +1,42 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
 import {
   ow, unwrap, owUploadFile,
-  owQuestions, owReplyQuestion, owRejectQuestion,
-  owRevert, owUnrevert, owFork, owDeleteMessage, owRunCommand, owTodo,
-  owRenameSession, owPrompt, owSummarize, owShareSession, owUnshareSession,
+  owQuestions, owRejectQuestion,
+  owRevert, owRunCommand, owTodo,
+  owPrompt,
 } from "../api.js";
-import { connectEvents } from "../lib/sse.js";
-import { createChatStream, mergeRefetchKeepInflight } from "../lib/chat-stream.js";
-import { eventSessionId, sameSession, eventProps } from "../lib/chat-events.js";
+import { mergeRefetchKeepInflight } from "../lib/chat-stream.js";
+import { sameSession } from "../lib/chat-events.js";
 import {
-  applyRevertCursor, hiddenCountByRevert, resolveForkBoundaryId, messageIdOf,
-  messageTextOf, todoProgress, questionsForSession,
-  buildQuestionAnswers, shouldClearRevertCursor,
+  applyRevertCursor, hiddenCountByRevert, messageIdOf,
+  todoProgress, questionsForSession,
+  shouldClearRevertCursor,
 } from "../lib/session-ops.js";
 // Tiền phiên: đọc từ TỪNG tin assistant (lib/session-cost) chứ không đọc
 // session.cost — ở engine v1 field đó không có, nên màn chat im lặng vĩnh viện.
 import { costViewModel } from "../lib/session-cost.js";
-import {
-  UNTITLED_SESSION_LABEL,
-  isSameSessionTitle, normalizeSessionTitle, sessionTitleOf,
-} from "../lib/session-rename.js";
-import {
-  compactBlockReason, compactHint, shouldSuggestCompact, summaryView,
-} from "../lib/session-compact.js";
+import { sessionTitleOf } from "../lib/session-rename.js";
+import { compactHint, shouldSuggestCompact, summaryView } from "../lib/session-compact.js";
 import { shouldShowJump } from "../lib/chat-scroll.js";
 import {
   isRetryableSendError, pendingStatus,
   sendDecision, sessionBusyFromMap, shouldRestoreComposer, statusLineIsBusy, permissionReplyBody,
 } from "../lib/session-steer.js";
-import {
-  isShared, parseShareResponse, shareButtonLabel, shareError, shareLink, shareResult,
-} from "../lib/session-share.js";
+import { shareButtonLabel } from "../lib/session-share.js";
 import { Banner } from "../components/ui.jsx";
 import { ChatComposer } from "../components/chat-composer.jsx";
 import { ChatTranscript, PermissionCard } from "../components/chat-transcript.jsx";
 import { RenameSheet, MessageActionSheet, QuestionCard } from "../components/chat-sheets.jsx";
 import { useChatOptions } from "../hooks/use-chat-options.js";
+import { useChatEvents } from "../hooks/use-chat-events.js";
 import { useChatScroll } from "../hooks/use-chat-scroll.js";
 import { useOfflineQueue } from "../hooks/use-offline-queue.js";
-import { navigate } from "../app.jsx";
+import { useSessionActions } from "../hooks/use-session-actions.js";
+import { useSessionMeta } from "../hooks/use-session-meta.js";
 
-// Protocol event học từ desktop (apps/app session-sync.ts):
-//  - message.part.updated: snapshot cộng dồn của MỘT part (chìa part.id)
-//  - message.part.delta:   miếng chữ tăng dần của part đó (engine v2)
-//  - message.updated:      snapshot cả message (info + parts)
-//  - message.removed:      message bị xoá/revert — gọt khỏi transcript
-//  - session.idle/errored: chốt run status ngay, khỏi đợi poll
-// Engine opencode phát event KHÔNG TÊN trên SSE — type nằm trong JSON.
+// Màn chat = lắp ráp: state + loader của phiên ở đây; scroll / luồng SSE /
+// hàng đợi offline / model-agent / thao tác tin / đổi tên-chia sẻ-nén nằm ở
+// hooks/, phần vẽ nằm ở components/chat-composer, chat-transcript, chat-sheets.
 
 export function ChatPage({ route }) {
   const { wsId, sessionId } = route;
@@ -75,18 +65,7 @@ export function ChatPage({ route }) {
   const [todos, setTodos] = useState([]);
   const [editing, setEditing] = useState(null); // {messageId, text} — sửa tin đã gửi
   const [menu, setMenu] = useState(null); // message đang mở menu thao tác
-  const [busyAction, setBusyAction] = useState(""); // nhãn hành động đang chạy
   const [notice, setNotice] = useState(""); // dòng báo xanh (đổi tên xong, đã chép link…)
-  const [renaming, setRenaming] = useState(false); // mở sheet đổi tên
-  const [renameDraft, setRenameDraft] = useState("");
-  const [renameErr, setRenameErr] = useState("");
-  const [shareBusy, setShareBusy] = useState(false);
-  const [compacting, setCompacting] = useState(false);
-  const renameInputRef = useRef(null);
-  // Khoá chạm kép: state (`busyAction`/`shareBusy`) chỉ đổi ở RENDER kế tiếp,
-  // nên hai chạm liền nhau vẫn chạy cùng handler cũ và bắn hai PATCH /share.
-  const renameLockRef = useRef(false);
-  const shareLockRef = useRef(false);
   // Ô gõ + file đính kèm cất theo phiên, để bấm nhầm Back rồi quay lại không
   // mất chữ vừa gõ mà cũng không mang tin sang phiên khác. Xem chỗ dùng trong
   // effect vào phiên mới.
@@ -103,8 +82,7 @@ export function ChatPage({ route }) {
   // await — response về trễ của phiên cũ không được ghi đè phiên mới.
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
-  // Mốc event SSE cuối + trạng thái running cho watchdog/poll dự phòng.
-  const lastEventAt = useRef(Date.now());
+  // Mirror của `running` cho các loader/watchdog đóng từ effect cũ.
   const runningRef = useRef(false);
   runningRef.current = running;
   // Mirror của messages để patch stream đọc-ghi trực tiếp (không đợi render).
@@ -113,11 +91,6 @@ export function ChatPage({ route }) {
     messagesRef.current = next;
     setMessages(next);
   }, []);
-  // Reducer stream (lib/chat-stream.js — thuần, có test) + lịch flush theo
-  // frame: gom delta rồi đổ một lần, không re-render từng ký tự.
-  const streamRef = useRef(null);
-  if (!streamRef.current) streamRef.current = createChatStream();
-  const flushRef = useRef(null);
   // Đánh dấu "đang sửa tin" để con trỏ hoàn tác được nhả đúng lúc — xem chỗ
   // dùng trong send().
   const revertForNewMessageRef = useRef(false);
@@ -128,9 +101,6 @@ export function ChatPage({ route }) {
   // Khoá dừng: `aborting` cũng chỉ đổi ở render kế tiếp, chạm kép sẽ bắn hai
   // request abort (và abort lần hai rơi vào phiên đã rảnh).
   const abortLockRef = useRef(false);
-  // Khoá thao tác tin (xoá/hoàn tác/nhánh/trả lời): `busyAction` đổi ở render
-  // kế tiếp, chạm kép sẽ chạy thao tác hai lần.
-  const actionLockRef = useRef(false);
   // Thẻ "Agent xin phép" đang được trả lời: id để khoá nút, ref để chặn
   // chạm kép trước lúc render kế tiếp.
   const [permissionBusy, setPermissionBusy] = useState("");
@@ -278,7 +248,7 @@ export function ChatPage({ route }) {
     syncCount();
     sendLockRef.current = false;
     abortLockRef.current = false;
-    actionLockRef.current = false;
+    resetActionLock();
     permissionBusyRef.current = "";
     setPermissionBusy("");
     setPermissions([]);
@@ -289,354 +259,34 @@ export function ChatPage({ route }) {
     loadPermissions();
     loadQuestions();
     loadTodo();
-
-
-    // ---- Streaming theo PART: reducer thuần ở lib/chat-stream.js ----
-    // Không còn "đoán snapshot hay delta" trên một chuỗi text chung — chìa là
-    // part.id; delta gom vào buffer rồi flush theo frame.
-    const scheduleFlush = () => {
-      if (flushRef.current != null) return;
-      const run = () => {
-        flushRef.current = null;
-        const prev = messagesRef.current;
-        if (prev) commitMessages(streamRef.current.flush(prev));
-      };
-      // Foreground flush theo frame như desktop; không rAF thì 50ms.
-      flushRef.current =
-        typeof requestAnimationFrame === "function"
-          ? requestAnimationFrame(run)
-          : setTimeout(run, 50);
-    };
-
-    // Nhịp hỏi lại: event part đã là dữ liệu thật nên KHÔNG refetch full
-    // nữa (trước đây mỗi ~900ms fetch lại toàn bộ transcript) — chỉ đồng
-    // bộ run-status nhẹ. Refetch full chỉ còn: mount, reconnect, tab trở
-    // lại, watchdog 30s.
-    let statusTimer = null;
-    let otherTimer = null;
-    const scheduleStatus = () => {
-      clearTimeout(statusTimer);
-      statusTimer = setTimeout(() => loadStatus(), 900);
-    };
-    const scheduleOther = () => {
-      clearTimeout(otherTimer);
-      otherTimer = setTimeout(() => {
-        loadStatus();
-        loadPermissions();
-        loadQuestions();
-      }, 500);
-    };
-
-    // Hạt nhân dispatch — type lấy từ JSON trong dòng `data:` (lib/sse.js bóc
-    // sẵn). Engine phát event không tên nên đây là đường chính.
-    const handleEvent = (name, data) => {
-      lastEventAt.current = Date.now();
-      if (name === "server.connected" || name === "server.heartbeat") return;
-      if (!data || typeof data !== "object") return;
-      if (!sameSession(eventSessionId(data), sessionId)) return;
-      if (name === "session.idle" || name === "session.errored" || name === "session.status") {
-        // Run kết thúc thật (idle/errored) hoặc status report — chốt ngay,
-        // không chờ poll 2.5s. status mang map {ses: {type}} thì tự suy.
-        const props = eventProps(data);
-        const busy = name === "session.status" ? sessionBusyFromMap(props, sessionId) : false;
-        if (name !== "session.status") setRunning(false);
-        else if (busy !== undefined) setRunning(busy);
-        // Run vừa kết thúc: session có thể vừa bị đổi (cost tăng, con trỏ
-        // revert dọn), và todo vừa được chốt — nạp lại cho đúng.
-        loadSession();
-        loadTodo();
-        scheduleStatus();
-        return;
-      }
-      if (name === "permission.updated") {
-        loadPermissions();
-        scheduleOther();
-        return;
-      }
-      const prev = messagesRef.current;
-      const next = streamRef.current.apply(prev ?? [], data);
-      if (next !== prev) commitMessages(next);
-      if (name === "message.part.updated" || name === "message.part.delta" || name === "message.updated") {
-        setRunning(true); // vào guồng stream ngay, poll dự phòng bám theo
-        scheduleStatus();
-        if (streamRef.current.hasPending()) scheduleFlush();
-      } else {
-        scheduleOther();
-      }
-    };
-    // Stream qua fetch (lib/sse.js): token đi bằng header Authorization, không
-    // phải `?_t=` trên URL, và đứt là tự nối lại với backoff.
-    const stopEvents = connectEvents(`/api/ow${base}/event`, handleEvent, {
-      onOpen: () => {
-        lastEventAt.current = Date.now();
-        flushQueue();
-      },
-      onLost: () => {
-        // Stream đứt (tunnel đổi, mobile ngủ, server restart) — refetch full
-        // ngay để không đứng hình chờ event kế tiếp.
-        loadMessages();
-        loadStatus();
-      },
-    });
-    const refetchVisible = () => {
-      if (document.visibilityState === "visible") {
-        lastEventAt.current = Date.now();
-        loadMessages();
-        loadStatus();
-      }
-    };
-    const onOnline = () => {
-      lastEventAt.current = Date.now();
-      flushQueue();
-    };
-    document.addEventListener("visibilitychange", refetchVisible);
-    window.addEventListener("focus", refetchVisible);
-    window.addEventListener("online", onOnline);
-
-    return () => {
-      clearTimeout(statusTimer);
-      clearTimeout(otherTimer);
-      if (flushRef.current != null) {
-        (typeof cancelAnimationFrame === "function" ? cancelAnimationFrame : clearTimeout)(flushRef.current);
-        flushRef.current = null;
-      }
-      streamRef.current.reset();
-      stopEvents();
-      document.removeEventListener("visibilitychange", refetchVisible);
-      window.removeEventListener("focus", refetchVisible);
-      window.removeEventListener("online", onOnline);
-    };
   }, [wsId, sessionId, commitMessages]);
 
-  // Poll dự phòng khi agent chạy: chỉ loadStatus (2.5s) — nội dung chữ đến
-  // qua stream, không refetch transcript mỗi nhịp nữa. Watchdog 30s không
-  // thấy event nào mà vẫn running thì refetch full một lần (kênh chết ngầm).
-  useEffect(() => {
-    if (!running) return;
-    const poll = setInterval(() => {
-      loadStatus();
-    }, 2500);
-    const watch = setInterval(() => {
-      if (runningRef.current && Date.now() - lastEventAt.current > 30_000) {
-        lastEventAt.current = Date.now();
-        loadMessages();
-        loadStatus();
-      }
-    }, 10_000);
-    return () => {
-      clearInterval(poll);
-      clearInterval(watch);
-    };
-  }, [running, wsId, sessionId, loadMessages, loadStatus]);
+  // Luồng SSE + nhịp hỏi lại dự phòng (hooks/use-chat-events). Khai báo SAU
+  // effect vào phiên mới để thứ tự chạy vẫn là: dọn trạng thái → nạp → nghe.
+  useChatEvents({
+    wsId, sessionId, base, running, runningRef, messagesRef, commitMessages, setRunning,
+    loadSession, loadMessages, loadStatus, loadPermissions, loadQuestions, loadTodo, flushQueue,
+  });
 
-  // ---- Thao tác trên 1 session: hoàn tác / nhánh / sửa / xoá ----
-  // Gộp ở một chỗ để mọi thao tác đều: bật busy, báo lỗi rõ, nạp lại thật.
-
-  async function run(action, fn) {
-    // Khoá bằng ref: `busyAction` chỉ đổi ở render kế tiếp, chạm kép (rất dễ
-    // trên điện thoại) sẽ chạy cùng một thao tác hai lần — xoá tin hai lần,
-    // hoàn tác hai lần, tạo nhánh hai nhánh mồ côi.
-    if (actionLockRef.current) return;
-    actionLockRef.current = true;
-    const mineSession = sessionId;
-    // Lưu ID hành động, không phải nhãn: MessageActionSheet/QuestionCard so
-    // busyAction với id ("revert", "answer"…) để bật chữ "Đang làm…".
-    setBusyAction(action);
-    setError("");
-    try {
-      await fn();
-      // Hành động có thể đã đưa sang phiên khác (Tạo nhánh mới → navigate).
-      // Cái loader ở trên đóng từ render CŨ nên nó vẫn trỏ sessionId cũ; nạp
-      // lại ở đây sẽ tranh với lần nạp của phiên mới và có thể thắng, để lại
-      // transcript phiên cũ dưới tiêu đề phiên mới. Đã sang phiên thì thôi —
-      // phiên mới tự nạp trong effect của nó.
-      if (sessionIdRef.current !== mineSession) return;
-      await loadSession();
-      loadMessages();
-      loadTodo();
-    } catch (e) {
-      if (sessionIdRef.current !== mineSession) return;
-      setError(String(e.message || e));
-    } finally {
-      actionLockRef.current = false;
-      // Đã sang phiên khác: đừng đụng state của phiên mới — effect vào phiên
-      // mới đã tự dọn `busyAction`/`menu` rồi, xoá tiếp ở đây là xoá nhầm
-      // trạng thái của màn đang mở (ví dụ câu trả lời agent đang chờ).
-      if (sessionIdRef.current === mineSession) {
-        setBusyAction("");
-        setMenu(null);
-      }
-    }
-  }
-
-  function revertTo(messageId) {
-    return run("revert", async () => {
-      // Còn run đang chạy thì engine tự chặn; dừng trước cho chắc (desktop làm
-      // abort → revert → gửi lại).
-      if (running) await ow(`${base}/session/${encodeURIComponent(sessionId)}/abort`, { method: "POST" }).catch(() => {});
-      setRevertId(messageId);
-      await owRevert(wsId, sessionId, messageId);
-    });
-  }
-
-  function unrevert() {
-    return run("unrevert", async () => {
-      setRevertId("");
-      await owUnrevert(wsId, sessionId);
-    });
-  }
-
-  function forkFrom(messageId) {
-    return run("fork", async () => {
-      // Engine chép tin CHẶT TRƯỚC messageID → phải dò tin kế tiếp làm mốc,
-      // nếu không nhánh sẽ mất luôn tin đang bấm.
-      const boundary = resolveForkBoundaryId(messagesRef.current ?? [], messageId);
-      const created = await owFork(wsId, sessionId, boundary ?? "");
-      if (created?.id) {
-        navigate(`#/ws/${encodeURIComponent(wsId)}/chat/${encodeURIComponent(created.id)}`);
-      }
-    });
-  }
-
-  function deleteMessage(messageId) {
-    return run("delete", async () => {
-      // Phải qua commitMessages, không setMessages: messagesRef là bản mirror
-      // mà mergeRefetchKeepInflight đọc, nếu không cập nhật nó thì lần refetch
-      // kế sẽ lôi tin đã xoá trở lại danh sách.
-      commitMessages((messagesRef.current ?? []).filter((m) => messageIdOf(m) !== messageId));
-      await owDeleteMessage(wsId, sessionId, messageId);
-    });
-  }
-
-  async function copyMessage(message) {
-    const text = messageTextOf(message);
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      setMenu(null);
-    } catch {
-      setError("Could not copy to the browser clipboard.");
-    }
-  }
-
-  /** Sửa tin user: đổ nội dung vào ô gõ, đánh dấu để lần gửi tới hoàn tác
-   *  tới đúng tin đó (nếu không, chỉ thêm một tin mới cạnh tin cũ). */
-  function startEdit(message) {
-    const text = messageTextOf(message);
-    if (!text) return;
-    setDraft(text);
-    setEditing({ messageId: messageIdOf(message), text });
-    setMenu(null);
-  }
-
-  async function answerQuestion(request, selections) {
-    await run("answer", async () => {
-      await owReplyQuestion(wsId, request.id, buildQuestionAnswers(selections));
-      setQuestions((prev) => prev.filter((q) => q.id !== request.id));
-    });
-  }
-
-  // ---- Đổi tên phiên: sheet nhập, PATCH xong cập nhật tại chò ----
-
-  function openRename() {
-    // Ô nhập mở ra trắng trừ phiên có tên thật — "Không tiêu đề" là nhãn hiển
-    // thị, đưa vào ô nhập rồi bấm lưu sẽ đặt tên thành chữ "Không tiêu đề".
-    setRenameDraft(sessionTitleOf(session) === UNTITLED_SESSION_LABEL ? "" : String(session?.title ?? ""));
-    setRenameErr("");
-    setRenaming(true);
-  }
-
-  async function saveRename() {
-    if (renameLockRef.current) return;
-    const clean = normalizeSessionTitle(renameDraft);
-    if (!clean.ok) {
-      setRenameErr(clean.error); // giữ nguyên nội dung ô nhập, không đóng sheet
-      return;
-    }
-    if (isSameSessionTitle(session?.title, clean.title)) {
-      setRenaming(false); // không đổi gì -> khỏi tốn một vòng mạng
-      return;
-    }
-    renameLockRef.current = true;
-    setBusyAction("rename");
-    setRenameErr("");
-    try {
-      await owRenameSession(wsId, sessionId, clean.title);
-      setSession((prev) => ({ ...(prev ?? {}), title: clean.title }));
-      setRenaming(false);
-      setError("");
-      setNotice(`Renamed the session to “${clean.title}”.`);
-      loadSession(); // nguồn chân lý từ máy, độ trễ SSE nên nạp luôn
-    } catch (e) {
-      setRenameErr(String(e.message || e));
-    } finally {
-      renameLockRef.current = false;
-      setBusyAction("");
-    }
-  }
-
-  // ---- Chia sẻ: bật/tắt link trên máy, rồi đưa link ra điện thoại ----
-
-  async function toggleShare() {
-    if (shareLockRef.current) return;
-    shareLockRef.current = true;
-    setShareBusy(true);
-    const wasShared = isShared(session);
-    try {
-      const payload = wasShared
-        ? await owUnshareSession(wsId, sessionId)
-        : await owShareSession(wsId, sessionId);
-      const result = parseShareResponse(payload, { unshare: wasShared });
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      const next = { ...(session ?? {}), share: wasShared ? undefined : { url: result.url } };
-      setSession(next);
-      setError("");
-      if (wasShared) {
-        setNotice("Share link for this session is now off.");
-        return;
-      }
-      // Có navigator.share thì mở sheet của máy, không có thì chép link —
-      // người dùng chỉ muốn LẤY link để dán, không cần mở tab nào.
-      const outcome = await shareLink({
-        nav: typeof navigator !== "undefined" ? navigator : null,
-        clipboard: typeof navigator !== "undefined" ? navigator.clipboard : null,
-        session: next,
-        url: result.url,
-      });
-      setNotice(shareResult(outcome));
-    } catch (e) {
-      setError(shareError(e));
-    } finally {
-      shareLockRef.current = false;
-      setShareBusy(false);
-    }
-  }
-
-  // ---- Nén hội thoại: chỉ khi lib/session-compact bảo nên nén ----
-
-  async function compactNow() {
-    const blocked = compactBlockReason({ running, turns: compact.turns, busy: compacting });
-    if (blocked) {
-      setError(blocked);
-      return;
-    }
-    setCompacting(true);
-    setError("");
-    try {
-      await owSummarize(wsId, sessionId, model);
-      setNotice("Conversation compacted — the agent will start from the summary.");
-      loadSession();
-      loadMessages();
-      loadStatus();
-    } catch (e) {
-      setError(`Could not compact the conversation: ${e.message || e}`);
-    } finally {
-      setCompacting(false);
-    }
-  }
+  // Thao tác trên tin / phiên (hooks/use-session-actions) và phần đầu phiên:
+  // đổi tên, chia sẻ, nén (hooks/use-session-meta).
+  const {
+    busyAction, setBusyAction, run, revertTo, unrevert, forkFrom, deleteMessage,
+    copyMessage, startEdit, answerQuestion, resetActionLock,
+  } = useSessionActions({
+    wsId, sessionId, sessionIdRef, base, running, messagesRef, commitMessages,
+    loadSession, loadMessages, loadTodo,
+    setError, setMenu, setRevertId, setDraft, setEditing, setQuestions,
+  });
+  // Có nên gợi ý nén + thẻ tóm tắt mới nhất (cùng một lần quét transcript).
+  const compact = useMemo(() => shouldSuggestCompact({ messages, running }), [messages, running]);
+  const {
+    renaming, renameDraft, renameErr, renameInputRef, openRename, saveRename, closeRename,
+    shareBusy, toggleShare, compacting, compactNow,
+  } = useSessionMeta({
+    wsId, sessionId, session, setSession, setError, setNotice, setBusyAction,
+    loadSession, loadMessages, loadStatus, running, model, compact,
+  });
 
   // Nút dừng hiện kèm nút gửi khi agent đang chạy: người dùng vẫn gõ tin
   // xen giữa được (steer), và vẫn dừng được bằng một chạm. `sending` (đang tải
@@ -855,8 +505,6 @@ export function ChatPage({ route }) {
   // Tiền phiên: cộng theo tin assistant (lib/session-cost). `label` rỗng nghĩa
   // là chưa có gì để hiện — ẩn luôn, đừng in "$0.00" ra màn.
   const costView = useMemo(() => costViewModel(session, messages), [session, messages]);
-  // Có nên gợi ý nén + thẻ tóm tắt mới nhất (cùng một lần quét transcript).
-  const compact = useMemo(() => shouldSuggestCompact({ messages, running }), [messages, running]);
   const summary = useMemo(() => summaryView(messages), [messages]);
   const title = sessionTitleOf(session);
   // Dòng trạng thái dưới transcript: đang chạy + hàng đợi offline gộp làm một
@@ -995,7 +643,7 @@ export function ChatPage({ route }) {
           busy={busyAction === "rename"}
           inputRef={renameInputRef}
           onSave={saveRename}
-          onClose={() => setRenaming(false)}
+          onClose={closeRename}
         />
       )}
     </>
