@@ -104,7 +104,7 @@ Lưu ý: chưa chạy build exe GUI trong lượt tài liệu này (lượt trư
 
 ---
 
-## 5. VẤN ĐỀ CÒN MỞ (chi tiết tại `DANH_SACH_LOI.md` — mục openIssues)
+## 5. VẤN ĐỀ CÒN MỞ
 
 1. `FindNodeExe()` trong `desktop/src/OpenPocket.cs` còn 1 chỗ `WaitForExit()` không timeout trên `where.exe` — thực tế nhanh, chưa vá.
 2. Comment route trong `web/src/app.jsx:20` vẫn chép mục "Máy của tôi" đã bị xoá khỏi UI — chỉ là comment, chưa sửa (ngoài phạm vi file `.md`).
