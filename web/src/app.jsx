@@ -9,12 +9,15 @@ import { mergeCandidates, openworkFoundOf } from "./lib/openwork-fix.js";
 import { PairingScreen } from "./pages/pairing.jsx";
 import { HomePage } from "./pages/home.jsx";
 import { OpenWorkMark } from "./components/logo.jsx";
+import { lazyPage } from "./components/lazy-page.jsx";
 import { WorkspacesPage } from "./pages/workspaces.jsx";
 import { SessionsPage } from "./pages/sessions.jsx";
 import { ChatPage } from "./pages/chat.jsx";
-import { FilesPage } from "./pages/files.jsx";
-import { SearchPage } from "./pages/search.jsx";
-import { SettingsPage } from "./pages/settings.jsx";
+
+// Rarely-opened pages load on demand; Sessions/Workspace/Chat stay in the main bundle.
+const FilesPage = lazyPage(() => import("./pages/files.jsx"), "FilesPage");
+const SearchPage = lazyPage(() => import("./pages/search.jsx"), "SearchPage");
+const SettingsPage = lazyPage(() => import("./pages/settings.jsx"), "SettingsPage");
 
 // Hash router (đọc/ghi ở lib/route.js — thuần, test được bằng node --test;
 // app.jsx là JSX nên không import trực tiếp test được):

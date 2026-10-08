@@ -1775,3 +1775,8 @@ a {
   flex: 1 1 auto;
   min-height: 44px;
 }
+
+/* Placeholder while a lazy route chunk loads (components/lazy-page.jsx). */
+.page-loading {
+  min-height: 40vh;
+}
