@@ -172,7 +172,7 @@ export function HomePage() {
             onTap={() => navigate(`#/ws/${encodeURIComponent(ws.id)}/chat/${encodeURIComponent(session.id)}`)}
           >
             <div
-              class="card tap"
+              class="card tap dense"
               role="button"
               tabIndex={0}
               onKeyDown={(e) => {
@@ -188,7 +188,7 @@ export function HomePage() {
                   <span class={`dot ${isSessionBusy(status) ? "busy" : "ok"}`} aria-label={status ?? "idle"} />
                 </div>
               </div>
-              <div class="row-between" style="margin-top:6px">
+              <div class="row-between">
                 <span class="ws-chip" style={`--ws-c:${wsColor(ws.id)}`}>
                   <span class="ws-dot" style={`background:${wsColor(ws.id)}`} aria-hidden="true" />
                   <span class="ws-name">{ws.name || ws.displayName || ws.id}</span>

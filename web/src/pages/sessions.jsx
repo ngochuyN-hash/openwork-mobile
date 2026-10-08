@@ -185,7 +185,7 @@ export function SessionsPage({ route }) {
 
       {sessions?.length > 0 && (
         <>
-          <div class="fs-chips">
+          <div class="fs-chips scroll">
             <button
               type="button"
               class="btn small ghost"
@@ -207,7 +207,7 @@ export function SessionsPage({ route }) {
                 onTap={() => navigate(`#/ws/${encodeURIComponent(wsId)}/chat/${encodeURIComponent(s.id)}`)}
               >
                 <div
-                  class="card tap"
+                  class="card tap dense"
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => {
@@ -223,7 +223,7 @@ export function SessionsPage({ route }) {
                       <span class={`dot ${running ? "busy" : "ok"}`} aria-label={status ?? "idle"} />
                     </div>
                   </div>
-                  <div class="row-between" style="margin-top:6px">
+                  <div class="row-between">
                     <span class="meta">{timeAgo(s.time?.updated)}</span>
                   </div>
                 </div>

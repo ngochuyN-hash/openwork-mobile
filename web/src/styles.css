@@ -101,7 +101,10 @@ h3 {
 
 .view {
   flex: 1;
-  padding: var(--sp-3) var(--sp-4) calc(108px + var(--sab));
+  /* 88px = thanh dưới 42px + cách đáy 6px + 40px chừa thở (thanh cũ 62px ->
+     108px, thu gọn 20px thì đáy theo đúng 20px). Đổi kích thước `.bottomnav`
+     mà quên số này là nội dung bị thanh dưới đè. */
+  padding: var(--sp-3) var(--sp-4) calc(88px + var(--sab));
   max-width: 720px;
   width: 100%;
   margin: 0 auto;
@@ -198,22 +201,22 @@ h3 {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-nav);
   box-shadow: var(--shadow-float);
-  padding: 6px;
+  padding: 4px;
 }
 .bottomnav button {
   flex: 1;
-  min-height: 50px;
+  min-height: 34px;
   background: none;
   border: none;
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
-  padding: var(--sp-1) var(--sp-2);
+  padding: 2px 6px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 1px;
   cursor: pointer;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
@@ -228,19 +231,19 @@ h3 {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 4px 16px;
+  padding: 2px 12px;
   border-radius: 999px;
 }
 .bottomnav svg {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
 /* ---------- FAB ---------- */
 .fab {
   position: fixed;
   right: calc(var(--sp-4) + var(--sar));
-  bottom: calc(86px + var(--sab));
+  bottom: calc(66px + var(--sab)); /* theo thanh dưới 42px — xem `.view` */
   z-index: 11;
   width: 54px;
   height: 54px;
@@ -292,6 +295,58 @@ h3 {
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-3);
+}
+
+/* Thẻ PHIÊN dày lên — biến thể của `.card tap`, chỉ dùng ở danh sách phiên
+   (pages/home.jsx, pages/sessions.jsx). `.card` chung không đụng vì Workspace
+   và Files dùng chung nó.
+
+   Trước đây thẻ cao ~126px trong khi tiêu đề chỉ 15px: ba nút icon (ghim / xếp
+   nhóm / lưu trữ) đều là `.btn small` bị ép `min-height: 44px`, mỗi nút kéo
+   nguyên một hàng lên 44px, cộng 16px đệm và 12px giãn cách. Giờ ~82px.
+
+   Ngoại lệ luật 44px: đây là hành động PHỤ trong một danh sách dài, người
+   dùng đã chủ động chọn 32px cho gọn. Hành động chính (mở phiên, FAB, chip
+   lọc) vẫn giữ ≥44px. */
+.card.tap.dense {
+  padding: 8px 10px;
+}
+.swipe-row:has(.card.tap.dense) {
+  margin-bottom: var(--sp-2);
+}
+.card.tap.dense h3 {
+  font-size: 14.5px;
+  line-height: 1.35;
+  margin: 0;
+}
+.card.tap.dense .meta,
+.card.tap.dense .hint {
+  font-size: 11.5px;
+}
+/* Hàng thứ hai của thẻ: không để JSX đặt `style="margin-top"` vì inline thắng
+   CSS — nếu có, khoảng cách này không bao giờ nhận giá trị mới. */
+.card.tap.dense .row-between + .row-between {
+  margin-top: 2px;
+}
+.card.tap.dense .page-actions {
+  gap: 6px;
+}
+/* Nút 32×32: khoá cả chiều ngang lẫn dọc để ô luôn là hình vuông dù icon có
+   rộng hay không. Viền mờ cho khỏi nặng mắt, hiện lại khi ấn. */
+.card.tap.dense .btn-icon {
+  min-height: 32px;
+  min-width: 32px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  gap: 0;
+  border-radius: var(--radius-btn);
+  border-color: transparent;
+  background: transparent;
+}
+.card.tap.dense .btn-icon:active {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
 }
 
 /* Vuốt trái để lộ nút Xoá (kiểu iOS/Zalo): nút nền đỏ nằm sau thẻ,
@@ -666,6 +721,26 @@ label.field {
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 10px;
+}
+/* Biến thể một hàng cuộn ngang, dùng cho dải lọc ở màn Phiên: chip 44px xuống
+   dòng tràn thành 2–3 hàng đẩy danh sách phiên lặn dưới màn hình. Khuôn mẫu
+   lấy y hệt `.composer-pills`. Ô chọn thư mục (workspaces.jsx) vẫn dùng
+   `.fs-chips` trần để xuống dòng. */
+.fs-chips.scroll {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.fs-chips.scroll::-webkit-scrollbar {
+  display: none;
+}
+.fs-chips.scroll > .btn {
+  flex: none;
+  min-height: 34px;
+  padding: 5px 10px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 .fs-path {
   font-size: 12px;
