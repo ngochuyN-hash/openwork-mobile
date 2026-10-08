@@ -139,7 +139,7 @@ namespace OpenPocket.Desktop
             refreshTimer.Tick += delegate { CheckStatus(); };
             refreshTimer.Start();
 
-            // Tự lành autostart khi mở exe (lệnh user 07/10: "autostart là 1 phần
+            // Tự lành autostart khi mở exe (quyết định 07/10: "autostart là 1 phần
             // chức năng exe"). Chạy NỀN cho khỏi khựng UI — mỗi lệnh schtasks có
             // thể ngốn tới 10s. Hai việc: (1) task autostart TỒN TẠI mà trigger
             // chết thì dựng lại; (2) thiếu máy canh (watchdog 5 phút chạy

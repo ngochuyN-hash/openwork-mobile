@@ -15,9 +15,13 @@ namespace OpenPocket.Desktop
     // gắn chặt trạng thái UI.
     internal static class Provisioning
     {
-        // Địa chỉ web trung gian là hằng số nhúng trong exe (zip không kèm config —
+        // Địa chỉ web trung gian nhúng trong exe (zip không kèm config —
         // %APPDATA% máy người dùng trống, lần đầu chạy app tự ghi vào đó).
-        public const string DefaultWorkerUrl = "https://YOUR-WORKER.workers.dev";
+        // GIÁ TRỊ THẬT nằm ở `desktop/worker.url` (gitignored), build.bat sinh ra
+        // `WorkerUrl.cs` — cùng khuôn với InviteKey.cs. Source không chứa địa
+        // chỉ thật; build thiếu worker.url thì exe dùng placeholder và QR trỏ
+        // vào địa chỉ không tồn tại.
+        public const string DefaultWorkerUrl = WorkerUrl.Value;
 
         // a-z0-9 (bỏ ký tự dễ nhầm), "pc-" + 8 ký tự ngẫu nhiên — khớp TENANT_RE
         public static string NewRoomId()

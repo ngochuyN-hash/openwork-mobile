@@ -91,7 +91,7 @@ test("device key gọi /api/pairing-code → KHÔNG có masterUrl/masterQr, vẫ
   await withApp({}, async ({ base, pairing }) => {
     // Mint bằng PairingService thật để khóa đi qua pairing.authenticate() như
     // app.js làm — không dựng device giả, test phải đúng đường thật.
-    const minted = pairing.mintDevice("Điện thoại user");
+    const minted = pairing.mintDevice("Điện thoại Tester");
     const res = await get(base, "/api/pairing-code", minted.token);
     assert.equal(res.status, 200);
     const body = await res.json();

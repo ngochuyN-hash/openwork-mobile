@@ -72,6 +72,15 @@ OpenPocket-Setup.exe
 desktop/invite.key
 desktop/src/InviteKey.cs
 
+# this deployment's own worker address + Cloudflare KV namespace id. Both are
+# per-machine facts, not part of the product: the source ships placeholders and
+# reads the real values from these files (or OW_WORKER_URL / OW_KV_ID). The
+# generated src/WorkerUrl.cs carries the same reason as InviteKey.cs above.
+desktop/worker.url
+desktop/src/WorkerUrl.cs
+worker/worker.url
+worker/kv-id.txt
+
 # generated machine-identity whitelist — the committed source of truth is
 # shared/identity-keys.txt (bridge reads it at runtime; build scripts turn it
 # into this C# file). Same generated-file pattern as InviteKey.cs above.

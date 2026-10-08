@@ -123,7 +123,7 @@ test("master token ghi được đúng 4 key whitelist, xuống config.json trê
 
 test("token thiết bị (owd_) bị chặn 403 master_only, không ghi gì", async () => {
   await withApp({}, async ({ base, pairing, dir }) => {
-    const minted = pairing.mintDevice("Điện thoại user");
+    const minted = pairing.mintDevice("Điện thoại Tester");
     const res = await post(base, "/api/config/identity", minted.token, {
       lookupSecret: "ows_hijack",
     });

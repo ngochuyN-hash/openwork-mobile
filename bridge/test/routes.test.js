@@ -132,12 +132,12 @@ test("master token vào được /api/state; body đủ trường web cần", as
 
 test("token thiết bị (owd_) vào được và thisDevice báo đúng id", async () => {
   await withApp({}, async ({ base, pairing }) => {
-    const minted = pairing.mintDevice("Điện thoại user");
+    const minted = pairing.mintDevice("Điện thoại Tester");
     const res = await get(base, "/api/state", minted.token);
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.thisDevice.id, minted.device.id);
-    assert.equal(body.thisDevice.label, "Điện thoại user");
+    assert.equal(body.thisDevice.label, "Điện thoại Tester");
   });
 });
 
@@ -231,7 +231,7 @@ test("/api/pair/tenant: chưa join phòng → 404 not_joined", async () => {
     const res = await fetch(`${base}/api/pair/tenant`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ user: "user", secret: "x" }),
+      body: JSON.stringify({ user: "tester", secret: "x" }),
     });
     assert.equal(res.status, 404);
     assert.equal((await res.json()).code, "not_joined");
@@ -239,7 +239,7 @@ test("/api/pair/tenant: chưa join phòng → 404 not_joined", async () => {
 });
 
 test("/api/pair/tenant: sai mật khẩu → 401 invalid_credentials; đúng → 200 kèm tenant", async () => {
-  const patch = { lookupTenant: "user", lookupSecret: "secret-phong" };
+  const patch = { lookupTenant: "tester", lookupSecret: "secret-phong" };
   await withApp(patch, async ({ base }) => {
     const post = (body) =>
       fetch(`${base}/api/pair/tenant`, {
@@ -248,15 +248,15 @@ test("/api/pair/tenant: sai mật khẩu → 401 invalid_credentials; đúng →
         body: JSON.stringify(body),
       });
 
-    const wrong = await post({ user: "user", secret: "sai" });
+    const wrong = await post({ user: "tester", secret: "sai" });
     assert.equal(wrong.status, 401);
     assert.equal((await wrong.json()).code, "invalid_credentials");
 
-    const ok = await post({ user: "user", secret: "secret-phong", label: "ĐT" });
+    const ok = await post({ user: "TESTER", secret: "secret-phong", label: "ĐT" });
     assert.equal(ok.status, 200);
     const body = await ok.json();
-    assert.equal(body.tenant, "user");
-    assert.equal(body.machineName, "user");
+    assert.equal(body.tenant, "tester");
+    assert.equal(body.machineName, "tester");
   });
 });
 

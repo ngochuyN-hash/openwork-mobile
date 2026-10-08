@@ -2,7 +2,12 @@
   // Worker "địa chỉ cố định" cho OpenWork Mobile — deploy bằng:
   //   npx wrangler kv namespace create OWM_STATE   (lấy id điền dưới đây, 1 lần)
   //   npx wrangler secret put BRIDGE_SECRET         (secret trùng bridge config)
+  //   npx wrangler secret put ROOM_CREATE_KEY       (mời tạo phòng; xem desktop/invite.key)
   //   npx wrangler deploy
+  //
+  // `id` dưới đây là PLACEHOLDER — id KV thật KHÔNG nằm trong source. Lần
+  // deploy đầu tiên của bạn: chạy lệnh `kv namespace create` ở trên rồi điền
+  // id của bạn vào đây (hoặc bỏ hẳn khối `kv_namespaces` nếu không dùng KV).
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "openpocket",
   "main": "src/index.js",
@@ -16,7 +21,7 @@
   "kv_namespaces": [
     {
       "binding": "OWM_STATE",
-      "id": "00000000000000000000000000000000"
+      "id": "YOUR-KV-NAMESPACE-ID"
     }
   ]
 }

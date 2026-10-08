@@ -16,17 +16,43 @@ import { fileURLToPath } from "node:url";
 const DIR = dirname(fileURLToPath(import.meta.url));
 const WORKER_DIR = join(DIR, "..");
 
-let namespaceId = "";
-try {
-  const jsonc = readFileSync(join(WORKER_DIR, "wrangler.jsonc"), "utf8");
-  namespaceId = jsonc.match(/"id"\s*:\s*"([0-9a-f]+)"/)?.[1] ?? "";
-} catch {}
+// KV namespace id THẬT nằm ở `worker/kv-id.txt` (gitignored) — `wrangler.jsonc`
+// trong source chỉ có placeholder. Thứ tự: biến môi trường → file local →
+// wrangler.jsonc (cho repo đã điền id của chính nó, ví dụ clone riêng).
+let namespaceId = (process.env.OW_KV_ID || "").trim();
 if (!namespaceId) {
-  console.error("Không đọc được KV namespace id từ wrangler.jsonc");
+  try {
+    namespaceId = readFileSync(join(WORKER_DIR, "kv-id.txt"), "utf8").trim();
+  } catch {}
+}
+if (!namespaceId) {
+  try {
+    const jsonc = readFileSync(join(WORKER_DIR, "wrangler.jsonc"), "utf8");
+    namespaceId = jsonc.match(/"id"\s*:\s*"([0-9a-f]{32})"/)?.[1] ?? "";
+  } catch {}
+}
+if (!namespaceId) {
+  console.error(
+    "Không tìm thấy KV namespace id.\n" +
+      "  Đặt id vào worker/kv-id.txt (một dòng), hoặc đặt biến môi trường OW_KV_ID."
+  );
   process.exit(1);
 }
 
-const DEFAULT_WORKER_URL = "https://YOUR-WORKER.workers.dev";
+// Địa chỉ Worker của máy CHỦ (nơi phòng thật nằm) nằm ở `worker/worker.url`
+// (gitignored) — source không chứa URL thật. Biến môi trường `OW_WORKER_URL`
+// thắng, rồi tới file, rồi mới tới placeholder. Không có nguồn nào khớp thì
+// placeholder trả về địa chỉ không tồn tại, thay vì âm thầm trỏ nhầm.
+const PLACEHOLDER_WORKER_URL = "https://YOUR-WORKER.workers.dev";
+function resolveWorkerUrl() {
+  if (process.env.OW_WORKER_URL) return process.env.OW_WORKER_URL.trim();
+  try {
+    const fromFile = readFileSync(join(WORKER_DIR, "worker.url"), "utf8").trim();
+    if (fromFile) return fromFile;
+  } catch {}
+  return PLACEHOLDER_WORKER_URL;
+}
+const DEFAULT_WORKER_URL = resolveWorkerUrl();
 const TENANT_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 
 // Gọi wrangler TRỰC TIẾP bằng node (không qua shell): spawnSync("npx", …, shell:true)

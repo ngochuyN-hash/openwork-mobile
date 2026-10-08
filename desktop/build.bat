@@ -26,6 +26,19 @@ if exist "invite.key" set /p INVITE_KEY=<invite.key
 >> src\InviteKey.cs echo }
 if not defined INVITE_KEY echo [WARN] Thieu invite.key - exe nay se KHONG tu tao duoc phong tren worker.
 
+rem Sinh src\WorkerUrl.cs tu worker.url (gitignored, may chu worker) - dia chi
+rem Worker that nhung vao exe. Cung khuon voi invite.key o tren: gia tri THAT
+rem nam o file local, file C# sinh ra la placeholder. Thieu worker.url thi exe
+rem van build duoc nhung tro ve PLACEHOLDER - QR chi ra dia chi khong ton tai.
+set WORKER_URL=
+if exist "worker.url" set /p WORKER_URL=<worker.url
+if not defined WORKER_URL set WORKER_URL=https://YOUR-WORKER.workers.dev
+> src\WorkerUrl.cs echo // Sinh tu dong boi build.bat tu worker.url (gitignored) - KHONG sua tay, KHONG commit.
+>> src\WorkerUrl.cs echo internal static class WorkerUrl
+>> src\WorkerUrl.cs echo {
+>> src\WorkerUrl.cs echo     public const string Value = "%WORKER_URL%";
+>> src\WorkerUrl.cs echo }
+
 rem Sinh src\IdentityKeys.cs tu shared\identity-keys.txt - whitelist 4 key dinh
 rem danh may, NGUON DUY NHAT cung la noi bridge/src/identity.js doc luc chay
 rem (candidate 2, review 07/10). GUI va bridge khong the troi khoi nhau: them
@@ -53,7 +66,7 @@ echo Compiling OpenPocket.exe...
 rem 8 module (tách candidate 7 06/10): Ui + BridgeConfig + BridgeProcess +
 rem TunnelState + AutostartTask + BridgeHttp + Provisioning + PairingQrDialog,
 rem OpenPocket.cs chỉ còn form chính + điều phối.
-"%CSC%" /target:winexe /optimize /codepage:65001 /win32manifest:src\app.manifest /win32icon:src\app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket.exe src\InviteKey.cs src\IdentityKeys.cs src\HostContract.cs src\ErrorCode.cs src\Ui.cs src\BridgeConfig.cs src\BridgeProcess.cs src\TunnelState.cs src\AutostartTask.cs src\BridgeHttp.cs src\Provisioning.cs src\PairingQrDialog.cs src\OpenPocket.cs
+"%CSC%" /target:winexe /optimize /codepage:65001 /win32manifest:src\app.manifest /win32icon:src\app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket.exe src\InviteKey.cs src\WorkerUrl.cs src\IdentityKeys.cs src\HostContract.cs src\ErrorCode.cs src\Ui.cs src\BridgeConfig.cs src\BridgeProcess.cs src\TunnelState.cs src\AutostartTask.cs src\BridgeHttp.cs src\Provisioning.cs src\PairingQrDialog.cs src\OpenPocket.cs
 
 if %ERRORLEVEL% equ 0 (
     echo [OK] Bien dich thanh cong: desktop\bin\OpenPocket.exe

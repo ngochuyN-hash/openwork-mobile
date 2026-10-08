@@ -18,6 +18,17 @@ if exist "invite.key" set /p INVITE_KEY=<invite.key
 >> src\InviteKey.cs echo     public const string RoomInviteKey = "%INVITE_KEY%";
 >> src\InviteKey.cs echo }
 
+rem Sinh src\WorkerUrl.cs tu worker.url — y het build.bat. Thieu file thi
+rem placeholder, dung de smoke-test ma nhung khong tro ve may chu.
+set WORKER_URL=
+if exist "worker.url" set /p WORKER_URL=<worker.url
+if not defined WORKER_URL set WORKER_URL=https://YOUR-WORKER.workers.dev
+> src\WorkerUrl.cs echo // Sinh tu dong boi build-test.bat tu worker.url (gitignored) - KHONG sua tay, KHONG commit.
+>> src\WorkerUrl.cs echo internal static class WorkerUrl
+>> src\WorkerUrl.cs echo {
+>> src\WorkerUrl.cs echo     public const string Value = "%WORKER_URL%";
+>> src\WorkerUrl.cs echo }
+
 rem Sinh src\IdentityKeys.cs tu shared\identity-keys.txt - y het build.bat
 rem (candidate 2, review 07/10): whitelist 4 key dinh danh may, mot nguoi dung.
 > src\IdentityKeys.cs echo // Sinh tu dong boi build-test.bat tu shared\identity-keys.txt - KHONG sua tay, KHONG commit.
@@ -37,7 +48,7 @@ if not exist "src\HostContract.cs" (
     exit /b 1
 )
 
-"%CSC%" /target:winexe /optimize /codepage:65001 /win32icon:src\app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket-test.exe src\InviteKey.cs src\IdentityKeys.cs src\HostContract.cs src\ErrorCode.cs src\Ui.cs src\BridgeConfig.cs src\BridgeProcess.cs src\TunnelState.cs src\AutostartTask.cs src\BridgeHttp.cs src\Provisioning.cs src\PairingQrDialog.cs src\OpenPocket.cs
+"%CSC%" /target:winexe /optimize /codepage:65001 /win32icon:src\app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket-test.exe src\InviteKey.cs src\WorkerUrl.cs src\IdentityKeys.cs src\HostContract.cs src\ErrorCode.cs src\Ui.cs src\BridgeConfig.cs src\BridgeProcess.cs src\TunnelState.cs src\AutostartTask.cs src\BridgeHttp.cs src\Provisioning.cs src\PairingQrDialog.cs src\OpenPocket.cs
 if %ERRORLEVEL% equ 0 (
     echo [OK] Bien dich thanh cong: desktop\bin\OpenPocket-test.exe
 ) else (
