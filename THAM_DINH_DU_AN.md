@@ -1,5 +1,11 @@
 # BÁO CÁO THẨM ĐỊNH DỰ ÁN OPENWORK MOBILE (OPENPOCKET) — BẢN CẬP NHẬT 2026-10-03
 
+> **Cập nhật 2026-10-08 (đọc trước, phần dưới là bản 03/10):**
+> - Test hiện tại: bridge **139**, web **444**, worker **56** (tổng 639, đều xanh); `vite build` ra JS 191 KB (63 KB gzip) + CSS 27 KB (6 KB gzip). Các con số 36/25/11 và 99 KB bên dưới đã cũ.
+> - Đã thêm CI (`.github/workflows/ci.yml`) chạy cả ba bộ test + build web cho mỗi push/PR.
+> - Đã đóng: O1 (`WaitForExit` không timeout → 5 s), O2 (comment route `app.jsx`), O3 (CSP production, 04/10). Còn mở: O4 (chống xung đột ghi file), O5, O6.
+> - Changelog theo mốc nằm ở `CHANGELOG.md`; `CODE_SUMMARY.md` chỉ còn bản đồ code; các đợt vá bảo mật có ngày nằm ở `docs/HISTORY.md`.
+
 > **Thời điểm thẩm định lại:** 03/10/2026
 > **Dự án:** OpenWork Mobile (OpenPocket)
 > **Workspace:** `c:\Antigravity\Openwork Mobile App`

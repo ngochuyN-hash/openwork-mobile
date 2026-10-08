@@ -26,16 +26,12 @@ Quy ước chung mọi FIX (theo luật dự án):
 
 | FIX | Code | Tests | Commit | Deployed? |
 |---|---|---|---|---|
-| FIX-1 | done — `bridge/src/routes/pairing.js` | done — `bridge/test/pairing-routes.test.js`, 3 pass | done, `8020ef1` | **no** — needs a bridge restart |
-| FIX-2 | done — `bridge/src/static.js`, `worker/src/index.js`, `web/public/_headers` | done — `bridge/test/static-headers.test.js`, 3 pass | **not yet** (working tree) | **no** — needs `web/dist` rebuilt + bridge restart + worker deploy |
-| FIX-3 | done — `worker/src/index.js:341-345` | done — the 2 FIX-3 cases in `worker/test/relay.test.mjs` (file: 17 pass / 0 fail) | **not yet** (working tree) | **no** — needs a worker deploy |
-| FIX-4 | done — **both B and C** (`worker/src/index.js:274` and `:318-321`) | done — the 4 FIX-4 cases in `worker/test/relay.test.mjs` | **not yet** (working tree) | **no** — needs a worker deploy; setting `ALLOW_ROOM_CREATE` is a separate owner decision |
+| FIX-1 | done — `bridge/src/routes/pairing.js` | done — `bridge/test/pairing-routes.test.js` | committed (in `main`) | README (2026-10-04 pass) records it **deployed 2026-10-05** |
+| FIX-2 | done — `bridge/src/static.js`, `worker/src/index.js`, `web/public/_headers` | done — `bridge/test/static-headers.test.js` | committed: `6c82d1b`, `d2c75f5` | recorded **deployed 2026-10-05** |
+| FIX-3 | done — `worker/src/index.js` | done — FIX-3 cases in `worker/test/relay.test.mjs` | committed: `d2c75f5` | recorded **deployed 2026-10-05** |
+| FIX-4 | done — both B and C in `worker/src/index.js` | done — FIX-4 cases in `worker/test/relay.test.mjs` | committed: `d2c75f5` | recorded **deployed 2026-10-05**; `ALLOW_ROOM_CREATE` stays an owner decision |
 
-⚠️ `web/dist/_headers` is **stale**: the last `vite build` ran 2026-10-04 21:12,
-before `web/public/_headers` was edited, so the built copy still has only the CSP
-line and is missing `X-Content-Type-Options` + `Referrer-Policy`. Both deploy paths
-read that directory (`worker/wrangler.jsonc` → assets `../web/dist`, and the bridge
-serves it itself), so run `npm --prefix web run build` before `npx wrangler deploy`.
+_Status refreshed 2026-10-08 from git log and the code: every FIX is committed. "Deployed" is taken from `docs/HISTORY.md` (the 05/10 note) — it cannot be re-verified from the repo, so confirm with `wrangler deployments list` before relying on it. The "working tree" and "stale `web/dist/_headers`" notes that used to follow this table were true only on 2026-10-04; `web/dist` is gitignored and must simply be rebuilt before every deploy._
 
 ---
 
