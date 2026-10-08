@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
 import {
-  ow, unwrap, owUploadFile, formatBytes,
-  owAgents, owCommands, owQuestions, owReplyQuestion, owRejectQuestion,
+  ow, unwrap, owUploadFile,
+  owQuestions, owReplyQuestion, owRejectQuestion,
   owRevert, owUnrevert, owFork, owDeleteMessage, owRunCommand, owTodo,
   owRenameSession, owPrompt, owSummarize, owShareSession, owUnshareSession,
 } from "../api.js";
@@ -11,7 +11,7 @@ import { eventSessionId, sameSession, eventProps } from "../lib/chat-events.js";
 import {
   applyRevertCursor, hiddenCountByRevert, resolveForkBoundaryId, messageIdOf,
   messageTextOf, todoProgress, questionsForSession,
-  buildQuestionAnswers, filterCommands, shouldClearRevertCursor,
+  buildQuestionAnswers, shouldClearRevertCursor,
 } from "../lib/session-ops.js";
 // Tiền phiên: đọc từ TỪNG tin assistant (lib/session-cost) chứ không đọc
 // session.cost — ở engine v1 field đó không có, nên màn chat im lặng vĩnh viện.
@@ -23,31 +23,22 @@ import {
 import {
   compactBlockReason, compactHint, shouldSuggestCompact, summaryView,
 } from "../lib/session-compact.js";
-// Cuộn màn chat: quyết định "cuộn không / cuộn kiểu nào" và đếm tin mới nằm ở
-// lib/chat-scroll.js (thuần, có test) — chat.jsx chỉ đo vị trí và gọi.
+import { shouldShowJump } from "../lib/chat-scroll.js";
 import {
-  distanceFromBottom, isAtBottom, jumpLabel,
-  keepsAutoScroll, leftBottomBy, newMessagesSince, scrollPlan, shouldShowJump,
-} from "../lib/chat-scroll.js";
-import {
-  createQueue, isRetryableSendError, pendingStatus,
-  planSteerBatches, queueAdd, queueFor, queueRestore, queueSet, sendDecision,
-  sessionBusyFromMap, shouldRestoreComposer, statusLineIsBusy, permissionReplyBody,
+  isRetryableSendError, pendingStatus,
+  sendDecision, sessionBusyFromMap, shouldRestoreComposer, statusLineIsBusy, permissionReplyBody,
 } from "../lib/session-steer.js";
 import {
   isShared, parseShareResponse, shareButtonLabel, shareError, shareLink, shareResult,
 } from "../lib/session-share.js";
-import { Banner, Empty, Loading } from "../components/ui.jsx";
-import {
-  EffortPicker, ModelPicker, loadEffort, pushRecentModel,
-} from "../components/model-picker.jsx";
-import { MessageBubble } from "../components/chat-message-parts.jsx";
-import {
-  RenameSheet, MessageActionSheet, AgentPicker, QuestionCard,
-} from "../components/chat-sheets.jsx";
-import { isModelUsable, resolveKnownModel } from "../lib/model-behavior.js";
+import { Banner } from "../components/ui.jsx";
+import { ChatComposer } from "../components/chat-composer.jsx";
+import { ChatTranscript, PermissionCard } from "../components/chat-transcript.jsx";
+import { RenameSheet, MessageActionSheet, QuestionCard } from "../components/chat-sheets.jsx";
+import { useChatOptions } from "../hooks/use-chat-options.js";
+import { useChatScroll } from "../hooks/use-chat-scroll.js";
+import { useOfflineQueue } from "../hooks/use-offline-queue.js";
 import { navigate } from "../app.jsx";
-import { ClipIcon, StopIcon, ThoughtIcon, ChevronDownIcon } from "../components/icons.jsx";
 
 // Protocol event học từ desktop (apps/app session-sync.ts):
 //  - message.part.updated: snapshot cộng dồn của MỘT part (chìa part.id)
@@ -56,29 +47,6 @@ import { ClipIcon, StopIcon, ThoughtIcon, ChevronDownIcon } from "../components/
 //  - message.removed:      message bị xoá/revert — gọt khỏi transcript
 //  - session.idle/errored: chốt run status ngay, khỏi đợi poll
 // Engine opencode phát event KHÔNG TÊN trên SSE — type nằm trong JSON.
-
-/** Người dùng bảo không động đấy thì cuộn tức thì (luật skill: tôn trọng
- * prefers-reduced-motion). matchMedia có thể vắng ở môi trường test. */
-function motionAllowed() {
-  try {
-    return typeof window?.matchMedia !== "function" || !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  } catch {
-    return true;
-  }
-}
-
-/**
- * Cuộn tới đáy MÀN (không phải tới `<div>` neo trong transcript).
- *
- * Màn chat cuộn trên window, composer là phần tử sticky nằm CUỐI trang — nên
- * "đáy" chính là cuộn hết document. Cuộn theo neo trong transcript thì neo đó
- * nằm TRÊN composer, màn cuộn tới đó thì composer (sticky) đè lên đuôi tin.
- */
-function scrollChatToBottom(plan = "smooth") {
-  if (typeof window === "undefined") return;
-  const behavior = plan === "instant" || !motionAllowed() ? "auto" : "smooth";
-  window.scrollTo({ top: document.documentElement.scrollHeight, behavior });
-}
 
 export function ChatPage({ route }) {
   const { wsId, sessionId } = route;
@@ -90,20 +58,19 @@ export function ChatPage({ route }) {
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
   const [aborting, setAborting] = useState(false);
-  const [models, setModels] = useState([]); // [{value:'provider/model', label, providerName, modelName, modelId}]
-  const [modelsLoading, setModelsLoading] = useState(true);
-  const [model, setModel] = useState(() => localStorage.getItem("owm_model") ?? "");
-  const [effort, setEffort] = useState(loadEffort); // mức suy luận (localStorage)
   const [attached, setAttached] = useState([]); // [{file, path?, status:'ready'|'uploading'|'done'|'error', error?}]
+  // Model / mức suy luận / agent / slash command (hooks/use-chat-options) và
+  // vị trí cuộn (hooks/use-chat-scroll) — mỗi cái giữ ref + effect riêng.
+  const {
+    models, modelsLoading, model, changeModel, effort, setEffort,
+    agents, agent, changeAgent, commands, promptArgs, modelUsable,
+  } = useChatOptions({ wsId, sessionId });
+  const { atBottom, unseen, jumpToLatest, markTranscriptLoaded } = useChatScroll({ wsId, sessionId, messages });
 
   // ---- Những thứ engine vốn có, web trước đây bỏ qua ----
   // Con trỏ hoàn tác: session.revert.messageID (engine vẫn trả đủ transcript,
   // client tự cắt — lib/session-ops applyRevertCursor).
   const [revertId, setRevertId] = useState("");
-  const [agents, setAgents] = useState([]);
-  const [agent, setAgent] = useState(() => localStorage.getItem("owm_agent") ?? "");
-  const [agentOpen, setAgentOpen] = useState(false);
-  const [commands, setCommands] = useState([]);
   const [questions, setQuestions] = useState([]); // câu hỏi agent đang chờ (chung)
   const [todos, setTodos] = useState([]);
   const [editing, setEditing] = useState(null); // {messageId, text} — sửa tin đã gửi
@@ -120,8 +87,6 @@ export function ChatPage({ route }) {
   // nên hai chạm liền nhau vẫn chạy cùng handler cũ và bắn hai PATCH /share.
   const renameLockRef = useRef(false);
   const shareLockRef = useRef(false);
-  const attachRef = useRef(null);
-  const queueRef = useRef(createQueue("", []));
   // Ô gõ + file đính kèm cất theo phiên, để bấm nhầm Back rồi quay lại không
   // mất chữ vừa gõ mà cũng không mang tin sang phiên khác. Xem chỗ dùng trong
   // effect vào phiên mới.
@@ -134,51 +99,10 @@ export function ChatPage({ route }) {
   draftRef.current = draft;
   const attachedRef = useRef([]);
   attachedRef.current = attached;
-  const [queueCount, setQueueCount] = useState(0); // chỉ báo "đang gửi lại (n)"
-  // ---- Vị trí cuộn của người dùng ----
-  // `atBottomRef` là vị trí THẬT, đo ở nhịp scroll — tức là TRƯỚC nhịp render kế
-  // tiếp. Nhờ vậy một khối text/tool dài hơn ngưỡng cũ không làm auto-follow bỏ
-  // (xem giải thích ở lib/chat-scroll.js).
-  const atBottomRef = useRef(true);
-  const [atBottom, setAtBottom] = useState(true); // để dựng/ẩn nút "về đáy"
-  const unseenRef = useRef(0);
-  const [unseen, setUnseen] = useState(0); // số tin mới tới khi người dùng đang đọc lịch sử
-  const prevMessagesRef = useRef(null); // transcript lần render trước (đếm tin mới)
-  // Đổi session = phải nhảy tới đáy phiên mới; vị trí cuộn của phiên cũ không
-  // có ý nghĩa gì ở đây. Cờ này được effect [messages] tiêu thụ một lần.
-  const forceBottomRef = useRef(true);
-  // Transcript THẬT của phiên đã về chưa. Cờ `forced` chỉ được tiêu khi cờ này
-  // bật — nếu không, một tin rác do SSE dựng sẵn (stub cho message chưa từng
-  // thấy) có thể nuốt cờ, và lúc transcript thật về ta chỉ còn lệnh smooth từ
-  // trên xuống: vào phiên dài lại thày một cuộn lết dài vài giây.
-  const transcriptRef = useRef(false);
   // Phiên ĐANG HIỆN. Mọi loader so `sessionId` của nó với mirror này sau khi
   // await — response về trễ của phiên cũ không được ghi đè phiên mới.
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
-  // Vòng "bám lại đáy" chạy nhiều nhịp (nội dung còn đang lớn thêm sau khi
-  // transcript về). Rời trang rồi mà nó còn chạy thì SANG TRANG KHÁC cũng bị
-  // cuộn — nên hỏi cờ sống này trước mỗi nhịp.
-  const aliveRef = useRef(true);
-  const settleTimerRef = useRef(null);
-  // Đang cuộn bằng lệnh của app (mở phiên / bấm nút) — cho phép bỏ qua vị trí
-  // giữa đường, xem `measure`.
-  const autoScrollRef = useRef(false);
-  const lastYRef = useRef(0);
-  // Mirror của model: flushQueue chạy trong listener SSE/online đóng từ effect
-  // cũ (deps không có model) — đọc state thì gửi tin queue đi với model CŨ.
-  const modelRef = useRef(model);
-  modelRef.current = model;
-  // Agent cũng phải có mirror: flushQueue chạy trong listener SSE cũ, đọc state
-  // sẽ gửi tin queue đi bằng agent CŨ.
-  const agentRef = useRef(agent);
-  agentRef.current = agent;
-  // Tương tự: mức suy luận và danh sách model nạp bất đồng bộ — gửi tin phải
-  // theo mức/model ĐANG CHỌN, không phải bản chụp lúc effect chạy.
-  const effortRef = useRef(effort);
-  effortRef.current = effort;
-  const modelsRef = useRef(models);
-  modelsRef.current = models;
   // Mốc event SSE cuối + trạng thái running cho watchdog/poll dự phòng.
   const lastEventAt = useRef(Date.now());
   const runningRef = useRef(false);
@@ -243,8 +167,8 @@ export function ChatPage({ route }) {
       if (sessionIdRef.current !== mine) return;
       const fetched = unwrap(payload) ?? [];
       // Đánh dấu "đây là transcript thật của phiên" TRƯỚC khi commit — xem
-      // `transcriptRef`.
-      transcriptRef.current = true;
+      // `transcriptRef` trong hooks/use-chat-scroll.
+      markTranscriptLoaded();
       // Transcript API chỉ flush khi run XONG — giữa chừng fetched thiếu message
       // đang stream; thay nguyên list là trang co cụm, scroll bị hất ngược lên
       // (bug "cuộn xuống tự cuộn lên"). Đang chạy thì giữ message chưa ghi xong.
@@ -256,7 +180,7 @@ export function ChatPage({ route }) {
       if (sessionIdRef.current !== mine) return;
       setError(String(e.message || e));
     }
-  }, [wsId, sessionId, commitMessages]);
+  }, [wsId, sessionId, commitMessages, markTranscriptLoaded]);
 
   const loadStatus = useCallback(async () => {
     const mine = sessionId;
@@ -313,64 +237,17 @@ export function ChatPage({ route }) {
     }
   }, [wsId, sessionId]);
 
-  // Đưa prompt khỏi hàng đợi offline (nếu có) khi có mạng lại.
-  // Hàng đợi dài được gộp thành lô ≤8 tin/lượt (lib/session-steer) để đỡ tốn
-  // lượt chạy; lô nào máy XÁC NHẬN rồi mới quên, lô nào hỏng giữa chừng thì
-  // giữ nguyên để gửi lại — không đoán bừa tin nào đã đi.
-  const flushQueue = useCallback(async () => {
-    // Chỉ đẩy tin chờ CỦA PHIÊN NÀY. Trang chat sống lâu hơn một phiên, hàng
-    // đợi nằm trong ref nên nếu không lọc, tin xếp lúc rò mạng ở phiên A sẽ
-    // bị `flushQueue` của phiên B gửi vào hội thoại B.
-    const mine = sessionId;
-    const waiting = queueFor(queueRef.current, mine);
-    if (!waiting.length) return;
-    // Model nhớ trong localStorage có thể đã bị engine đổi tên/xoá. Gửi model
-    // engine không có thì engine VẪN nhận và lưu message rồi không chạy gì —
-    // người dùng thấy "đã gửi" mà không ai trả lời. Chặn ở đây và nói rõ.
-    if (!isModelUsable(modelRef.current, modelsRef.current)) {
-      setError("The selected model is no longer in your computer's list. Tap the model button to pick another.");
-      return;
-    }
-    // Chốt phiên như mọi loader: người dùng bấm sang phiên khác giữa lúc đang
-    // gửi thì phần chưa gửi phải về đúng hàng đợi của phiên cũ, và KHÔNG được
-    // setState của màn đang hiển thị phiên mới.
-    const batches = planSteerBatches(waiting);
-    queueRef.current = queueSet(queueRef.current, mine, []);
-    setQueueCount(0);
-    for (let i = 0; i < batches.length; i++) {
-      try {
-        await owPrompt(wsId, mine, promptArgs(batches[i].prompt));
-      } catch {
-        // Lô này hỏng giữa chừng: giữ nguyên phần CHƯA gửi để thử lại sau —
-        // không đoán bừa tin nào đã đi. Lô trước đã được máy xác nhận thì quên.
-        const unsent = batches.slice(i).flatMap((b) => b.texts);
-        queueRef.current = queueRestore(queueRef.current, mine, unsent);
-        if (sessionIdRef.current === mine) {
-          setQueueCount(queueFor(queueRef.current, mine).length);
-        }
-        return;
-      }
-    }
-    if (sessionIdRef.current !== mine) return;
-    loadMessages();
-    loadStatus();
-  }, [wsId, sessionId, loadMessages, loadStatus]);
+  // Hàng đợi offline (hooks/use-offline-queue): tin gửi lúc mất mạng xếp theo
+  // phiên, đẩy đi khi có mạng lại.
+  const { queueCount, syncCount, enqueue, discard: discardQueue, flush: flushQueue } = useOfflineQueue({
+    wsId, sessionId, sessionIdRef, promptArgs, modelUsable, setError, loadMessages, loadStatus,
+  });
 
   useEffect(() => {
     // Vào phiên mới (effect này chạy lại mỗi khi wsId/sessionId đổi): dựng lại
-    // từ đầu — vị trí cuộn, cờ bám đáy và đếm tin mới của phiên trước không có
-    // ý nghĩa ở đây. `commitMessages(null)` (chứ không setMessages) để
-    // messagesRef khớp, không ló transcript phiên cũ trong lúc chờ phiên mới.
-    forceBottomRef.current = true;
-    transcriptRef.current = false;
-    atBottomRef.current = true;
-    unseenRef.current = 0;
-    prevMessagesRef.current = null;
-    aliveRef.current = true;
-    autoScrollRef.current = false;
-    lastYRef.current = typeof window === "undefined" ? 0 : window.scrollY;
-    setAtBottom(true);
-    setUnseen(0);
+    // từ đầu — (vị trí cuộn do hooks/use-chat-scroll tự dựng lại.)
+    // `commitMessages(null)` (chứ không setMessages) để messagesRef khớp,
+    // không ló transcript phiên cũ trong lúc chờ phiên mới.
     commitMessages(null);
     // Trạng thái "đang bay" của phiên TRƯỚC không mang ý nghĩa ở phiên mới.
     // Không dọn thì bấm sang phiên đang rảnh vẫn thấy nút Dừng quay và dòng
@@ -398,7 +275,7 @@ export function ChatPage({ route }) {
     setError("");
     // Đếm tin chờ tính RIÊNG cho từng phiên (lib/session-steer) — đổi phiên
     // thì phải tính lại, không phải giữ số của phiên trước.
-    setQueueCount(queueFor(queueRef.current, sessionId).length);
+    syncCount();
     sendLockRef.current = false;
     abortLockRef.current = false;
     actionLockRef.current = false;
@@ -413,113 +290,6 @@ export function ChatPage({ route }) {
     loadQuestions();
     loadTodo();
 
-    // ---- Đo vị trí cuộn: nghe `scroll` (passive), chỉ báo lại khi CỜ đổi ----
-    // Đo ở đây tức là đo TRƯỚC nhịp render kế tiếp, nên "đang bám đáy" là vị trí
-    // thật của người dùng chứ không phải phép đo sau khi tin mới đã dài ra.
-    let scrollTick = null;
-    const cancelTick = () => {
-      if (scrollTick == null) return;
-      (typeof cancelAnimationFrame === "function" ? cancelAnimationFrame : clearTimeout)(scrollTick);
-      scrollTick = null;
-    };
-    const measure = () => {
-      scrollTick = null;
-      const y = window.scrollY;
-      const gap = distanceFromBottom({
-        scrollHeight: document.documentElement.scrollHeight,
-        viewportHeight: window.innerHeight,
-        scrollY: y,
-      });
-      // Hai quyết định, đều thuộc về lib/chat-scroll.js (có test):
-      //   1. Còn cuộn bằng lệnh của app không? Nếu không hỏi, chính lệnh cuộn
-      //      của ta bị đọc thành "người dùng đang lướt lên" và tự cuộn chết
-      //      giữa lúc stream — bug lớn nhất của màn này.
-      //   2. Người dùng đã rời đáy chưa? Vuốt lên là động cửa "cho tôi đọc
-      //      lịch sử" nên phải rời vùng bám NGAY, không chờ vượt 260px — nếu
-      //      không, lúc agent đang stream thì gần như không lướt lên nổi, và
-      //      nút "về tin mới nhất" mất hết ý nghĩa đúng lúc cần nhất.
-      const movedUp = y < lastYRef.current - 4;
-      if (!keepsAutoScroll({ autoScroll: autoScrollRef.current, gap, movedUp })) {
-        autoScrollRef.current = false;
-      }
-      lastYRef.current = y;
-      const now =
-        autoScrollRef.current
-          ? true
-          : !leftBottomBy({ autoScroll: false, gap, movedUp });
-      if (now === atBottomRef.current) return; // không đổi cờ thì khỏi render lại
-      atBottomRef.current = now;
-      setAtBottom(now);
-      if (now && unseenRef.current) {
-        unseenRef.current = 0;
-        setUnseen(0);
-      }
-    };
-    const onScroll = () => {
-      if (scrollTick != null) return;
-      scrollTick =
-        typeof requestAnimationFrame === "function"
-          ? requestAnimationFrame(measure)
-          : setTimeout(measure, 60);
-    };
-    window.addEventListener("scroll", onScroll, { passive: true });
-
-    // Agent + slash command: nạp một lần, rẻ và cần cho composer.
-    owAgents(wsId)
-      .then((list) => {
-        const usable = list.filter((a) => a?.name && a.hidden !== true);
-        setAgents(usable);
-        // Agent đang chọn (hoặc bản nhớ lần trước) phải còn trong danh sách
-        // engine vừa trả. Engine đã xoá thì bỏ hẳn — kể cả localStorage vẫn
-        // nhớ tên đó: gửi agent ma lên chỉ nhận lỗi từ engine.
-        const wanted = agentRef.current || localStorage.getItem("owm_agent") || "";
-        if (!wanted) return;
-        if (usable.some((a) => a.name === wanted)) {
-          setAgent(wanted); // khôi phục lựa chọn lần trước khi state còn trắng
-        } else {
-          localStorage.removeItem("owm_agent");
-          setAgent("");
-        }
-      })
-      .catch(() => setAgents([]));
-    owCommands(wsId).then(setCommands).catch(() => setCommands([]));
-
-    // Model picker: engine yêu cầu model tường minh khi gửi prompt, không có
-    // thì message treo vĩnh viễn.
-    ow(`${base}/config/providers`)
-      .then((payload) => {
-        const providers = payload?.providers ?? payload?.data?.providers ?? [];
-        const flat = [];
-        for (const p of providers) {
-          for (const m of Object.values(p.models ?? {})) {
-            flat.push({
-              value: `${p.id}/${m.id}`,
-              label: `${p.name} · ${m.name ?? m.id}`,
-              providerName: p.name ?? p.id,
-              modelName: m.name ?? m.id,
-              modelId: m.id,
-              // Danh sách mức suy luận engine khai cho model này. Giữ nguyên
-              // shape engine trả; lib/model-behavior bóc ra và KHÔNG bịa thêm
-              // mức nào không có trong đây.
-              variants: m.variants,
-            });
-          }
-        }
-        setModels(flat);
-        // Model nhớ trong localStorage có thể đã bị engine đổi tên/xoá — giữ
-        // thì mọi tin gửi đi đều im lặng không phản hồi. Chọn lại trong danh
-        // sách vừa nhận, và xoá key để lần sau không phải dò lại.
-        const kept = resolveKnownModel(modelRef.current, flat);
-        if (kept !== modelRef.current) {
-          localStorage.setItem("owm_model", kept);
-          setModel(kept);
-        } else if (!localStorage.getItem("owm_model") && flat.length) {
-          localStorage.setItem("owm_model", kept);
-          setModel(kept);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setModelsLoading(false));
 
     // ---- Streaming theo PART: reducer thuần ở lib/chat-stream.js ----
     // Không còn "đoán snapshot hay delta" trên một chuỗi text chung — chìa là
@@ -624,13 +394,8 @@ export function ChatPage({ route }) {
     window.addEventListener("online", onOnline);
 
     return () => {
-      aliveRef.current = false;
       clearTimeout(statusTimer);
       clearTimeout(otherTimer);
-      clearTimeout(settleTimerRef.current);
-      settleTimerRef.current = null;
-      cancelTick();
-      window.removeEventListener("scroll", onScroll);
       if (flushRef.current != null) {
         (typeof cancelAnimationFrame === "function" ? cancelAnimationFrame : clearTimeout)(flushRef.current);
         flushRef.current = null;
@@ -663,97 +428,6 @@ export function ChatPage({ route }) {
       clearInterval(watch);
     };
   }, [running, wsId, sessionId, loadMessages, loadStatus]);
-
-  useEffect(() => {
-    if (messages === null) return;
-    // Quyết định cuộn nằm ở lib/chat-scroll.js. Ba nhánh:
-    //   "instant" — lần đầu vào phiên: nhảy tới đáy NGAY, không smooth. Đây là
-    //               fix của bug mở phiên dài ra tin cũ nhất (đo gap sau render thì
-    //               scrollY=0 + scrollHeight dài => cứ tưởng đang ở lịch sử).
-    //   "smooth"  — đang bám đáy thì bám tiếp, kể cả khối mới dài hơn ngưỡng.
-    //   "hold"    — người dùng đang lướt lên đọc: không giật, nhưng đếm tin mới.
-    // Cờ "mở phiên thì phải tới đáy" chỉ được tiêu khi transcript THẬT về. Một
-    // commit SSE stub (message chưa từng thấy, app tự dựng) không phải hồi
-    // trọn phiên — tiêu cờ ở đó là mở phiên dài thành một lượt cuộn smooth lết
-    // từ trên xuống, đúng cái lỗi ta đang sửa.
-    const forced = forceBottomRef.current && transcriptRef.current;
-    if (forced) forceBottomRef.current = false;
-    const plan = scrollPlan({ forced, atBottom: atBottomRef.current });
-    const prev = prevMessagesRef.current;
-    prevMessagesRef.current = messages;
-    if (plan === "hold") {
-      const added = newMessagesSince(prev, messages);
-      if (added > 0) {
-        unseenRef.current += added;
-        setUnseen(unseenRef.current);
-      }
-      return;
-    }
-    // MỌI lệnh cuộn của app đều phải bật cờ "đang cuộn tự động" — kể cả nhánh
-    // smooth lúc stream. Thiếu bước này thì chính lệnh cuộn của ta làm đổi cờ
-    // "đang bám đáy": smooth scroll còn đang chạy thì gap tạm thời lớn hơn
-    // ngưỡng, `measure` kết luận người dùng đã lướt lên, và nhịp stream kế
-    // tiếp rơi vào nhánh "hold" — tự cuộn chết giữa chừng, đúng cái lỗi mà
-    // bản này sinh ra để chữa.
-    autoScrollRef.current = true;
-    scrollChatToBottom(plan);
-    // Transcript vừa nạp: chiều cao trang còn đang lớn thêm (ảnh, khối fold mở
-    // ra). Bám lại vài nhịp cho chắc — nhưng dừng ngay khi người dùng chạm
-    // cuộn, không giành quyền cuộn của họ.
-    if (forced) settleToBottom();
-  }, [messages]);
-
-  /** Bám đáy thêm vài nhịp (tối đa ~0.7s) cho tới khi chạm đáy hoặc người dùng
-   *  chạm cuộn. Một lần `scrollChatToBottom` là chưa chắc đủ: transcript vừa
-   *  nạp còn nội dung cao thêm sau đó (stream tiếp, fold mở, ảnh nạp). */
-  function settleToBottom(plan = "instant") {
-    let tries = 0;
-    autoScrollRef.current = true;
-    const step = () => {
-      tries += 1;
-      // Hết lượt thì TRẢ LẠI quyền đo — nếu giữ cờ "đang cuộn tự động" mãi thì
-      // `measure` cứ tưởng người dùng còn ở đáy và nút "về đáy" không bao giờ hiện.
-      if (!aliveRef.current || tries > 6) {
-        autoScrollRef.current = false;
-        return;
-      }
-      // Người dùng kéo ngược lên giữa chừng → `measure` đã thả quyền, thôi.
-      if (!autoScrollRef.current) return;
-      const gap = distanceFromBottom({
-        scrollHeight: document.documentElement.scrollHeight,
-        viewportHeight: window.innerHeight,
-        scrollY: window.scrollY,
-      });
-      if (isAtBottom(gap, 4)) {
-        autoScrollRef.current = false;
-        return;
-      }
-      scrollChatToBottom(plan);
-      settleTimerRef.current = setTimeout(step, 120);
-    };
-    clearTimeout(settleTimerRef.current);
-    settleTimerRef.current = setTimeout(step, 120);
-  }
-
-  /**
-   * Tham số gửi prompt, đọc qua ref chứ không đọc state: hàm này chạy cả
-   * trong flushQueue — listener đóng từ effect setup lúc mount, state mới
-   * không chạm tới được (đọc state ở đây là gửi tin bằng model/mức CŨ).
-   *
-   * `variants` lấy theo model ĐANG chọn trong catalog: mức suy luận chỉ gửi
-   * được với variant engine thật sự khai cho model đó (lib/model-behavior).
-   */
-  function promptArgs(text) {
-    const value = modelRef.current;
-    const current = modelsRef.current.find((m) => m.value === value);
-    return {
-      text,
-      model: value,
-      agent: agentRef.current,
-      effort: effortRef.current,
-      variants: current?.variants,
-    };
-  }
 
   // ---- Thao tác trên 1 session: hoàn tác / nhánh / sửa / xoá ----
   // Gộp ở một chỗ để mọi thao tác đều: bật busy, báo lỗi rõ, nạp lại thật.
@@ -941,16 +615,6 @@ export function ChatPage({ route }) {
     }
   }
 
-  // ---- Về tin mới nhất: đường về đáy khi đang đọc lịch sử ----
-
-  function jumpToLatest() {
-    unseenRef.current = 0;
-    setUnseen(0);
-    lastYRef.current = window.scrollY;
-    scrollChatToBottom("smooth");
-    settleToBottom("smooth");
-  }
-
   // ---- Nén hội thoại: chỉ khi lib/session-compact bảo nên nén ----
 
   async function compactNow() {
@@ -1101,9 +765,7 @@ export function ChatPage({ route }) {
           // Mất mạng giữa đường: xếp lại. Tin chờ sẵn có thì GỘP với tin mới
           // thành MỘT prompt nối bằng dòng trống (không tự chèn nhãn/đánh số —
           // đó là chỉ dẫn người dùng không gõ, agent đọc lệch rồi lặp lại).
-          queueRef.current = queueAdd(queueRef.current, mine, [fullText]);
-          const n = queueFor(queueRef.current, mine).length;
-          setQueueCount(n);
+          enqueue(mine, fullText);
           // KHÔNG nhét tin chờ vào banner lỗi đỏ: mất mạng là chuyện thường, và
           // dòng trạng thái dưới transcript đã nói "Đang gửi lại n tin nhắm…".
         } else {
@@ -1128,12 +790,6 @@ export function ChatPage({ route }) {
   function pickFiles(fileList) {
     const fresh = [...fileList].map((file) => ({ file, path: "", status: "ready", error: "" }));
     setAttached((prev) => [...prev, ...fresh].slice(0, 5));
-  }
-
-  /** Bỏ tin chờ của phiên đang mở (xem nút "Bỏ" ở dòng trạng thái). */
-  function discardQueue() {
-    queueRef.current = queueSet(queueRef.current, sessionId, []);
-    setQueueCount(0);
   }
 
   async function abort() {
@@ -1261,272 +917,63 @@ export function ChatPage({ route }) {
 
       {permissions.map((p) => {
         const pid = p.id ?? p.requestID;
-        const busy = permissionBusy === pid;
         return (
-        <div class="permission-card" key={pid}>
-          <b>Agent needs permission</b>
-          <div style="margin-top:6px" class="mono">
-            {p.title ?? p.pattern ?? JSON.stringify(p).slice(0, 160)}
-          </div>
-          <div class="actions">
-            {/* Ba nút khớp đúng ba giá trị engine nhận (`reply`). Trước đây
-                gộp còn hai nút và gửi field sai nên thẻ không bao giờ biến mất
-                — xem permissionReplyBody trong lib/session-steer. */}
-            <button class="btn small" disabled={busy} onClick={() => replyPermission(p, "once")}>
-              Allow
-            </button>
-            <button class="btn small ghost" disabled={busy} onClick={() => replyPermission(p, "always")}>
-              Always allow
-            </button>
-            <button class="btn small danger" disabled={busy} onClick={() => replyPermission(p, "reject")}>
-              Deny
-            </button>
-          </div>
-        </div>
+          <PermissionCard key={pid} permission={p} busy={permissionBusy === pid} onReply={replyPermission} />
         );
       })}
 
-      <div class="chat-list">
-        {/* Tóm tắt sinh ra lúc nén — mặc định ĐÓNG giống hàng tool/suy luận,
-            mở mới đọc, không đẩy tin nhắn xuống dưới màn hình. */}
-        {summary && (
-          <details class="fold-row reasoning">
-            <summary>
-              <ThoughtIcon size={14} />
-              <span class="fold-title">Session summary</span>
-              {summary.truncated && <span class="fold-status">truncated</span>}
-              <ChevronDownIcon size={12} />
-            </summary>
-            <div class="fold-body reasoning-body">{summary.text}</div>
-          </details>
-        )}
-        {hiddenCount > 0 && (
-          <div class="revert-bar">
-            <span>{hiddenCount} older messages hidden</span>
-            <button class="btn small" onClick={unrevert} disabled={Boolean(busyAction)}>
-              {busyAction === "unrevert" ? "Showing…" : "Show hidden"}
-            </button>
-          </div>
-        )}
-        {messages === null && <Loading />}
-        {messages?.length === 0 && (
-          <Empty title="Empty session" hint="Send the first prompt to the agent." />
-        )}
-        {visible.length === 0 && messages?.length > 0 && (
-          <Empty title="Nothing left to revert" hint="Tap “Show hidden” above to review the hidden messages." />
-        )}
-        {visible.map((m, i) => (
-          <MessageBubble
-            key={messageIdOf(m) || `msg-${i}`}
-            message={m}
-            wsId={wsId}
-            onMenu={setMenu}
-          />
-        ))}
-        {/* Dòng trạng thái DUY NHẤT phát ngôn cho screen reader (aria-live):
-            trước đây thuộc tính này bọc TOÀN BỘ list tin nhắn — mỗi delta stream
-            là đọc lại cả transcript. Vừa làm chỉ báo hàng đợi offline:
-            "Đang gửi lại (n)" — hiện duy nhất khi có tin chờ/tác vụ chạy. */}
-        <div class="msg assistant chat-status" role="status" aria-live="polite">
-          {statusLine && (
-            <>
-              <span class="spinner" aria-hidden={statusBusy ? undefined : "true"} /> {statusLine}
-              {/* Bỏ hàng đợi: mất mạng rồi người dùng gõ nhầm, hoặc đã gửi
-                  tay trên máy tính — không có đường thoát thì tin sẽ cứ tự
-                  bay lên máy lúc có mạng. Một chạm, không hộp thoại. */}
-              {queueCount > 0 && (
-                <button
-                  type="button"
-                  class="btn small ghost"
-                  style={{ marginLeft: 8 }}
-                  onClick={discardQueue}
-                  aria-label={`Discard ${queueCount} queued messages`}
-                >
-                  Discard
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      </div>
+      <ChatTranscript
+        wsId={wsId}
+        messages={messages}
+        visible={visible}
+        hiddenCount={hiddenCount}
+        summary={summary}
+        busyAction={busyAction}
+        onUnrevert={unrevert}
+        onMenu={setMenu}
+        statusLine={statusLine}
+        statusBusy={statusBusy}
+        queueCount={queueCount}
+        onDiscardQueue={discardQueue}
+      />
 
-      {/* Nút "về tin mới nhất" neo ngay TRÊN composer. `.composer` đã là
-          `position: sticky` nên nó là containing block của phần tử absolute
-          bên trong — không phải đoán chiều cao composer (cao không cố định:
-          có thêm hàng pill, file đính kèm, dòng todo). */}
-      <div class="composer">
-        <div style="flex:1;min-width:0">
-          <div class="composer-pills">
-            <ModelPicker
-              models={models}
-              value={model}
-              loading={modelsLoading}
-              onChange={(v) => {
-                setModel(v);
-                localStorage.setItem("owm_model", v);
-                pushRecentModel(v);
-              }}
-            />
-            {/* Mức suy luận: tự ẩn khi model không khai mức nào (chọn xong mới
-                biết) — có nút mà bấm không đổi gì thì hỏng trải nghiệm. */}
-            <EffortPicker
-              modelValue={model}
-              variants={models.find((m) => m.value === model)?.variants}
-              effort={effort}
-              onChange={setEffort}
-            />
-            {agents.length > 1 && (
-              <AgentPicker
-                agents={agents}
-                value={agent}
-                open={agentOpen}
-                onToggle={() => setAgentOpen((v) => !v)}
-                onClose={() => setAgentOpen(false)}
-                onChange={(name) => {
-                  setAgent(name);
-                  if (name) localStorage.setItem("owm_agent", name);
-                  else localStorage.removeItem("owm_agent");
-                }}
-              />
-            )}
-          </div>
-          {todo.total > 0 && (
-            <div class="todo-row" title={todo.next}>
-              <span class="todo-count">{todo.done}/{todo.total}</span>
-              <span class="todo-next">{todo.next}</span>
-            </div>
-          )}
-          {editing && (
-            <div class="editing-bar">
-              <span>Edit sent message — resending replaces everything after it</span>
-              <button
-                class="btn small"
-                onClick={() => {
-                  setEditing(null);
-                  setDraft("");
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          )}
-          {draft.startsWith("/") && commands.length > 0 && (
-            <div class="cmd-pop" role="listbox" aria-label="Quick actions">
-              {filterCommands(commands, draft).map((c) => (
-                <button
-                  key={c.name}
-                  role="option"
-                  aria-selected="false"
-                  class="cmd-item"
-                  onClick={() => {
-                    setDraft("");
-                    run("command", async () => {
-                      await owRunCommand(wsId, sessionId, { command: c.name });
-                    });
-                  }}
-                >
-                  <span class="cmd-name">/{c.name}</span>
-                  <span class="cmd-desc">{c.description ?? c.source}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          <div style="display:flex;gap:8px">
-            <button
-              class="btn btn-send"
-              style="background:var(--bg-raised);color:var(--text)"
-              aria-label="Attach files from the phone"
-              disabled={sending}
-              onClick={() => attachRef.current?.click()}
-            >
-              <ClipIcon size={20} />
-            </button>
-            <input
-              ref={attachRef}
-              type="file"
-              multiple
-              hidden
-              aria-hidden="true"
-              tabindex="-1"
-              onChange={(e) => {
-                pickFiles([...e.currentTarget.files]);
-                e.currentTarget.value = "";
-              }}
-            />
-            <textarea
-              aria-label="Enter prompt for the agent"
-              rows="1"
-              value={draft}
-              onInput={(e) => setDraft(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-            />
-            {/* Dừng và Gửi cùng hiện lúc agent chạy: ■ dừng lượt, ➤ chèn tin
-                mới vào chính lượt đang dở. Trước đây nút gửi biến mất hẳn
-                lúc busy nên không gõ xen được gì. */}
-            {busy && (
-              <button
-                class="btn btn-send stop"
-                aria-label="Stop the agent"
-                title="Stop the agent"
-                disabled={aborting}
-                onClick={abort}
-              >
-                <StopIcon size={20} />
-              </button>
-            )}
-            <button
-              class="btn btn-send"
-              aria-label={busy ? "Send now, insert into the running turn" : "Send prompt"}
-              title={busy ? "Insert this message into the running turn" : "Send prompt"}
-              disabled={(!draft.trim() && !attached.length) || sending}
-              onClick={send}
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="m22 2-7 20-4-9-9-4z" />
-                <path d="M22 2 11 13" />
-              </svg>
-            </button>
-          </div>
-          {attached.length > 0 && (
-            <div class="attach-list">
-              {attached.map((a, i) => (
-                <span class="attach-chip" key={i}>
-                  <span class="name">{a.file.name}</span>
-                  <span class="size">
-                    {a.status === "uploading" ? "uploading…" : a.status === "error" ? "error" : formatBytes(a.file.size)}
-                  </span>
-                  <button aria-label={`Remove ${a.file.name}`} onClick={() => setAttached((prev) => prev.filter((x) => x !== a))}>
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-        {/* Nút "về tin mới nhất" đặt CUỐI composer (dù hình thức nó nằm bên
-            phải, cạnh hàng pill) để thứ tự Tab khớp thứ tự nhìn: người dùng đi
-            hết ô gõ mới tới nút, không bị dừng ở một nút vô hình giữa
-            chừng. Nó là absolute so với `.composer` nên không đẩy layout. */}
-        {shouldShowJump({ atBottom, visibleCount: visible.length }) && (
-          <button
-            type="button"
-            class="jump-latest"
-            onClick={jumpToLatest}
-            aria-label={unseen > 0 ? `Jump to the latest message — ${unseen} new` : "Jump to the latest message"}
-          >
-            <ChevronDownIcon size={14} />
-            {/* aria-live: số "N tin mới" tăng lên là thông tin duy nhất báo
-                cho người đọc bằng screen reader rằng có tin mới — không có nó
-                thì nút đổi accessible name mà không ai được báo. */}
-            <span aria-live="polite">{jumpLabel(unseen)}</span>
-          </button>
-        )}
-      </div>
+      <ChatComposer
+        models={models}
+        model={model}
+        modelsLoading={modelsLoading}
+        onModelChange={changeModel}
+        effort={effort}
+        onEffortChange={setEffort}
+        agents={agents}
+        agent={agent}
+        onAgentChange={changeAgent}
+        todo={todo}
+        editing={editing}
+        onCancelEdit={() => {
+          setEditing(null);
+          setDraft("");
+        }}
+        commands={commands}
+        onCommand={(c) => {
+          setDraft("");
+          run("command", async () => {
+            await owRunCommand(wsId, sessionId, { command: c.name });
+          });
+        }}
+        draft={draft}
+        onDraft={setDraft}
+        attached={attached}
+        onPickFiles={pickFiles}
+        onRemoveAttached={(a) => setAttached((prev) => prev.filter((x) => x !== a))}
+        sending={sending}
+        busy={busy}
+        aborting={aborting}
+        onSend={send}
+        onAbort={abort}
+        showJump={shouldShowJump({ atBottom, visibleCount: visible.length })}
+        unseen={unseen}
+        onJump={jumpToLatest}
+      />
 
       {menu && (
         <MessageActionSheet
