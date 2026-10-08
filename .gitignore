@@ -61,6 +61,11 @@ worker/.wrangler/
 # Mimosa security-scan plugin: per-session hook state + scan metadata (machine-local)
 .mimosa/
 
+# draft to GitHub Support about purging force-pushed commits. It quotes the real
+# name and the exact SHAs, so it is evidence for one support ticket — never
+# something the published repo should carry.
+docs/github-support-request-remove-dangling-commits.md
+
 # GUI test build manifest (asInvoker copy for runtime testing)
 desktop/src/app-test.manifest
 OpenPocket-Setup.exe
