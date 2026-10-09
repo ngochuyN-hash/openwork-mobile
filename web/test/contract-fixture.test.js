@@ -105,3 +105,15 @@ test("contract: sse.js cũng đi qua contract — không còn literal header tr�
   );
   assert.ok(!sseSrc.includes(`"${HEADER_TENANT}"`), "sse.js còn literal header ngoài contract");
 });
+
+test("contract: web chuẩn hoá phòng qua normalizeTenant — không còn luật riêng", () => {
+  // Divergence sống 09/10: màn login từng strip [^a-z0-9-] TRÊN CẢ rule của
+  // contract, api.js tự chép trim+lowercase — phòng có dấu cách/underscore
+  // chuẩn hoá khác nhau giữa web và worker → tra KV trượt im lặng. Giờ cả hai
+  // file phải import normalizeTenant và không ai được luật riêng nữa.
+  for (const rel of [join("web", "src", "api.js"), join("web", "src", "pages", "pairing.jsx")]) {
+    const src = readFileSync(join(ROOT, rel), "utf8");
+    assert.ok(src.includes("normalizeTenant"), `${rel} phải dùng normalizeTenant của contract`);
+    assert.ok(!/\[\^a-z0-9-\]/.test(src), `${rel} còn luật strip phòng riêng ngoài contract`);
+  }
+});

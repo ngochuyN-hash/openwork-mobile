@@ -5,7 +5,7 @@ import { buildPromptModelFields } from "./lib/model-behavior.js";
 import { parseHashParam } from "./lib/route.js";
 import { blobCacheKey, createBlobCache, parseBlobCacheKey } from "./lib/blob-cache.js";
 import { withTimeoutSignal } from "./lib/net.js";
-import { HEADER_TENANT, MASTER_TOKEN_HASH, PAIR_CODE_HASH } from "../../shared/contract.js";
+import { HEADER_TENANT, MASTER_TOKEN_HASH, PAIR_CODE_HASH, normalizeTenant } from "../../shared/contract.js";
 
 const TOKEN_KEY = "owm_token";
 // Multi-tenant: "phòng" = máy đang kết nối. Lưu kèm token; mọi request kèm
@@ -40,7 +40,7 @@ export function getTenantName() {
 }
 
 export function setTenant(id, name = "") {
-  const clean = String(id ?? "").trim().toLowerCase();
+  const clean = normalizeTenant(id);
   if (!clean) return;
   localStorage.setItem(TENANT_KEY, clean);
   if (name && name !== clean) localStorage.setItem(TENANT_NAME_KEY, name);
@@ -57,10 +57,6 @@ export function clearTenant() {
 // đúng máy ấy nên cầm cả chùm cũng không mở được máy của người khác. Chìa
 // active vẫn nằm ở owm_token/owm_tenant để toàn bộ app cũ đọc như trước.
 const KEYS_KEY = "owm_keys";
-
-function cleanTenantId(id) {
-  return String(id ?? "").trim().toLowerCase();
-}
 
 function loadKeys() {
   migrateKeys();
@@ -85,7 +81,7 @@ export function migrateKeys() {
     if (localStorage.getItem(KEYS_KEY)) return;
     const token = localStorage.getItem(TOKEN_KEY);
     if (!token) return;
-    const tenant = cleanTenantId(localStorage.getItem(TENANT_KEY));
+    const tenant = normalizeTenant(localStorage.getItem(TENANT_KEY));
     saveKeys([
       {
         tenant,
@@ -100,7 +96,7 @@ export function migrateKeys() {
 /** Thêm/cập nhật chìa: trùng tenant = thay chìa mới (máy cấp khóa mới), không
  * nhân đôi thẻ máy. tenant rỗng = máy chính (luồng master không phòng). */
 export function addKey({ tenant, token, name = "" }) {
-  const clean = cleanTenantId(tenant);
+  const clean = normalizeTenant(tenant);
   const keys = loadKeys().filter((k) => k.tenant !== clean);
   keys.unshift({ tenant: clean, token, name: String(name ?? "").trim() || clean || "PC", addedAt: Date.now() });
   saveKeys(keys);
@@ -110,7 +106,7 @@ export function addKey({ tenant, token, name = "" }) {
  * thì dọn token (App sẽ về màn đăng nhập). Trả về true nếu máy bị xóa là máy
  * đang active — caller cần refresh. */
 export function removeKey(tenant) {
-  const clean = cleanTenantId(tenant);
+  const clean = normalizeTenant(tenant);
   const keys = loadKeys().filter((k) => k.tenant !== clean);
   saveKeys(keys);
   // Blob cache là bytes của MÁY vừa gỡ (ảnh/PDF đã tải về). Xoá KHÔNG có điều
@@ -119,7 +115,7 @@ export function removeKey(tenant) {
   // phí (ảnh đang xem tải lại) nhưng lấy lại chỉ một nhịp; còn sót thì vừa giữ
   // RAM điện thoại vừa giữ nội dung của máy đã gỡ.
   clearBlobUrls();
-  if (cleanTenantId(getTenant()) !== clean) return false;
+  if (normalizeTenant(getTenant()) !== clean) return false;
   const next = keys[0];
   if (next) {
     setToken(next.token);
@@ -218,7 +214,7 @@ export async function apiRevokeDevice(id) {
 function authHeadersFor(token, tenant, extra = {}) {
   const headers = { ...extra };
   if (token) headers["authorization"] = `Bearer ${token}`;
-  const clean = cleanTenantId(tenant);
+  const clean = normalizeTenant(tenant);
   if (clean) headers[HEADER_TENANT] = clean;
   return headers;
 }

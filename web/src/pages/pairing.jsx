@@ -2,7 +2,13 @@ import { useEffect, useState } from "preact/hooks";
 import { setToken, setTenant, apiPair, pairingCodeFromHash } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 import { OpenWorkMark } from "../components/logo.jsx";
-import { ErrorCode, MASTER_TOKEN_HASH, TENANT_HASH_KEY, TOKEN_PREFIX_SOURCE } from "../../../shared/contract.js";
+import {
+  ErrorCode,
+  MASTER_TOKEN_HASH,
+  TENANT_HASH_KEY,
+  TOKEN_PREFIX_SOURCE,
+  normalizeTenant,
+} from "../../../shared/contract.js";
 
 // Roomless key/QR: the worker refuses every roomless web entry with
 // 400 tenant_required — the message must only name paths that still exist
@@ -51,7 +57,7 @@ export function PairingScreen({ onPaired }) {
     if (fromLink?.[1]) {
       return {
         token: decodeURIComponent(fromLink[1]),
-        tenant: fromLink[2] ? decodeURIComponent(fromLink[2]).trim().toLowerCase() : "",
+        tenant: fromLink[2] ? normalizeTenant(decodeURIComponent(fromLink[2])) : "",
       };
     }
     const bare = text.replace(/\s+/g, "");
@@ -67,10 +73,11 @@ export function PairingScreen({ onPaired }) {
     }
     // The room box only backfills a BARE key (no &m=): a full master link
     // already carries its room and wins over what is typed here.
-    const typedRoom = room
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, "");
+    // normalizeTenant is the CONTRACT rule (worker/bridge use the same one) —
+    // this screen once stripped every non-alphanumeric character on top, so a
+    // room containing a space or underscore normalized differently here than
+    // on the worker and the lookup silently missed. One rule, three layers.
+    const typedRoom = normalizeTenant(room);
     if (!parsed.tenant && typedRoom) parsed.tenant = typedRoom;
     setBusy(true);
     setError("");
@@ -83,7 +90,7 @@ export function PairingScreen({ onPaired }) {
         const payload = await res.json().catch(() => null);
         if (payload?.code === ErrorCode.TENANT_REQUIRED) throw new Error(TENANT_HINT);
         if (!res.ok) throw new Error(payload?.message ?? `HTTP ${res.status}`);
-        parsed.tenant = String(payload?.edge?.tenant ?? "").trim().toLowerCase();
+        parsed.tenant = normalizeTenant(payload?.edge?.tenant);
         if (!parsed.tenant) throw new Error("This machine has no room configured — use the 8-character pairing code.");
       }
       setToken(parsed.token);
