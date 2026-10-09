@@ -1,5 +1,9 @@
 # CODE_SUMMARY — OpenWork Mobile
 
+## The QR ASCII format is pinned by a golden test — 2026-10-09 (bridge only)
+
+Round 4 candidate 8 (speculative as a module change, obvious as a pin): the desktop exe's `ParseDataModules` (`PairingQrDialog.cs`) decodes the vendored qrcode-terminal half-block format — `' '` = two black cells, `▀`/`▄` half cells, `█` = white, `▄` top border, `█` side rails — knowledge living in two languages with nothing connecting them; a vendor swap or palette tweak would make the C# decode return null and the GUI's QR frame go permanently blank, discoverable only by holding a phone up to the screen. `bridge/test/qr-vendor-golden.test.js` renders a fixed input and pins: determinism (byte-identical across runs), the palette + border structure, a full decode mirroring the C# (including the edge case that an odd module count has NO bottom border row — the test got this wrong first and the render itself corrected it) asserting all three 7×7 finder patterns, and a cross-language check that both the C# switch and the vendor palette still carry the same four characters. Bridge **145/145**.
+
 ## chat.jsx sheds three more pure modules (models catalog, SSE router, outgoing message) — 2026-10-09 (web only)
 
 Round 4's top recommendation, cut in stages: the pure logic inside the 286-line mega-effect and the 145-line `send()` now lives in lib, each with its own test —
