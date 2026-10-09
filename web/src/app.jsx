@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "preact/hooks";
-import { getToken, apiState, apiWakeOpenWork, apiRecheck, apiOpenWorkPath } from "./api.js";
+import { apiState, apiWakeOpenWork, apiRecheck, apiOpenWorkPath } from "./api.js";
+import { getToken } from "./lib/identity-store.js";
 import { parseHashRoute } from "./lib/route.js";
 import { networkErrorMessage } from "./lib/net.js";
 import { BackIcon, WsIcon, GearIcon, MessageIcon } from "./components/icons.jsx";

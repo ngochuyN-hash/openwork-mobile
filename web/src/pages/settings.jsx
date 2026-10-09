@@ -1,10 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import {
-  getTenant,
-  getTenantName,
-  getToken,
-  removeKey,
-  notifyKeysChanged,
   apiRecheck,
   apiDevices,
   apiRevokeDevice,
@@ -14,9 +9,11 @@ import {
   apiRestartTunnel,
   apiSetMachineName,
   ow,
-  unwrap,
   owEngineReloadAll,
 } from "../api.js";
+import { getTenant, getTenantName, getToken } from "../lib/identity-store.js";
+import { notifyKeysChanged, removeKey } from "../lib/keyring.js";
+import { unwrap } from "../lib/format.js";
 import {
   formatPairingCountdown,
   pairingDeadline,
@@ -390,7 +387,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       body: "This phone will forget the connected computer. To connect again, get a new pairing code in OpenPocket on your computer.",
       confirmLabel: "Unpair",
       onConfirm: () => {
-        removeKey(tenant); // dọn khóa khỏi chùm, hết chùm thì dọn luôn token
+        removeKey(tenant); // dọn khóa khỏi chùm (và blob của máy ấy), hết chùm thì dọn luôn token
         notifyKeysChanged();
         if (getToken()) {
           onRecheck();

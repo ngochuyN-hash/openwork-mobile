@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
 import {
-  ow, unwrap, owUploadFile, formatBytes,
+  ow, owUploadFile,
   owAgents, owCommands, owQuestions, owReplyQuestion, owRejectQuestion,
   owRevert, owUnrevert, owFork, owDeleteMessage, owRunCommand, owTodo,
   owRenameSession, owPrompt, owSummarize, owShareSession, owUnshareSession,
 } from "../api.js";
+import { formatBytes, unwrap } from "../lib/format.js";
 import { connectEvents } from "../lib/sse.js";
 import { OW_PROXY_PREFIX } from "../../../shared/contract.js";
 import { createChatStream, mergeRefetchKeepInflight } from "../lib/chat-stream.js";

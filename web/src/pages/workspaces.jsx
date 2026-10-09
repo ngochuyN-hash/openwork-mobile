@@ -1,5 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
-import { apiFsList, apiFsMkdir, ow, unwrap } from "../api.js";
+import { apiFsList, apiFsMkdir, ow } from "../api.js";
+import { unwrap } from "../lib/format.js";
 import { navigate } from "../app.jsx";
 import { FolderIcon, WsIcon } from "../components/icons.jsx";
 import { Banner, Empty, Loading } from "../components/ui.jsx";

@@ -33,7 +33,13 @@ globalThis.location = { hash: "", pathname: "/", search: "" };
 globalThis.history = { replaceState() {} };
 globalThis.window = globalThis;
 
-const api = await import("../src/api.js");
+// Round 4 tách api.js: chìa/phòng ở lib/identity-store, chùm chìa ở lib/keyring
+// — test vẫn thao tác qua MỘT namespace `api` như trước.
+const api = {
+  ...(await import("../src/lib/identity-store.js")),
+  ...(await import("../src/lib/keyring.js")),
+  ...(await import("../src/api.js")),
+};
 
 const readKeys = () => JSON.parse(localStorage.getItem("owm_keys") ?? "null");
 

@@ -1,6 +1,6 @@
 import { render } from "preact";
 import { App } from "./app.jsx";
-import { absorbTokenFromHash } from "./api.js";
+import { absorbTokenFromHash } from "./lib/identity-store.js";
 import "./styles.css";
 
 // Tự pair nếu mở từ link/QR dạng .../#t=<token>, rồi render app.

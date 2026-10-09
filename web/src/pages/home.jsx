@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { ow, owDeleteSession, unwrap, timeAgo } from "../api.js";
+import { ow, owDeleteSession } from "../api.js";
+import { timeAgo, unwrap } from "../lib/format.js";
 import { navigate } from "../app.jsx";
 import { Banner, Empty, SkeletonList, SwipeRow } from "../components/ui.jsx";
 import { SearchIcon } from "../components/icons.jsx";

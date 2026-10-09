@@ -1,5 +1,16 @@
 # CODE_SUMMARY — OpenWork Mobile
 
+## api.js is transport-only: identity store, keyring, formatters and the blob cache move to lib — 2026-10-09 (web only)
+
+Architecture-review round 4 flagged `web/src/api.js` (779 lines, ~40 exports) as a deep transport core wearing three unrelated pockets: a multi-machine keyring, a blob LRU, and formatters. The pockets now live where their name says:
+
+- **`lib/identity-store.js`** — `owm_token`/`owm_tenant`/`owm_tenant_name` accessors + the hash intakes (`absorbTokenFromHash`, `pairingCodeFromHash`). Room strings normalize through the contract's `normalizeTenant`.
+- **`lib/keyring.js`** — the `owm_keys` keyring (`migrateKeys`/`addKey`/`removeKey`/`notifyKeysChanged`). `removeKey` KEEPS the clear-the-blob-cache invariant (a removed machine's image/PDF bytes must die) — it imports `clearBlobUrls` from `lib/blob-preview.js`, forming a deliberate ESM cycle keyring → blob-preview → api.js → keyring where every cross-cycle name is only touched at call time.
+- **`lib/format.js`** — pure `unwrap`/`timeAgo`/`formatBytes`/`bytesToBase64`/`filenameFromDisposition`; lib modules no longer need to import the fetch client.
+- **`lib/blob-preview.js`** — the configured blob LRU instance (`blobUrlFor`/`clearBlobUrls`); it uses `ow()` one-way, so api.js imports nothing back.
+
+`api.js` keeps exactly one job: `ow()` transport + the `api*`/`ow*` wrappers + `owDownload`/`owUploadFile`. All import sites updated (8 pages/components, sse.js, main.jsx, 5 test files — the tests merge the moved namespaces back into one `api` object so their assertions are unchanged). Behavior identical; the one visible seam is `unpair` in Settings, which now reaches `clearBlobUrls` through `removeKey` itself. Verified: web **446/446**, `vite build` clean.
+
 ## One source for cross-tier API paths and security headers — 2026-10-09 (shared + web + bridge + worker + desktop)
 
 Architecture-review round 4 (report lives outside the repo) closed two more "same knowledge, typed by hand" seams:

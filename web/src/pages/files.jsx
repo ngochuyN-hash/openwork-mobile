@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { ow, unwrap, blobUrlFor, owDownload, owUploadFile, formatBytes, bytesToBase64 } from "../api.js";
+import { ow, owDownload, owUploadFile } from "../api.js";
+import { bytesToBase64, formatBytes, unwrap } from "../lib/format.js";
+import { blobUrlFor } from "../lib/blob-preview.js";
 import { DownloadIcon, FileIcon, FolderIcon, ImageIcon, RefreshIcon, UploadIcon } from "../components/icons.jsx";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
 import {

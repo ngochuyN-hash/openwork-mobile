@@ -1,5 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
-import { setToken, setTenant, apiPair, pairingCodeFromHash } from "../api.js";
+import { apiPair } from "../api.js";
+import { pairingCodeFromHash, setTenant, setToken } from "../lib/identity-store.js";
 import { Banner } from "../components/ui.jsx";
 import { OpenWorkMark } from "../components/logo.jsx";
 import {

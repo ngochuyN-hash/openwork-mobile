@@ -7,7 +7,7 @@
 //  - tự bóc `type` từ JSON: engine opencode phát event KHÔNG TÊN trên dòng
 //  `data:` (EventSource của bản cũ không nghe được mấy dòng này)
 import { HEADER_TENANT } from "../../../shared/contract.js";
-import { getToken, getTenant } from "../api.js";
+import { getToken, getTenant } from "./identity-store.js";
 
 function headersFor() {
   const token = getToken();

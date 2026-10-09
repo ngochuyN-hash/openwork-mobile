@@ -1,180 +1,26 @@
-// API client: same-origin với bridge. Token pairing lưu ở localStorage.
+// API client: same-origin với bridge. Chìa + phòng đang active sống ở
+// lib/identity-store.js, chùm nhiều máy ở lib/keyring.js, helper format ở
+// lib/format.js — file này còn đúng một nghề: transport (fetch, timeout, auth
+// headers, blob preview) và các wrapper gọi API.
 import { normalizeSessionTitle } from "./lib/session-rename.js";
 import { buildSummarizeBody, summarizePath } from "./lib/session-compact.js";
 import { buildPromptModelFields } from "./lib/model-behavior.js";
-import { parseHashParam } from "./lib/route.js";
-import { blobCacheKey, createBlobCache, parseBlobCacheKey } from "./lib/blob-cache.js";
 import { withTimeoutSignal } from "./lib/net.js";
+import { getTenant, getTenantName, getToken } from "./lib/identity-store.js";
+import { addKey } from "./lib/keyring.js";
+import { filenameFromDisposition, unwrap } from "./lib/format.js";
 import {
   BRIDGE_ROUTES,
   HEADER_TENANT,
-  MASTER_TOKEN_HASH,
   OW_PROXY_PREFIX,
-  PAIR_CODE_HASH,
   normalizeTenant,
 } from "../../shared/contract.js";
-
-const TOKEN_KEY = "owm_token";
-// Multi-tenant: "phòng" = máy đang kết nối. Lưu kèm token; mọi request kèm
-// header x-owm-tenant (worker dùng để chọn đúng bridge), SSE dùng ?_m=.
-const TENANT_KEY = "owm_tenant";
-const TENANT_NAME_KEY = "owm_tenant_name";
 
 // Trần chờ cho request qua tunnel. Engine desktop dùng 10s cho request không
 // phải stream (app/lib/opencode.ts:44); web đi qua thêm 2 chặng (worker ->
 // cloudflared -> bridge) nên để rộng hơn, nhưng KHÔNG để vô hạn — fetch tới
 // tunnel treo không tự hết và UI sẽ kẹt vĩnh viễn ở "đang tải".
 const OW_TIMEOUT_MS = 30_000;
-
-export function getToken() {
-  return localStorage.getItem(TOKEN_KEY) ?? "";
-}
-
-export function setToken(token) {
-  localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY);
-}
-
-export function getTenant() {
-  return localStorage.getItem(TENANT_KEY) ?? "";
-}
-
-export function getTenantName() {
-  return localStorage.getItem(TENANT_NAME_KEY) || getTenant();
-}
-
-export function setTenant(id, name = "") {
-  const clean = normalizeTenant(id);
-  if (!clean) return;
-  localStorage.setItem(TENANT_KEY, clean);
-  if (name && name !== clean) localStorage.setItem(TENANT_NAME_KEY, name);
-  else localStorage.removeItem(TENANT_NAME_KEY);
-}
-
-export function clearTenant() {
-  localStorage.removeItem(TENANT_KEY);
-  localStorage.removeItem(TENANT_NAME_KEY);
-}
-
-// ---- Chùm chìa nhiều máy ("mục PC" kiểu 9remote) ----
-// Mỗi chìa là khóa owd_ do MỘT máy cấp — hash chỉ nằm trong devices.json của
-// đúng máy ấy nên cầm cả chùm cũng không mở được máy của người khác. Chìa
-// active vẫn nằm ở owm_token/owm_tenant để toàn bộ app cũ đọc như trước.
-const KEYS_KEY = "owm_keys";
-
-function loadKeys() {
-  migrateKeys();
-  try {
-    const parsed = JSON.parse(localStorage.getItem(KEYS_KEY) ?? "null");
-    if (Array.isArray(parsed)) return parsed.filter((k) => k && typeof k.token === "string");
-  } catch {}
-  return [];
-}
-
-function saveKeys(keys) {
-  localStorage.setItem(KEYS_KEY, JSON.stringify(keys));
-}
-
-// One-time migration: an old install kept exactly one key — load it into the
-// keyring so nobody has to sign in again after updating. Runs lazily on the
-// first keyring read instead of at import time (importing this module in bare
-// Node must not touch localStorage — that is what makes it unit-testable) and
-// is a no-op once owm_keys exists, so calling it repeatedly is safe.
-export function migrateKeys() {
-  try {
-    if (localStorage.getItem(KEYS_KEY)) return;
-    const token = localStorage.getItem(TOKEN_KEY);
-    if (!token) return;
-    const tenant = normalizeTenant(localStorage.getItem(TENANT_KEY));
-    saveKeys([
-      {
-        tenant,
-        token,
-        name: localStorage.getItem(TENANT_NAME_KEY) || tenant || "PC",
-        addedAt: Date.now(),
-      },
-    ]);
-  } catch {}
-}
-
-/** Thêm/cập nhật chìa: trùng tenant = thay chìa mới (máy cấp khóa mới), không
- * nhân đôi thẻ máy. tenant rỗng = máy chính (luồng master không phòng). */
-export function addKey({ tenant, token, name = "" }) {
-  const clean = normalizeTenant(tenant);
-  const keys = loadKeys().filter((k) => k.tenant !== clean);
-  keys.unshift({ tenant: clean, token, name: String(name ?? "").trim() || clean || "PC", addedAt: Date.now() });
-  saveKeys(keys);
-}
-
-/** Xóa chìa. Nếu đúng máy đang active: tự thăng máy khác làm active, hết chìa
- * thì dọn token (App sẽ về màn đăng nhập). Trả về true nếu máy bị xóa là máy
- * đang active — caller cần refresh. */
-export function removeKey(tenant) {
-  const clean = normalizeTenant(tenant);
-  const keys = loadKeys().filter((k) => k.tenant !== clean);
-  saveKeys(keys);
-  // Blob cache là bytes của MÁY vừa gỡ (ảnh/PDF đã tải về). Xoá KHÔNG có điều
-  // kiện "có phải máy active không": gỡ một máy khác trong chùm cũng là app quên
-  // một máy đã từng cấp chìa, blob của nó không nên sống tiếp. Xoá hết thì hơi
-  // phí (ảnh đang xem tải lại) nhưng lấy lại chỉ một nhịp; còn sót thì vừa giữ
-  // RAM điện thoại vừa giữ nội dung của máy đã gỡ.
-  clearBlobUrls();
-  if (normalizeTenant(getTenant()) !== clean) return false;
-  const next = keys[0];
-  if (next) {
-    setToken(next.token);
-    // setTenant("") cố ý KHÔNG ghi — nhưng cũng không XOÁ được phòng cũ đã
-    // nằm trong storage. Thăng lên máy chính (phòng rỗng) mà để lại
-    // owm_tenant của phòng vừa gỡ thì mọi request đi nhầm phòng → 401/503
-    // liên miên dù khóa đúng. Phải dọn phòng TRƯỚC rồi mới set lại.
-    clearTenant();
-    setTenant(next.tenant, next.name);
-  } else {
-    clearToken();
-    clearTenant();
-  }
-  return true;
-}
-
-/** Báo App biết chùm chìa đổi (xóa chìa máy active có thể đổi trạng thái paired). */
-export function notifyKeysChanged() {
-  window.dispatchEvent(new CustomEvent("owm:keys"));
-}
-
-// Bóc giá trị từ hash dạng #<key>=GIÁ_TRỊ[&m=PHÒNG], xóa hash sau khi đọc.
-// Việc decode/parse nằm ở lib/route.js (thuần, test được); chỗ này giữ phần
-// đụng trình duyệt. `decodeURIComponent` trên hash hỏng từng ném URIError ra
-// giữa lúc main.jsx import module — app trắng màn.
-function readHashParam(key) {
-  const parsed = parseHashParam(location.hash, key);
-  if (!parsed) return null;
-  history.replaceState(null, "", location.pathname + location.search);
-  return parsed;
-}
-
-// Auto-pairing kiểu cũ (master token trong #t=) — vẫn giữ làm đường dự phòng.
-export function absorbTokenFromHash() {
-  const parsed = readHashParam(MASTER_TOKEN_HASH);
-  if (parsed?.value) {
-    setToken(parsed.value);
-    if (parsed.tenant) setTenant(parsed.tenant);
-    return true;
-  }
-  return false;
-}
-
-// Mã one-time từ QR/link dạng .../#p=<code>&m=<phòng> — màn pairing sẽ tự ghép.
-export function pairingCodeFromHash() {
-  const parsed = readHashParam(PAIR_CODE_HASH);
-  if (parsed?.value) {
-    if (parsed.tenant) setTenant(parsed.tenant);
-    return parsed.value;
-  }
-  return "";
-}
 
 /** Ghép thiết bị bằng mã 30 phút → nhận khóa vĩnh viễn owd_... */
 export async function apiPair(code, label) {
@@ -626,97 +472,10 @@ export async function owDownload(wsId, path, { onProgress, signal, fallbackName 
   return { blob: new Blob(chunks, type ? { type } : undefined), filename };
 }
 
-/** Bóc tên file từ header content-disposition (ưu tiên filename* UTF-8).
- * Exported (pure helper) so the content-disposition rules stay unit-testable. */
-export function filenameFromDisposition(header) {
-  if (!header) return "";
-  const star = /filename\*\s*=\s*(?:UTF-8''|utf-8'')?([^;]+)/i.exec(header);
-  if (star?.[1]) {
-    try {
-      return decodeURIComponent(String(star[1]).trim().replace(/^"|"$/g, ""));
-    } catch {
-      return String(star[1]).trim().replace(/^"|"$/g, "");
-    }
-  }
-  const plain = /filename\s*=\s*"?([^";]+)"?/i.exec(header);
-  return plain?.[1]?.trim() ?? "";
-}
-
 function guessName(path) {
   const clean = String(path ?? "").replace(/[\\/]+$/, "");
   const cut = Math.max(clean.lastIndexOf("/"), clean.lastIndexOf("\\"));
   return clean.slice(cut + 1) || "download";
-}
-
-// ---- Blob URL cho <img>/<iframe> (không dán token lên URL) ----
-//
-// `<img src>` và `<iframe src>` không set được header Authorization. Bản cũ dán
-// token vào query `?_t=` cho chúng — token đó lọt vào history trình duyệt, vào
-// Referer của mọi request sau, và vào log của worker/cloudflared/bridge. Nay mọi
-// request đi bằng header; riêng hai thẻ kia thì fetch bằng header rồi gắn
-// `blob:`. `sseUrl()` (dán `?_t=`) đã bỏ hẳn.
-const blobCache = createBlobCache({
-  create: async (key) => {
-    const { wsId, path } = parseBlobCacheKey(key);
-    const res = await ow(`/workspace/${encodeURIComponent(wsId)}/files/raw?path=${encodeURIComponent(path)}`, {
-      raw: true,
-    });
-    if (!res.ok) {
-      let detail = "";
-      try {
-        detail = (await res.json())?.message ?? "";
-      } catch {
-        /* body không phải JSON — giữ HTTP status */
-      }
-      throw new Error(detail || `HTTP ${res.status}`);
-    }
-    const blob = await res.blob();
-    return { url: URL.createObjectURL(blob), bytes: blob.size };
-  },
-  revoke: (url) => URL.revokeObjectURL(url),
-});
-
-/**
- * Object URL để xem trước 1 file (ảnh, PDF). Auth đi qua header nên token không
- * bao giờ lên URL. Cache LRU theo byte nên mở lại file vừa xem là tức thì.
- */
-export function blobUrlFor(wsId, path) {
-  if (!wsId || !path) return Promise.resolve("");
-  return blobCache.load(blobCacheKey(wsId, path));
-}
-
-/** Xoá cache blob (gỡ pairing: bytes của máy cũ không còn ý nghĩa). */
-export function clearBlobUrls() {
-  blobCache.clear();
-}
-
-// ---- Helpers chuẩn hóa shape openwork/opencode (có / không có wrapper .data)
-
-/**
- * Bóc wrapper `{data: ...}` của engine.
- *
- * `{data: null}` vẫn trả `null` (không đổi so với bản cũ) vì hàng chục chỗ gọi
- * kiểu `unwrap(p) ?? []` / `unwrap(p) ?? p ?? {}` — trả về chính envelope ở đây
- * làm `.map`/`sortByUpdated` nổ trên object. Chỗ thật sự hỏng trước đây là
- * `data: undefined`: `"data" in payload` khớp rồi trả `undefined`, mất trắng
- * luôn object. Mảng đi qua nguyên vẹn (`"data" in []` là false với mảng rỗng
- * nhưng để rõ ý định thì chặn trước).
- */
-export function unwrap(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (payload && typeof payload === "object" && "data" in payload) {
-    return payload.data === undefined ? payload : payload.data;
-  }
-  return payload;
-}
-
-export function timeAgo(ts) {
-  if (!ts) return "";
-  const delta = Date.now() - ts;
-  if (delta < 60_000) return "just now";
-  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} min ago`;
-  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} hr ago`;
-  return `${Math.floor(delta / 86_400_000)} days ago`;
 }
 
 // ---- File hai chiều (điện thoại <-> workspace) ----

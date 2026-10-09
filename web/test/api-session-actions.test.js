@@ -33,7 +33,11 @@ globalThis.location = { hash: "", pathname: "/", search: "" };
 globalThis.history = { replaceState() {} };
 globalThis.window = globalThis;
 
-const api = await import("../src/api.js");
+// Round 4 tách api.js: unwrap dời sang lib/format — gộp lại một namespace.
+const api = {
+  ...(await import("../src/lib/format.js")),
+  ...(await import("../src/api.js")),
+};
 
 beforeEach(() => {
   globalThis.localStorage = createStorageShim();

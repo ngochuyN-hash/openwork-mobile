@@ -33,7 +33,16 @@ globalThis.location = { hash: "", pathname: "/", search: "" };
 globalThis.history = { replaceState() {} };
 globalThis.window = globalThis;
 
-const api = await import("../src/api.js");
+// Round 4 tách api.js: identity-store (chìa/phòng), keyring (removeKey),
+// format (unwrap, filenameFromDisposition), blob-preview (blobUrlFor) — gộp lại
+// một namespace.
+const api = {
+  ...(await import("../src/lib/identity-store.js")),
+  ...(await import("../src/lib/keyring.js")),
+  ...(await import("../src/lib/format.js")),
+  ...(await import("../src/lib/blob-preview.js")),
+  ...(await import("../src/api.js")),
+};
 
 beforeEach(() => {
   globalThis.localStorage = createStorageShim();

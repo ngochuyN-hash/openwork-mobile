@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { ow, owDeleteSession, unwrap, timeAgo } from "../api.js";
+import { ow, owDeleteSession } from "../api.js";
+import { timeAgo, unwrap } from "../lib/format.js";
 import { connectEvents } from "../lib/sse.js";
 import { OW_PROXY_PREFIX } from "../../../shared/contract.js";
 import {

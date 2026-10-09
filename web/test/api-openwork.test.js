@@ -31,7 +31,11 @@ globalThis.location = { hash: "", pathname: "/", search: "" };
 globalThis.history = { replaceState() {} };
 globalThis.window = globalThis;
 
-const api = await import("../src/api.js");
+// Round 4 tách api.js: setToken/setTenant dời sang lib/identity-store — gộp lại.
+const api = {
+  ...(await import("../src/lib/identity-store.js")),
+  ...(await import("../src/api.js")),
+};
 
 beforeEach(() => {
   globalThis.localStorage = createStorageShim();

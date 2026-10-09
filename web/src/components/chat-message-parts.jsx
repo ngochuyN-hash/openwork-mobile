@@ -2,7 +2,8 @@
 // ChatPage chỉ còn trạng thái phiên (stream/outbox/permission); phần "vẽ một
 // tin" nằm ở đây. Không logic mới: cut-paste từ chat.jsx, giữ nguyên hành vi.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
-import { blobUrlFor, ow } from "../api.js";
+import { ow } from "../api.js";
+import { blobUrlFor } from "../lib/blob-preview.js";
 import { toolRowView, toolStatusVi, messageErrorOf } from "../lib/session-ops.js";
 import { createMarkdownStream } from "../lib/markdown.js";
 import { collectFileRefs, makeFileHref } from "../lib/chat-file-refs.js";

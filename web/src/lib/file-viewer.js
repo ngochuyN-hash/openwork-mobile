@@ -26,8 +26,8 @@
  */
 export const TEXT_PREVIEW_MAX_BYTES = 8 * 1024 * 1024;
 
-/** Dung lượng kiểu app (bản sao nhỏ của formatBytes ở api.js, để lib này
- *  không phụ thuộc api.js — api.js chạm localStorage, lib thì phải thuần). */
+/** Dung lượng kiểu app (bản sao nhỏ của formatBytes ở lib/format.js, để lib
+ *  này không phụ thuộc module nào — thuần hết). */
 export function humanBytes(bytes) {
   const n = Number(bytes);
   if (!Number.isFinite(n) || n < 0) return "";
