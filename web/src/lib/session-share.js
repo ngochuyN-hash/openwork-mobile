@@ -19,6 +19,7 @@
 //      Phải kiểm link thật rồi mới báo thành công, không báo oan.
 //   3. `navigator.share` chỉ có trên HTTPS/máy có hỗ trợ, và bấm Hủy trên sheet
 //      là AbortError — KHÔNG phải lỗi, đừng hiện banner đỏ.
+import { isUnpaired } from "./net.js";
 
 /** Link chia sẻ đã bật, hoặc "" (chưa bật / phiên không có `share`). */
 export function shareUrlOf(session) {
@@ -59,7 +60,7 @@ export function parseShareResponse(payload, { unshare = false } = {}) {
 /** Lỗi của endpoint share -> một câu tiếng Việt đọc được (không lộ HTTP thô). */
 export function shareError(error) {
   const message = String(error?.message ?? error ?? "");
-  if (message === "UNPAIRED") {
+  if (isUnpaired(error)) {
     return "Computer not paired yet — open the app on your computer to pair, then try again.";
   }
   const status = Number(error?.status ?? 0);

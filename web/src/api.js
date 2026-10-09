@@ -5,7 +5,7 @@
 import { normalizeSessionTitle } from "./lib/session-rename.js";
 import { buildSummarizeBody, summarizePath } from "./lib/session-compact.js";
 import { buildPromptModelFields } from "./lib/model-behavior.js";
-import { withTimeoutSignal } from "./lib/net.js";
+import { errorSentence, unpairedError, withTimeoutSignal } from "./lib/net.js";
 import { getTenant, getTenantName, getToken } from "./lib/identity-store.js";
 import { addKey } from "./lib/keyring.js";
 import { filenameFromDisposition, unwrap } from "./lib/format.js";
@@ -52,7 +52,7 @@ export async function apiPair(code, label) {
 
 export async function apiDevices() {
   const res = await fetch(BRIDGE_ROUTES.devices, { headers: authHeaders() });
-  if (res.status === 401) throw new Error("UNPAIRED");
+  if (res.status === 401) throw unpairedError();
   if (!res.ok) throw new Error(`devices ${res.status}`);
   return (await res.json()).devices ?? [];
 }
@@ -92,21 +92,21 @@ export async function apiState() {
   } finally {
     guard.release();
   }
-  if (res.status === 401) throw new Error("UNPAIRED");
+  if (res.status === 401) throw unpairedError();
   if (!res.ok) throw new Error(`state ${res.status}`);
   return res.json();
 }
 
 export async function apiRecheck() {
   const res = await fetch(BRIDGE_ROUTES.recheck, { method: "POST", headers: authHeaders() });
-  if (res.status === 401) throw new Error("UNPAIRED");
+  if (res.status === 401) throw unpairedError();
   return res.json();
 }
 
 /** Bật OpenWork desktop trên máy tính (khi máy đang bật mà app chưa mở). */
 export async function apiWakeOpenWork() {
   const res = await fetch(BRIDGE_ROUTES.openworkWake, { method: "POST", headers: authHeaders() });
-  if (res.status === 401) throw new Error("UNPAIRED");
+  if (res.status === 401) throw unpairedError();
   const payload = await res.json().catch(() => null);
   if (!res.ok) {
     const error = new Error(payload?.message ?? `wake ${res.status}`);
@@ -130,7 +130,7 @@ export async function apiOpenWorkPath(path) {
     headers: authHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({ path: String(path ?? "").trim() }),
   });
-  if (res.status === 401) throw new Error("UNPAIRED");
+  if (res.status === 401) throw unpairedError();
   const payload = await res.json().catch(() => null);
   if (!res.ok) throw new Error(payload?.message ?? `path ${res.status}`);
   return payload; // { ok: true, openwork: { found, exe, version, source, candidates } }
@@ -142,7 +142,7 @@ export async function apiOpenWorkPath(path) {
  * trong terminal/GUI trên máy tính, còn mã one-time tự vô hiệu sau 1 lần dùng. */
 export async function apiPairingCode() {
   const res = await fetch(BRIDGE_ROUTES.pairingCode, { headers: authHeaders() });
-  if (res.status === 401) throw new Error("UNPAIRED");
+  if (res.status === 401) throw unpairedError();
   const payload = await res.json().catch(() => null);
   if (!res.ok) throw new Error(payload?.message ?? `pairing-code ${res.status}`);
   return payload;
@@ -154,7 +154,7 @@ export async function apiPairingCode() {
  * không gọi tới được máy — lúc đó phải bấm nút ↻ trên GUI máy tính. */
 export async function apiRestartTunnel() {
   const res = await fetch(BRIDGE_ROUTES.tunnelRestart, { method: "POST", headers: authHeaders() });
-  if (res.status === 401) throw new Error("UNPAIRED");
+  if (res.status === 401) throw unpairedError();
   const payload = await res.json().catch(() => null);
   if (!res.ok) throw new Error(payload?.message ?? `tunnel ${res.status}`);
   return payload; // { ok: true, tunnel: {...} }
@@ -171,7 +171,7 @@ export async function apiSetMachineName(name) {
     headers: authHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({ name: clean }),
   });
-  if (res.status === 401) throw new Error("UNPAIRED");
+  if (res.status === 401) throw unpairedError();
   const payload = await res.json().catch(() => null);
   if (!res.ok) throw new Error(payload?.message ?? `machine ${res.status}`);
   return payload; // { ok: true, machineName }
@@ -182,7 +182,7 @@ export async function apiSetMachineName(name) {
 export async function apiFsList(path) {
   const qs = path ? `?path=${encodeURIComponent(path)}` : "";
   const res = await fetch(`${BRIDGE_ROUTES.fsList}${qs}`, { headers: authHeaders() });
-  if (res.status === 401) throw new Error("UNPAIRED");
+  if (res.status === 401) throw unpairedError();
   const payload = await res.json().catch(() => null);
   if (!res.ok) throw new Error(payload?.message ?? `fs ${res.status}`);
   return payload;
@@ -195,7 +195,7 @@ export async function apiFsMkdir(dir, name) {
     headers: authHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({ dir, name }),
   });
-  if (res.status === 401) throw new Error("UNPAIRED");
+  if (res.status === 401) throw unpairedError();
   const payload = await res.json().catch(() => null);
   if (!res.ok) throw new Error(payload?.message ?? `mkdir ${res.status}`);
   return payload;
@@ -223,7 +223,7 @@ export async function ow(
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: guard?.signal ?? signal,
     });
-    if (res.status === 401) throw new Error("UNPAIRED");
+    if (res.status === 401) throw unpairedError();
     if (raw) return res;
     if (!res.ok) {
       const error = new Error((await errorTextOf(res)) || `HTTP ${res.status}`);
@@ -428,7 +428,7 @@ export async function owEngineReloadAll(wsIds) {
       await ow(`/workspace/${encodeURIComponent(id)}/engine/reload`, { method: "POST" });
       results.push({ wsId: id, ok: true });
     } catch (e) {
-      results.push({ wsId: id, ok: false, error: String(e?.message || e) });
+      results.push({ wsId: id, ok: false, error: errorSentence(e) });
     }
   }
   return results;

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { apiPair } from "../api.js";
 import { pairingCodeFromHash, setTenant, setToken } from "../lib/identity-store.js";
+import { errorSentence } from "../lib/net.js";
 import { Banner } from "../components/ui.jsx";
 import { OpenWorkMark } from "../components/logo.jsx";
 import {
@@ -38,7 +39,7 @@ export function PairingScreen({ onPaired }) {
       onPaired();
     } catch (e) {
       setStatus("");
-      setError(e.code === ErrorCode.TENANT_REQUIRED ? TENANT_HINT : String(e.message || e));
+      setError(e.code === ErrorCode.TENANT_REQUIRED ? TENANT_HINT : errorSentence(e));
     } finally {
       setBusy(false);
     }
@@ -99,7 +100,7 @@ export function PairingScreen({ onPaired }) {
       setTenant(parsed.tenant);
       onPaired();
     } catch (e) {
-      setError(String(e.message || e));
+      setError(errorSentence(e));
     } finally {
       setBusy(false);
       setStatus("");

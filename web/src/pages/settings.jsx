@@ -14,6 +14,7 @@ import {
 import { getTenant, getTenantName, getToken } from "../lib/identity-store.js";
 import { notifyKeysChanged, removeKey } from "../lib/keyring.js";
 import { unwrap } from "../lib/format.js";
+import { UNPAIRED_SENTENCE, errorSentence, isUnpaired } from "../lib/net.js";
 import {
   formatPairingCountdown,
   pairingDeadline,
@@ -171,11 +172,9 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       onRecheck();
     } catch (e) {
       // Tunnel chết / 401 phải báo rõ, không im lặng trả nút về trạng thái cũ.
-      setCheckMsg(
-        e.message === "UNPAIRED"
-          ? "Key is no longer valid (401) — that device revoked this key. Pair again."
-          : `Check failed: ${String(e.message || e)}`
-      );
+      // Một câu cho 401 trên toàn app (UNPAIRED_SENTENCE) — trước đây màn này
+      // còn tự chế một biến thể khác với ba action bên dưới nó.
+      setCheckMsg(isUnpaired(e) ? UNPAIRED_SENTENCE : `Check failed: ${errorSentence(e)}`);
     } finally {
       setBusy(false);
     }
@@ -193,7 +192,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
         setWakeMsg("Launch command sent to OpenWork — wait ~20s then tap Recheck.");
       }
     } catch (e) {
-      setWakeMsg(String(e.message || e));
+      setWakeMsg(errorSentence(e));
       // Không tìm thấy exe: bridge kèm sẵn danh sách đường dẫn nghi vấn — đừng bỏ
       // qua, đưa vào đúng bộ chọn bên dưới để người dùng chỉ được luôn.
       // CỘNG DỒN, không thay thế: bấm "Bật OpenWork" lần thứ hai trả về một danh
@@ -232,7 +231,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     try {
       payload = await apiOpenWorkPath(target);
     } catch (e) {
-      setPathErr(String(e?.message || e));
+      setPathErr(errorSentence(e));
       throw e; // xem JSDoc — không nuốt, component cần rejection để giữ ô gõ
     } finally {
       setSavingPath(false);
@@ -301,7 +300,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       // /api/state về là dòng tên máy tự đổi — không cần banner xác nhận thêm.
       onRecheck();
     } catch (e) {
-      setMachineErr(e.message === "UNPAIRED" ? "Key is no longer valid (401) — pair again to continue." : String(e.message || e));
+      setMachineErr(errorSentence(e));
     } finally {
       setMachineBusy(false);
     }
@@ -314,7 +313,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       await apiRestartTunnel();
       setTunnelMsg("New tunnel requested — wait ~30 seconds then tap Recheck to see the new URL.");
     } catch (e) {
-      setTunnelMsg(e.message === "UNPAIRED" ? "Key is no longer valid (401) — pair again to continue." : String(e.message || e));
+      setTunnelMsg(errorSentence(e));
     } finally {
       setTunnelBusy(false);
     }
@@ -332,7 +331,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       });
       setPairingLeft(p.secondsLeft ?? 0);
     } catch (e) {
-      setPairingErr(e.message === "UNPAIRED" ? "Key is no longer valid (401) — pair again to continue." : String(e.message || e));
+      setPairingErr(errorSentence(e));
     } finally {
       setPairingBusy(false);
     }
@@ -372,7 +371,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
           : `Reloaded the engine of ${okCount} workspaces.`
       );
     } catch (e) {
-      setReloadMsg(String(e.message || e));
+      setReloadMsg(errorSentence(e));
     } finally {
       setReloading(false);
     }

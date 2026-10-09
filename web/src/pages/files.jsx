@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { ow, owDownload, owUploadFile } from "../api.js";
 import { bytesToBase64, formatBytes, unwrap } from "../lib/format.js";
 import { blobUrlFor } from "../lib/blob-preview.js";
+import { errorSentence, isUnpaired } from "../lib/net.js";
 import { DownloadIcon, FileIcon, FolderIcon, ImageIcon, RefreshIcon, UploadIcon } from "../components/icons.jsx";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
 import {
@@ -58,7 +59,7 @@ export function FilesPage({ route }) {
       } catch (e) {
         if (controller.signal.aborted || e?.name === "AbortError") return null;
         if (seq !== loadSeq.current) return null;
-        const msg = String(e.message || e);
+        const msg = errorSentence(e);
         setError(msg);
         setEntries([]);
         return msg; // để caller ghép lỗi của mình vào, không đè mất lỗi nạp
@@ -422,7 +423,7 @@ function FileViewer({ wsEnc, file, onClose }) {
         setEdited(text);
         setError("");
       } catch (e) {
-        if (!cancel) setError(String(e.message || e));
+        if (!cancel) setError(errorSentence(e));
       }
     })();
     return () => {
@@ -451,9 +452,9 @@ function FileViewer({ wsEnc, file, onClose }) {
       },
       (e) => {
         if (cancel) return;
-        const msg = String(e?.message ?? "");
         // UNPAIRED = app mất chìa; App tự xử, đừng báo thêm lỗi file.
-        if (msg !== "UNPAIRED") setError(`Could not open "${file.name}": ${msg || "failed to load"}`);
+        if (isUnpaired(e)) return;
+        setError(`Could not open "${file.name}": ${errorSentence(e) || "failed to load"}`);
       }
     );
     return () => {

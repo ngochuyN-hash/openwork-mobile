@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { ow } from "../api.js";
 import { timeAgo, unwrap } from "../lib/format.js";
+import { errorSentence } from "../lib/net.js";
 import { navigate } from "../app.jsx";
 import { Banner, Empty, SkeletonList } from "../components/ui.jsx";
 import { SearchIcon } from "../components/icons.jsx";
@@ -71,7 +72,7 @@ export function SearchPage({ route }) {
       setError("");
     } catch (e) {
       if (seq !== loadSeq.current) return;
-      setError(String(e.message || e));
+      setError(errorSentence(e));
       setRows([]);
     }
   }, [wsId]);

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "preact/hooks";
 import { apiState, apiWakeOpenWork, apiRecheck, apiOpenWorkPath } from "./api.js";
 import { getToken } from "./lib/identity-store.js";
 import { parseHashRoute } from "./lib/route.js";
-import { networkErrorMessage } from "./lib/net.js";
+import { errorSentence, isUnpaired, networkErrorMessage } from "./lib/net.js";
 import { BackIcon, WsIcon, GearIcon, MessageIcon } from "./components/icons.jsx";
 import { Banner } from "./components/ui.jsx";
 import { OpenWorkFix } from "./components/openwork-fix.jsx";
@@ -62,7 +62,7 @@ export function App() {
     try {
       setState(await apiState());
     } catch (error) {
-      if (error.message === "UNPAIRED") setPaired(false);
+      if (isUnpaired(error)) setPaired(false);
       // Mạng chết / tunnel treo: `fetch` ném TypeError "Failed to fetch" (tiếng
       // Anh, không nói nguyên nhân). `networkErrorMessage` dịch sang tiếng Việt
       // và tách hẳn "hết thời gian chờ" khỏi "mất mạng" — hai chuyện khác nhau,
@@ -217,7 +217,7 @@ function StatusBanners({ state, onRecheck, view }) {
     try {
       payload = await apiOpenWorkPath(path);
     } catch (e) {
-      setFixErr(String(e?.message || e));
+      setFixErr(errorSentence(e));
       throw e;
     } finally {
       setFixing(false);
@@ -306,7 +306,7 @@ function StatusBanners({ state, onRecheck, view }) {
           setWakeMsg("Launch command sent to OpenWork — wait ~20s then tap Recheck.");
         }
       } catch (e) {
-        setWakeMsg(String(e.message || e));
+        setWakeMsg(errorSentence(e));
         // Bridge không tìm thấy exe nên gửi kèm `candidates`. Trước đây mảng này
         // bị vứt ở đây — chỉ còn lại dòng lỗi chết. Giữ lại để khối sửa ngay
         // dưới banner có ngay dòng để bấm, không phải đi tìm trang Cài đặt.

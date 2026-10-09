@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { ow, owDeleteSession } from "../api.js";
 import { timeAgo, unwrap } from "../lib/format.js";
+import { errorSentence } from "../lib/net.js";
 import { navigate } from "../app.jsx";
 import { Banner, Empty, SkeletonList, SwipeRow } from "../components/ui.jsx";
 import { SearchIcon } from "../components/icons.jsx";
@@ -87,7 +88,7 @@ export function HomePage() {
       // KHÔNG xoá sạch danh sách khi một lượt poll hỏng: máy tính ngủ hoặc
       // rớt mạng giữa lúc app mở là Home trắng bệch "Chưa có session nào",
       // người dùng tưởng mất sạch phiên. Giữ danh sách cũ, chỉ báo lỗi.
-      setError(String(e.message || e));
+      setError(errorSentence(e));
       if (itemsRef.current === null) setItems([]);
     }
   }, []);
@@ -131,7 +132,7 @@ export function HomePage() {
       load();
     } catch (e) {
       if (itemsRef.current === afterDrop) setItems(before);
-      setError(`Failed to delete this session: ${e?.message || e}`);
+      setError(`Failed to delete this session: ${errorSentence(e)}`);
     } finally {
       deletingRef.current.delete(key);
     }

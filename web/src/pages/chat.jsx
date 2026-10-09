@@ -6,6 +6,7 @@ import {
   owRenameSession, owPrompt, owSummarize, owShareSession, owUnshareSession,
 } from "../api.js";
 import { formatBytes, unwrap } from "../lib/format.js";
+import { errorSentence } from "../lib/net.js";
 import { connectEvents } from "../lib/sse.js";
 import { OW_PROXY_PREFIX } from "../../../shared/contract.js";
 import { createChatStream, mergeRefetchKeepInflight } from "../lib/chat-stream.js";
@@ -229,7 +230,7 @@ export function ChatPage({ route }) {
       setError("");
     } catch (e) {
       if (sessionIdRef.current !== mine) return;
-      setError(String(e.message || e));
+      setError(errorSentence(e));
     }
   }, [wsId, sessionId]);
 
@@ -256,7 +257,7 @@ export function ChatPage({ route }) {
       setError("");
     } catch (e) {
       if (sessionIdRef.current !== mine) return;
-      setError(String(e.message || e));
+      setError(errorSentence(e));
     }
   }, [wsId, sessionId, commitMessages]);
 
@@ -784,7 +785,7 @@ export function ChatPage({ route }) {
       loadTodo();
     } catch (e) {
       if (sessionIdRef.current !== mineSession) return;
-      setError(String(e.message || e));
+      setError(errorSentence(e));
     } finally {
       actionLockRef.current = false;
       // Đã sang phiên khác: đừng đụng state của phiên mới — effect vào phiên
@@ -896,7 +897,7 @@ export function ChatPage({ route }) {
       setNotice(`Renamed the session to “${clean.title}”.`);
       loadSession(); // nguồn chân lý từ máy, độ trễ SSE nên nạp luôn
     } catch (e) {
-      setRenameErr(String(e.message || e));
+      setRenameErr(errorSentence(e));
     } finally {
       renameLockRef.current = false;
       setBusyAction("");
@@ -970,7 +971,7 @@ export function ChatPage({ route }) {
       loadMessages();
       loadStatus();
     } catch (e) {
-      setError(`Could not compact the conversation: ${e.message || e}`);
+      setError(`Could not compact the conversation: ${errorSentence(e)}`);
     } finally {
       setCompacting(false);
     }
@@ -1017,7 +1018,7 @@ export function ChatPage({ route }) {
           // mới nối ở CUỐI mảng. Nên nhảy con trỏ khi tin mới đã hiện.
           revertForNewMessageRef.current = true;
         } catch (e) {
-          setError(`Could not revert to that message (${e.message || e}) — the new message will follow after.`);
+          setError(`Could not revert to that message (${errorSentence(e)}) — the new message will follow after.`);
         }
         loadMessages();
       }
@@ -1035,7 +1036,7 @@ export function ChatPage({ route }) {
             setAttached((prev) => prev.map((a) => (a === item ? { ...a, path, status: "done" } : a)));
           } catch (e) {
             failed = true;
-            setAttached((prev) => prev.map((a) => (a === item ? { ...a, status: "error", error: String(e.message || e) } : a)));
+            setAttached((prev) => prev.map((a) => (a === item ? { ...a, status: "error", error: errorSentence(e) } : a)));
           }
         }
       }
@@ -1116,7 +1117,7 @@ export function ChatPage({ route }) {
           const list = (messagesRef.current ?? []).filter((m) => messageIdOf(m) !== localId);
           if (list.length !== (messagesRef.current ?? []).length) commitMessages(list);
           if (shouldRestoreComposer({ queued: false })) setDraft(fullText);
-          setError(`Could not send the message: ${e.message || e}`);
+          setError(`Could not send the message: ${errorSentence(e)}`);
         }
       } finally {
         setSending(false);
@@ -1157,7 +1158,7 @@ export function ChatPage({ route }) {
       loadMessages();
     } catch (e) {
       if (sessionIdRef.current !== mine) return;
-      setError(String(e.message || e));
+      setError(errorSentence(e));
       // Request abort hỏng không có nghĩa agent còn chạy (mất mạng đúng lúc
       // bấm, tunnel chết, 404 vì session vốn đã rảnh). Để màn kẹt ở "đang
       // chạy" thì người dùng bấm Dừng hoài không được và ô gõ cứ báo sai;
@@ -1185,7 +1186,7 @@ export function ChatPage({ route }) {
       loadMessages();
       loadStatus();
     } catch (e) {
-      setError(`Could not answer the agent's question: ${e.message || e}`);
+      setError(`Could not answer the agent's question: ${errorSentence(e)}`);
     } finally {
       if (permissionBusyRef.current === pid) permissionBusyRef.current = "";
       setPermissionBusy("");

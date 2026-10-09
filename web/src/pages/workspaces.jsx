@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { apiFsList, apiFsMkdir, ow } from "../api.js";
 import { unwrap } from "../lib/format.js";
+import { errorSentence } from "../lib/net.js";
 import { navigate } from "../app.jsx";
 import { FolderIcon, WsIcon } from "../components/icons.jsx";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
@@ -17,7 +18,7 @@ export function WorkspacesPage() {
       setWorkspaces(unwrap(payload)?.workspaces ?? payload?.workspaces ?? []);
       setError("");
     } catch (e) {
-      setError(String(e.message || e));
+      setError(errorSentence(e));
     }
   }
 
@@ -124,7 +125,7 @@ function CreateWorkspaceDialog({ onClose, onCreated }) {
       onCreated();
       onClose();
     } catch (e) {
-      setError(String(e.message || e));
+      setError(errorSentence(e));
     } finally {
       setBusy(false);
     }
@@ -193,7 +194,7 @@ function FolderPickerSheet({ onPick, onClose }) {
       const data = await apiFsList(target);
       setView({ kind: "dir", ...data });
     } catch (e) {
-      setError(String(e.message || e));
+      setError(errorSentence(e));
     } finally {
       setLoading(false);
     }
@@ -209,7 +210,7 @@ function FolderPickerSheet({ onPick, onClose }) {
       setNewDirName("");
       await goTo(made.path); // tạo xong chọc thẳng vào thư mục mới
     } catch (e) {
-      setError(String(e.message || e));
+      setError(errorSentence(e));
     } finally {
       setCreating(false);
     }
@@ -235,7 +236,7 @@ function FolderPickerSheet({ onPick, onClose }) {
           setView({ kind: "roots" });
         }
       } catch (e) {
-        setError(String(e.message || e));
+        setError(errorSentence(e));
       } finally {
         setLoading(false);
       }

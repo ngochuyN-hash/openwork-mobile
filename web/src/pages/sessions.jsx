@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { ow, owDeleteSession } from "../api.js";
 import { timeAgo, unwrap } from "../lib/format.js";
+import { errorSentence } from "../lib/net.js";
 import { connectEvents } from "../lib/sse.js";
 import { OW_PROXY_PREFIX } from "../../../shared/contract.js";
 import {
@@ -69,7 +70,7 @@ export function SessionsPage({ route }) {
       setError("");
     } catch (e) {
       if (isStale(token) || e?.name === "AbortError") return;
-      setError(String(e.message || e));
+      setError(errorSentence(e));
     }
   }
 
@@ -125,7 +126,7 @@ export function SessionsPage({ route }) {
       if (created?.id) navigate(`#/ws/${encodeURIComponent(wsId)}/chat/${encodeURIComponent(created.id)}`);
       else load();
     } catch (e) {
-      setError(String(e.message || e));
+      setError(errorSentence(e));
     } finally {
       creatingRef.current = false;
     }
@@ -161,7 +162,7 @@ export function SessionsPage({ route }) {
       // nếu có thì danh sách mới đã đúng hơn, giữ nguyên nó.
       if (sessionsRef.current === afterDrop) setSessions(beforeSessions);
       if (statusesRef.current === afterStatuses) setStatuses(beforeStatuses);
-      setError(`Failed to delete this session: ${e?.message || e}`);
+      setError(`Failed to delete this session: ${errorSentence(e)}`);
     } finally {
       deletingRef.current.delete(id);
     }
