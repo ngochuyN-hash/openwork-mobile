@@ -7,7 +7,7 @@ import { writeFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOST_CONTRACT } from "../shared/host-contract.js";
-import { ErrorCode } from "../shared/contract.js";
+import { BRIDGE_ROUTES, ErrorCode, OW_PROXY_PREFIX, TENANT_CREATE_PATH } from "../shared/contract.js";
 
 // lookupTenant → LookupTenant; nextAttemptAt → NextAttemptAt
 const pascal = (s) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -81,6 +81,30 @@ export function renderHostContractCs(c = HOST_CONTRACT) {
   return lines.join("\r\n") + "\r\n";
 }
 
+/** Dựng RoutePaths.cs từ shared/contract.js — đường API bridge + worker mà exe
+ * desktop gọi (BridgeHttp/HttpWebRequest). Trước 09/10 exe gõ tay 5 chuỗi
+ * "/api/..." rải rác; bridge đổi đường là exe gọi 404 không ai biết. Cả hai bên
+ * đọc một nguồn, drift bị chặn như ErrorCode. */
+export function renderRoutePathsCs(
+  routes = BRIDGE_ROUTES,
+  { owProxyPrefix = OW_PROXY_PREFIX, tenantCreatePath = TENANT_CREATE_PATH } = {}
+) {
+  const lines = [];
+  lines.push("// Sinh tu dong boi desktop\\gen-host-contract.mjs tu shared\\contract.js");
+  lines.push("// - KHONG sua tay, KHONG commit (giong HostContract.cs).");
+  lines.push("// Duong API xuyen tang: bridge phat (bang route o bridge/src/routes),");
+  lines.push("// exe desktop + web client goi. Doi duong = sua shared/contract.js roi build.");
+  lines.push("internal static class RoutePaths");
+  lines.push("{");
+  for (const [key, value] of Object.entries(routes)) {
+    lines.push(`    public const string ${pascal(key)} = "${value}";`);
+  }
+  lines.push(`    public const string OwProxyPrefix = "${owProxyPrefix}";`);
+  lines.push(`    public const string TenantCreate = "${tenantCreatePath}";`);
+  lines.push("}");
+  return lines.join("\r\n") + "\r\n";
+}
+
 const thisFile = fileURLToPath(import.meta.url);
 if (process.argv[1] && realpathSync(process.argv[1]) === thisFile) {
   const srcDir = join(dirname(thisFile), "src");
@@ -90,4 +114,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === thisFile) {
   const codesOut = join(srcDir, "ErrorCode.cs");
   writeFileSync(codesOut, renderErrorCodeCs());
   console.log(`[gen] ${codesOut} written from shared/contract.js`);
+  const routesOut = join(srcDir, "RoutePaths.cs");
+  writeFileSync(routesOut, renderRoutePathsCs());
+  console.log(`[gen] ${routesOut} written from shared/contract.js`);
 }

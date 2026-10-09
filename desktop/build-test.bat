@@ -47,8 +47,12 @@ if not exist "src\HostContract.cs" (
     echo [ERROR] Khong sinh duoc src\HostContract.cs - can node.exe tren may build
     exit /b 1
 )
+if not exist "src\RoutePaths.cs" (
+    echo [ERROR] Khong sinh duoc src\RoutePaths.cs - can node.exe tren may build
+    exit /b 1
+)
 
-"%CSC%" /target:winexe /optimize /codepage:65001 /win32icon:src\app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket-test.exe src\InviteKey.cs src\WorkerUrl.cs src\IdentityKeys.cs src\HostContract.cs src\ErrorCode.cs src\Ui.cs src\BridgeConfig.cs src\BridgeProcess.cs src\TunnelState.cs src\AutostartTask.cs src\BridgeHttp.cs src\Provisioning.cs src\PairingQrDialog.cs src\OpenPocket.cs
+"%CSC%" /target:winexe /optimize /codepage:65001 /win32icon:src\app.ico /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Management.dll /out:bin\OpenPocket-test.exe src\InviteKey.cs src\WorkerUrl.cs src\IdentityKeys.cs src\HostContract.cs src\ErrorCode.cs src\RoutePaths.cs src\Ui.cs src\BridgeConfig.cs src\BridgeProcess.cs src\TunnelState.cs src\AutostartTask.cs src\BridgeHttp.cs src\Provisioning.cs src\PairingQrDialog.cs src\OpenPocket.cs
 if %ERRORLEVEL% equ 0 (
     echo [OK] Bien dich thanh cong: desktop\bin\OpenPocket-test.exe
 ) else (

@@ -5,7 +5,14 @@ import { buildPromptModelFields } from "./lib/model-behavior.js";
 import { parseHashParam } from "./lib/route.js";
 import { blobCacheKey, createBlobCache, parseBlobCacheKey } from "./lib/blob-cache.js";
 import { withTimeoutSignal } from "./lib/net.js";
-import { HEADER_TENANT, MASTER_TOKEN_HASH, PAIR_CODE_HASH, normalizeTenant } from "../../shared/contract.js";
+import {
+  BRIDGE_ROUTES,
+  HEADER_TENANT,
+  MASTER_TOKEN_HASH,
+  OW_PROXY_PREFIX,
+  PAIR_CODE_HASH,
+  normalizeTenant,
+} from "../../shared/contract.js";
 
 const TOKEN_KEY = "owm_token";
 // Multi-tenant: "phòng" = máy đang kết nối. Lưu kèm token; mọi request kèm
@@ -177,7 +184,7 @@ export async function apiPair(code, label) {
   // thứ hai ở web nghĩa là mỗi lần sửa bridge là mọi người dùng không ghép
   // được nữa, và lỗi nằm ở máy tính chứ không phải điện thoại. Sai hình dạng
   // tốn đúng MỘT vòng mạng và bridge trả sẵn câu tiếng Việt rõ ràng.
-  const res = await fetch("/api/pair", {
+  const res = await fetch(BRIDGE_ROUTES.pair, {
     method: "POST",
     headers: tenantHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({ code: String(code ?? "").trim(), label: label?.trim() || undefined }),
@@ -198,14 +205,14 @@ export async function apiPair(code, label) {
 }
 
 export async function apiDevices() {
-  const res = await fetch("/api/devices", { headers: authHeaders() });
+  const res = await fetch(BRIDGE_ROUTES.devices, { headers: authHeaders() });
   if (res.status === 401) throw new Error("UNPAIRED");
   if (!res.ok) throw new Error(`devices ${res.status}`);
   return (await res.json()).devices ?? [];
 }
 
 export async function apiRevokeDevice(id) {
-  const res = await fetch(`/api/devices/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
+  const res = await fetch(`${BRIDGE_ROUTES.devices}/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
   if (!res.ok) throw new Error(`revoke ${res.status}`);
   return res.json();
 }
@@ -235,7 +242,7 @@ export async function apiState() {
   const guard = withTimeoutSignal(null, OW_TIMEOUT_MS);
   let res;
   try {
-    res = await fetch("/api/state", { headers: authHeaders(), signal: guard.signal });
+    res = await fetch(BRIDGE_ROUTES.state, { headers: authHeaders(), signal: guard.signal });
   } finally {
     guard.release();
   }
@@ -245,14 +252,14 @@ export async function apiState() {
 }
 
 export async function apiRecheck() {
-  const res = await fetch("/api/recheck", { method: "POST", headers: authHeaders() });
+  const res = await fetch(BRIDGE_ROUTES.recheck, { method: "POST", headers: authHeaders() });
   if (res.status === 401) throw new Error("UNPAIRED");
   return res.json();
 }
 
 /** Bật OpenWork desktop trên máy tính (khi máy đang bật mà app chưa mở). */
 export async function apiWakeOpenWork() {
-  const res = await fetch("/api/openwork/wake", { method: "POST", headers: authHeaders() });
+  const res = await fetch(BRIDGE_ROUTES.openworkWake, { method: "POST", headers: authHeaders() });
   if (res.status === 401) throw new Error("UNPAIRED");
   const payload = await res.json().catch(() => null);
   if (!res.ok) {
@@ -272,7 +279,7 @@ export async function apiWakeOpenWork() {
  * kiểm tra gì cả. Lỗi ném ra mang đúng `message` tiếng Việt của bridge để UI hiện
  * nguyên văn cho người dùng. */
 export async function apiOpenWorkPath(path) {
-  const res = await fetch("/api/openwork/path", {
+  const res = await fetch(BRIDGE_ROUTES.openworkPath, {
     method: "POST",
     headers: authHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({ path: String(path ?? "").trim() }),
@@ -288,7 +295,7 @@ export async function apiOpenWorkPath(path) {
  * UI chủ đích KHÔNG vẽ masterUrl/masterQr: token master vĩnh viễn chỉ nên nằm
  * trong terminal/GUI trên máy tính, còn mã one-time tự vô hiệu sau 1 lần dùng. */
 export async function apiPairingCode() {
-  const res = await fetch("/api/pairing-code", { headers: authHeaders() });
+  const res = await fetch(BRIDGE_ROUTES.pairingCode, { headers: authHeaders() });
   if (res.status === 401) throw new Error("UNPAIRED");
   const payload = await res.json().catch(() => null);
   if (!res.ok) throw new Error(payload?.message ?? `pairing-code ${res.status}`);
@@ -300,7 +307,7 @@ export async function apiPairingCode() {
  * không chạy (hoặc đang restart dở). Lưu ý: tunnel chết HẲN thì điện thoại
  * không gọi tới được máy — lúc đó phải bấm nút ↻ trên GUI máy tính. */
 export async function apiRestartTunnel() {
-  const res = await fetch("/api/tunnel/restart", { method: "POST", headers: authHeaders() });
+  const res = await fetch(BRIDGE_ROUTES.tunnelRestart, { method: "POST", headers: authHeaders() });
   if (res.status === 401) throw new Error("UNPAIRED");
   const payload = await res.json().catch(() => null);
   if (!res.ok) throw new Error(payload?.message ?? `tunnel ${res.status}`);
@@ -313,7 +320,7 @@ export async function apiRestartTunnel() {
 export async function apiSetMachineName(name) {
   const clean = String(name ?? "").trim();
   if (!clean) throw new Error("Machine name is empty.");
-  const res = await fetch("/api/machine/name", {
+  const res = await fetch(BRIDGE_ROUTES.machineName, {
     method: "POST",
     headers: authHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({ name: clean }),
@@ -328,7 +335,7 @@ export async function apiSetMachineName(name) {
  * Không truyền path → trả {roots, quick, home}; truyền path → {path, parent, dirs}. */
 export async function apiFsList(path) {
   const qs = path ? `?path=${encodeURIComponent(path)}` : "";
-  const res = await fetch(`/api/fs/ls${qs}`, { headers: authHeaders() });
+  const res = await fetch(`${BRIDGE_ROUTES.fsList}${qs}`, { headers: authHeaders() });
   if (res.status === 401) throw new Error("UNPAIRED");
   const payload = await res.json().catch(() => null);
   if (!res.ok) throw new Error(payload?.message ?? `fs ${res.status}`);
@@ -337,7 +344,7 @@ export async function apiFsList(path) {
 
 /** Tạo thư mục mới con bên trong `dir` (nút "+ Thư mục mới" trong picker). */
 export async function apiFsMkdir(dir, name) {
-  const res = await fetch("/api/fs/mkdir", {
+  const res = await fetch(BRIDGE_ROUTES.fsMkdir, {
     method: "POST",
     headers: authHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({ dir, name }),
@@ -364,7 +371,7 @@ export async function ow(
   // AbortController của nút Hủy.
   const guard = raw || !timeoutMs ? null : withTimeoutSignal(signal, timeoutMs);
   try {
-    const res = await fetch(`/api/ow${path}`, {
+    const res = await fetch(`${OW_PROXY_PREFIX}${path}`, {
       method,
       headers: authHeaders(body !== undefined ? { "content-type": "application/json", ...headers } : headers),
       body: body !== undefined ? JSON.stringify(body) : undefined,

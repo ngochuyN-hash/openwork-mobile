@@ -3,6 +3,7 @@ import { setToken, setTenant, apiPair, pairingCodeFromHash } from "../api.js";
 import { Banner } from "../components/ui.jsx";
 import { OpenWorkMark } from "../components/logo.jsx";
 import {
+  BRIDGE_ROUTES,
   ErrorCode,
   MASTER_TOKEN_HASH,
   TENANT_HASH_KEY,
@@ -86,7 +87,7 @@ export function PairingScreen({ onPaired }) {
       if (!parsed.tenant) {
         // Still roomless: the worker answers 400 tenant_required (it never
         // fans a roomless key out to machines) — surface that hint verbatim.
-        const res = await fetch("/api/state", { headers: { authorization: `Bearer ${parsed.token}` } });
+        const res = await fetch(BRIDGE_ROUTES.state, { headers: { authorization: `Bearer ${parsed.token}` } });
         const payload = await res.json().catch(() => null);
         if (payload?.code === ErrorCode.TENANT_REQUIRED) throw new Error(TENANT_HINT);
         if (!res.ok) throw new Error(payload?.message ?? `HTTP ${res.status}`);

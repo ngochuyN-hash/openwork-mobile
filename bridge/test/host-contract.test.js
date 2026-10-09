@@ -10,7 +10,8 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOST_CONTRACT } from "../../shared/host-contract.js";
-import { renderHostContractCs } from "../../desktop/gen-host-contract.mjs";
+import { BRIDGE_ROUTES, OW_PROXY_PREFIX, TENANT_CREATE_PATH } from "../../shared/contract.js";
+import { renderHostContractCs, renderRoutePathsCs } from "../../desktop/gen-host-contract.mjs";
 import { bridgeDataDir, loadConfig } from "../src/config.js";
 import { LOG_NAMES } from "../src/logwipe.js";
 import { AUTOSTART_TASK_NAME, WATCHDOG_TASK_NAME } from "../src/autostart.js";
@@ -100,4 +101,40 @@ test("generated HostContract.cs carries the same knowledge for the C# side", () 
   for (const key of HOST_CONTRACT.stateTunnelKeys) {
     assert.ok(cs.includes(`"${key}";`), `/api/state tunnel key ${key} must reach the C# side`);
   }
+});
+
+// Route map (candidate 3, review 09/10): đường API bridge + worker mà web
+// client lẫn exe desktop C# gọi. Trước đây web gõ tay 13 chuỗi, exe gõ tay 5 —
+// bridge đổi đường là tụi nó gọi 404 không test nào bắt. Giờ cả hai đọc
+// shared/contract.js (web import trực tiếp, exe nhận bản sinh RoutePaths.cs).
+test("route map matches the bridge's declared route table", () => {
+  const routesDir = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "routes");
+  // Gộp source 6 file route: mọi đường trong contract phải xuất hiện nguyên
+  // văn là một `match:` string trong bảng route thật, kẻo contract bye-pass
+  // thực tại (thêm đường vào contract mà quên khai báo route là 404 thầm lặng).
+  let routeTable = "";
+  for (const file of ["config.js", "fs.js", "openwork.js", "pairing.js", "proxy.js", "status.js"]) {
+    routeTable += readFileSync(join(routesDir, file), "utf8");
+  }
+  for (const [key, path] of Object.entries(BRIDGE_ROUTES)) {
+    assert.ok(
+      routeTable.includes(`match: "${path}"`),
+      `BRIDGE_ROUTES.${key} = "${path}" không có trong bảng route của bridge`
+    );
+  }
+  // Prefix proxy khai báo dạng "*/api/ow/" — so nguyên văn luôn.
+  assert.ok(routeTable.includes(`match: "*${OW_PROXY_PREFIX}/"`), `OW_PROXY_PREFIX ${OW_PROXY_PREFIX} phải khớp route prefix của bridge`);
+});
+
+test("generated RoutePaths.cs carries the same paths for the C# side", () => {
+  const cs = renderRoutePathsCs();
+  assert.ok(cs.includes("internal static class RoutePaths"));
+  for (const [key, path] of Object.entries(BRIDGE_ROUTES)) {
+    assert.ok(
+      cs.includes(`public const string ${key.charAt(0).toUpperCase() + key.slice(1)} = "${path}";`),
+      `route ${key} must reach the C# side`
+    );
+  }
+  assert.ok(cs.includes(`public const string OwProxyPrefix = "${OW_PROXY_PREFIX}";`));
+  assert.ok(cs.includes(`public const string TenantCreate = "${TENANT_CREATE_PATH}";`));
 });

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { ow, owDeleteSession, unwrap, timeAgo } from "../api.js";
 import { connectEvents } from "../lib/sse.js";
+import { OW_PROXY_PREFIX } from "../../../shared/contract.js";
 import {
   // Xoá phiên + trạng thái đang chạy: luật thuần ở lib/session-ops.js để test
   // được. `dropSessionById` là phần "xoá kiểu lạc quan" (mất dòng ngay, gọi
@@ -99,7 +100,7 @@ export function SessionsPage({ route }) {
       }, 700);
     };
     const stopEvents = connectEvents(
-      `/api/ow/workspace/${encodeURIComponent(wsId)}/opencode/event`,
+      `${OW_PROXY_PREFIX}/workspace/${encodeURIComponent(wsId)}/opencode/event`,
       () => schedule(),
     );
     return () => {

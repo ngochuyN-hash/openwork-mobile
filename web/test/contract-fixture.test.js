@@ -106,6 +106,27 @@ test("contract: sse.js cũng đi qua contract — không còn literal header tr�
   assert.ok(!sseSrc.includes(`"${HEADER_TENANT}"`), "sse.js còn literal header ngoài contract");
 });
 
+test("contract: web gọi API qua BRIDGE_ROUTES — không còn literal đường trôi nổi", () => {
+  // Candidate 3 (review 09/10): 13 fetch tay trong api.js + 1 raw fetch ở
+  // pairing.jsx + 2 tiền tố proxy ở chat/sessions từng gõ tay — bridge đổi
+  // đường là web gọi 404 và không test nào bắt. Giờ mọi đường đi qua hằng
+  // contract (BRIDGE_ROUTES / OW_PROXY_PREFIX), cùng nguồn với exe desktop
+  // (RoutePaths.cs sinh từ cùng file).
+  const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  for (const rel of [
+    join("web", "src", "api.js"),
+    join("web", "src", "pages", "pairing.jsx"),
+    join("web", "src", "pages", "chat.jsx"),
+    join("web", "src", "pages", "sessions.jsx"),
+  ]) {
+    const code = stripComments(readFileSync(join(ROOT, rel), "utf8"));
+    assert.ok(!/["'`]\/api\//.test(code), `${rel} còn literal đường /api/... ngoài contract`);
+  }
+  const apiSrc = readFileSync(join(ROOT, join("web", "src", "api.js")), "utf8");
+  assert.ok(apiSrc.includes("BRIDGE_ROUTES"), "api.js phải dùng BRIDGE_ROUTES");
+  assert.ok(apiSrc.includes("OW_PROXY_PREFIX"), "api.js phải dùng OW_PROXY_PREFIX cho proxy engine");
+});
+
 test("contract: web chuẩn hoá phòng qua normalizeTenant — không còn luật riêng", () => {
   // Divergence sống 09/10: màn login từng strip [^a-z0-9-] TRÊN CẢ rule của
   // contract, api.js tự chép trim+lowercase — phòng có dấu cách/underscore

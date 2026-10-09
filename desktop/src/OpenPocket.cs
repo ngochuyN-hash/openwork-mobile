@@ -637,7 +637,7 @@ namespace OpenPocket.Desktop
                         byte[] body = Encoding.UTF8.GetBytes(jss.Serialize(new Dictionary<string, object> {
                             { "user", user }, { "secret", pass }, { "name", Environment.MachineName }
                         }));
-                        HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url + "/api/tenant/create");
+                        HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url + RoutePaths.TenantCreate);
                         req.Method = "POST";
                         req.ContentType = "application/json";
                         // Mã mời nhúng trong exe lúc build (src\InviteKey.cs sinh
@@ -757,7 +757,7 @@ namespace OpenPocket.Desktop
             if (isBridgeRunning)
             {
                 string stateError;
-                var state = BridgeHttp.GetSync(port, BridgeConfig.MobileToken(config), "/api/state", 2000, out stateError);
+                var state = BridgeHttp.GetSync(port, BridgeConfig.MobileToken(config), RoutePaths.State, 2000, out stateError);
                 if (state != null)
                 {
                     apiOk = true;
@@ -1007,7 +1007,7 @@ namespace OpenPocket.Desktop
             btnTunnelRestart.Text = "Restarting...";
             lblStatusTunnel.Text = "Cloudflare: requesting a new tunnel...";
             lblStatusTunnel.ForeColor = ColorAmber;
-            PostBridgeJson("/api/tunnel/restart", null, (dict, err) => {
+            PostBridgeJson(RoutePaths.TunnelRestart, null, (dict, err) => {
                 btnTunnelRestart.Text = "Restart tunnel";
                 btnTunnelRestart.Enabled = isBridgeRunning;
                 if (dict == null)
@@ -1120,7 +1120,7 @@ namespace OpenPocket.Desktop
             }
             string json = new JavaScriptSerializer().Serialize(payload);
             string error;
-            var dict = BridgeHttp.PostSync(port, token, "/api/config/identity", json, out error);
+            var dict = BridgeHttp.PostSync(port, token, RoutePaths.ConfigIdentity, json, out error);
             return dict != null && dict.ContainsKey("ok") && Convert.ToBoolean(dict["ok"]);        }
     }
 }

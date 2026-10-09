@@ -48,6 +48,38 @@ export const HEADER_INVITE = "x-owm-invite";
 // đường + header + shape payload.
 export const REGISTER_PATH = "/__register";
 
+// --- Đường API (web + exe desktop gọi) ---------------------------------------
+// Bảng route khai báo của bridge nằm ở bridge/src/routes/*.js (mảng `match`);
+// những đường XUYÊN TẦNG — web client và exe desktop C# cùng gõ tay — thì phải
+// qua đây: đổi một đường là đủ cả ba tầng build lại theo, drift bị test chặn
+// (bridge/test/host-contract.test.js so với bảng route thật; web/test/
+// contract-fixture.test.js cấm literal trôi nổi; desktop/gen-host-contract.mjs
+// sinh RoutePaths.cs cho exe). Đường có tham số (`/api/devices/:id`) dùng hằng
+// gốc làm tiền tố.
+export const BRIDGE_ROUTES = {
+  pair: "/api/pair",
+  pairTenant: "/api/pair/tenant",
+  devices: "/api/devices",
+  pairingCode: "/api/pairing-code",
+  state: "/api/state",
+  recheck: "/api/recheck",
+  tunnelRestart: "/api/tunnel/restart",
+  machineName: "/api/machine/name",
+  configIdentity: "/api/config/identity",
+  openworkWake: "/api/openwork/wake",
+  openworkPath: "/api/openwork/path",
+  fsList: "/api/fs/ls",
+  fsMkdir: "/api/fs/mkdir",
+};
+
+// Tiền tố proxy engine (`*/api/ow/` trong bảng route): web nối path engine
+// (opencode/...) phía sau nó; KHÔNG phải đường gọi trực tiếp.
+export const OW_PROXY_PREFIX = "/api/ow";
+
+// Cửa TẠO PHÒNG của worker (không qua /api/* relay): exe desktop tự cấp định
+// danh lúc first-run (desktop/src/Provisioning.cs), worker/src/index.js phát.
+export const TENANT_CREATE_PATH = "/api/tenant/create";
+
 // --- Tên phòng chuẩn hoá ------------------------------------------------------
 // Worker so tên phòng làm KV key, bridge đăng ký (lookup.js), web điền từ link
 // — cả ba phải ra CÙNG một chuỗi thì kẻ này mới tìm thấy máy của kẻ kia.

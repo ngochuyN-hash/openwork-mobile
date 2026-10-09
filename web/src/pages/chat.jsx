@@ -6,6 +6,7 @@ import {
   owRenameSession, owPrompt, owSummarize, owShareSession, owUnshareSession,
 } from "../api.js";
 import { connectEvents } from "../lib/sse.js";
+import { OW_PROXY_PREFIX } from "../../../shared/contract.js";
 import { createChatStream, mergeRefetchKeepInflight } from "../lib/chat-stream.js";
 import { eventSessionId, sameSession, eventProps } from "../lib/chat-events.js";
 import {
@@ -596,7 +597,7 @@ export function ChatPage({ route }) {
     };
     // Stream qua fetch (lib/sse.js): token đi bằng header Authorization, không
     // phải `?_t=` trên URL, và đứt là tự nối lại với backoff.
-    const stopEvents = connectEvents(`/api/ow${base}/event`, handleEvent, {
+    const stopEvents = connectEvents(`${OW_PROXY_PREFIX}${base}/event`, handleEvent, {
       onOpen: () => {
         lastEventAt.current = Date.now();
         flushQueue();

@@ -262,7 +262,7 @@ namespace OpenPocket.Desktop
             ThreadPool.QueueUserWorkItem(delegate {
                 try
                 {
-                    string endpoint = string.Format("http://127.0.0.1:{0}/api/pairing-code", port);
+                    string endpoint = string.Format("http://127.0.0.1:{0}{1}", port, RoutePaths.PairingCode);
                     var req = (HttpWebRequest)WebRequest.Create(endpoint);
                     req.Headers.Add("Authorization", "Bearer " + mobileToken);
                     req.Timeout = 4000;
