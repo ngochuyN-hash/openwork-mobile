@@ -1,5 +1,15 @@
 # CODE_SUMMARY — OpenWork Mobile
 
+## chat.jsx sheds three more pure modules (models catalog, SSE router, outgoing message) — 2026-10-09 (web only)
+
+Round 4's top recommendation, cut in stages: the pure logic inside the 286-line mega-effect and the 145-line `send()` now lives in lib, each with its own test —
+
+- **`lib/chat-models.js`** — `flattenProviderModels(payload)`: the engine's `/config/providers` payload (both `{providers}` and `{data:{providers}}` wrappings) → the flat picker list.
+- **`lib/chat-event-router.js`** — `createChatEventRouter(deps)`: the whole event→loader table (`session.idle`/`errored` settle running immediately, `session.status` reads the busy map, `permission.updated` reloads permissions, part events apply through the stream reducer + schedule a flush, everything else takes the 500ms "other" lap). Runs under `node --test` against fake deps — the wiring the page keeps is just naming its refs/setters.
+- **`lib/chat-outbox.js`** — `composeOutgoing({text, uploaded})` (file-block composition: block first, prompt joined by one newline, "Please read…" filler when only files) and `optimisticMessage(fullText, optimisticText)` (the local message shape with `localSentText` that `lib/chat-stream` merges against).
+
+The page keeps exactly the irreducible glue: refs, setters, timers, and the one-line session-identity check after each await (inherent to loaders bound to route params — moving those would be displacement, not depth). Behavior unchanged; chat.jsx 1557 → **1511** lines. Verified: web **472/472** (+14), `vite build` clean.
+
 ## One load-guard for four hand-rolled race dialects — 2026-10-09 (web only)
 
 Round 4 finding: four pages hand-rolled stale-response guards that cited each other in comments and already disagreed — files/home/sessions aborted superseded requests, search did not. `web/src/lib/load-guard.js` is one pure primitive (`begin(kind?)` → token + aborts the previous same-kind request · `stale(token)` · `invalidate()` → everything stale + abort all); the four pages (files, home, search, sessions) now adapt it. Deliberate unification: search's requests are aborted now too, and its catch filters `AbortError` so a cancelled scan never shows a red banner. Pinned by `web/test/load-guard.test.js` (6 tests). Verified: web **458/458**, `vite build` clean.

@@ -9,8 +9,11 @@ import { formatBytes, unwrap } from "../lib/format.js";
 import { errorSentence } from "../lib/net.js";
 import { connectEvents } from "../lib/sse.js";
 import { OW_PROXY_PREFIX } from "../../../shared/contract.js";
+import { flattenProviderModels } from "../lib/chat-models.js";
+import { createChatEventRouter } from "../lib/chat-event-router.js";
+import { composeOutgoing, optimisticMessage } from "../lib/chat-outbox.js";
 import { createChatStream, mergeRefetchKeepInflight } from "../lib/chat-stream.js";
-import { eventSessionId, sameSession, eventProps } from "../lib/chat-events.js";
+import { sameSession } from "../lib/chat-events.js";
 import {
   applyRevertCursor, hiddenCountByRevert, resolveForkBoundaryId, messageIdOf,
   messageTextOf, todoProgress, questionsForSession,
@@ -488,26 +491,10 @@ export function ChatPage({ route }) {
     owCommands(wsId).then(setCommands).catch(() => setCommands([]));
 
     // Model picker: engine yêu cầu model tường minh khi gửi prompt, không có
-    // thì message treo vĩnh viễn.
+    // thì message treo vĩnh viễn. Dẹt hoá catalog nằm ở lib/chat-models (test).
     ow(`${base}/config/providers`)
       .then((payload) => {
-        const providers = payload?.providers ?? payload?.data?.providers ?? [];
-        const flat = [];
-        for (const p of providers) {
-          for (const m of Object.values(p.models ?? {})) {
-            flat.push({
-              value: `${p.id}/${m.id}`,
-              label: `${p.name} · ${m.name ?? m.id}`,
-              providerName: p.name ?? p.id,
-              modelName: m.name ?? m.id,
-              modelId: m.id,
-              // Danh sách mức suy luận engine khai cho model này. Giữ nguyên
-              // shape engine trả; lib/model-behavior bóc ra và KHÔNG bịa thêm
-              // mức nào không có trong đây.
-              variants: m.variants,
-            });
-          }
-        }
+        const flat = flattenProviderModels(payload);
         setModels(flat);
         // Model nhớ trong localStorage có thể đã bị engine đổi tên/xoá — giữ
         // thì mọi tin gửi đi đều im lặng không phản hồi. Chọn lại trong danh
@@ -560,43 +547,24 @@ export function ChatPage({ route }) {
       }, 500);
     };
 
-    // Hạt nhân dispatch — type lấy từ JSON trong dòng `data:` (lib/sse.js bóc
-    // sẵn). Engine phát event không tên nên đây là đường chính.
-    const handleEvent = (name, data) => {
-      lastEventAt.current = Date.now();
-      if (name === "server.connected" || name === "server.heartbeat") return;
-      if (!data || typeof data !== "object") return;
-      if (!sameSession(eventSessionId(data), sessionId)) return;
-      if (name === "session.idle" || name === "session.errored" || name === "session.status") {
-        // Run kết thúc thật (idle/errored) hoặc status report — chốt ngay,
-        // không chờ poll 2.5s. status mang map {ses: {type}} thì tự suy.
-        const props = eventProps(data);
-        const busy = name === "session.status" ? sessionBusyFromMap(props, sessionId) : false;
-        if (name !== "session.status") setRunning(false);
-        else if (busy !== undefined) setRunning(busy);
-        // Run vừa kết thúc: session có thể vừa bị đổi (cost tăng, con trỏ
-        // revert dọn), và todo vừa được chốt — nạp lại cho đúng.
-        loadSession();
-        loadTodo();
-        scheduleStatus();
-        return;
-      }
-      if (name === "permission.updated") {
-        loadPermissions();
-        scheduleOther();
-        return;
-      }
-      const prev = messagesRef.current;
-      const next = streamRef.current.apply(prev ?? [], data);
-      if (next !== prev) commitMessages(next);
-      if (name === "message.part.updated" || name === "message.part.delta" || name === "message.updated") {
-        setRunning(true); // vào guồng stream ngay, poll dự phòng bám theo
-        scheduleStatus();
-        if (streamRef.current.hasPending()) scheduleFlush();
-      } else {
-        scheduleOther();
-      }
-    };
+    // Hạt nhân dispatch — bảng event→loader nằm ở lib/chat-event-router.js
+    // (tách round 4 để node --test chạy được với deps giả). Deps chốt theo ĐỜI
+    // EFFECT này: sessionId ở đây là phiên effect đang phục vụ, router tự bỏ
+    // event của phiên khác; stream/commitMessages là hàm/ref ổn định.
+    const handleEvent = createChatEventRouter({
+      sessionId,
+      lastEventAt,
+      setRunning,
+      loadSession,
+      loadTodo,
+      scheduleStatus,
+      loadPermissions,
+      scheduleOther,
+      messagesRef,
+      stream: streamRef.current,
+      commit: commitMessages,
+      scheduleFlush,
+    });
     // Stream qua fetch (lib/sse.js): token đi bằng header Authorization, không
     // phải `?_t=` trên URL, và đứt là tự nối lại với backoff.
     const stopEvents = connectEvents(`${OW_PROXY_PREFIX}${base}/event`, handleEvent, {
@@ -1040,17 +1008,8 @@ export function ChatPage({ route }) {
           }
         }
       }
-      const fileBlock = uploaded.length
-        ? `Files attached from the phone (saved in the workspace):\n${uploaded.map((p) => `- ${p}`).join("\n")}\n`
-        : "";
-      // Chỉ nối bằng xuống dòng KHI có khối file đứng trước — không thì prompt
-      // thường bị thừa một dòng trống ở đầu, agent đọc lệch nội dung.
-      const fullText = fileBlock
-        ? fileBlock + (text ? `\n${text}` : "\nPlease read the attached files above and process them.")
-        : text;
-      const optimisticText = uploaded.length && !text
-        ? `Sent ${uploaded.length} attached files.`
-        : fullText;
+      // Ghép khối file + chữ, và chữ hiển thị tạm — luật ở lib/chat-outbox (test).
+      const { fullText, optimisticText } = composeOutgoing({ text, uploaded });
       setDraft("");
       setAttached([]);
       // Upload mất mấy giây — người dùng có thể đã bấm sang phiên khác. Tin
@@ -1060,17 +1019,9 @@ export function ChatPage({ route }) {
         setSending(false);
         return;
       }
-      const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      // `localSentText` là chữ THẬT sẽ gửi lên máy — khác `optimisticText` khi
-      // chỉ đính kèm file. lib/chat-stream dùng nó để ghép bản optimistic với
-      // bản engine trả về, thay vì so `time.created` (hai đồng hồ khác nhau).
-      commitMessages([
-        ...(messagesRef.current ?? []),
-        {
-          info: { id: localId, role: "user", time: { created: Date.now() }, localSentText: fullText },
-          parts: [{ type: "text", text: optimisticText }],
-        },
-      ]);
+      // Message local gắn tạm (id + localSentText) — luật ở lib/chat-outbox.
+      const { localId, message: localMsg } = optimisticMessage(fullText, optimisticText);
+      commitMessages([...(messagesRef.current ?? []), localMsg]);
       // Sửa tin: vừa đặt con trỏ hoàn tác ở nhánh trên, mà `applyRevertCursor`
       // cắt TỪ con trỏ trở đi — tin vừa gửi nối ở CUỐI mảng nên bị cắt mất và
       // người dùng không thấy tin mình vừa bấm. Nhảy con trỏ ngay khi tin mới
