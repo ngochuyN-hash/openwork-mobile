@@ -1,5 +1,9 @@
 # CODE_SUMMARY — OpenWork Mobile
 
+## One load-guard for four hand-rolled race dialects — 2026-10-09 (web only)
+
+Round 4 finding: four pages hand-rolled stale-response guards that cited each other in comments and already disagreed — files/home/sessions aborted superseded requests, search did not. `web/src/lib/load-guard.js` is one pure primitive (`begin(kind?)` → token + aborts the previous same-kind request · `stale(token)` · `invalidate()` → everything stale + abort all); the four pages (files, home, search, sessions) now adapt it. Deliberate unification: search's requests are aborted now too, and its catch filters `AbortError` so a cancelled scan never shows a red banner. Pinned by `web/test/load-guard.test.js` (6 tests). Verified: web **458/458**, `vite build` clean.
+
 ## One error seam: every banner gets a human sentence — 2026-10-09 (web only)
 
 Round 4 finding: "the key was revoked" traveled as a magic English string (`Error("UNPAIRED")`) that 7 call sites re-matched by hand — settings.jsx alone carried two different sentences for the same condition — while ~35 banners rendered the raw `String(e.message || e)`, so a dead tunnel surfaced as "Failed to fetch". One seam now owns it:

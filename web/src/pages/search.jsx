@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks"
 import { ow } from "../api.js";
 import { timeAgo, unwrap } from "../lib/format.js";
 import { errorSentence } from "../lib/net.js";
+import { createLoadGuard } from "../lib/load-guard.js";
 import { navigate } from "../app.jsx";
 import { Banner, Empty, SkeletonList } from "../components/ui.jsx";
 import { SearchIcon } from "../components/icons.jsx";
@@ -41,18 +42,20 @@ export function SearchPage({ route }) {
   const unmounted = useRef(false);
   useEffect(() => () => { unmounted.current = true; }, []);
 
-  // Chống race khi đổi workspace / bấm "Tải lại": `load` cũ quay về sau sẽ
-  // setRows và vẽ danh sách của workspace CŨ dưới tiêu đề mới. Không có seq
-  // thì bấm hai workspace liên tiếp là danh sách nhảy lung tung.
-  const loadSeq = useRef(0);
+  // Chống race khi đổi workspace / bấm "Tải lại" (lib/load-guard — một primitive
+  // chung với files/home/sessions): `load` cũ quay về sau sẽ setRows và vẽ danh
+  // sách của workspace CŨ dưới tiêu đề mới. Không có lượt-guard thì bấm hai
+  // workspace liên tiếp là danh sách nhảy lung tung.
+  const guardRef = useRef(null);
+  if (!guardRef.current) guardRef.current = createLoadGuard();
 
   const load = useCallback(async () => {
-    const seq = ++loadSeq.current;
+    const token = guardRef.current.begin();
     try {
       let scopes = [{ id: wsId, name: "" }];
       if (!wsId) {
-        const payload = await ow("/workspaces");
-        if (seq !== loadSeq.current) return;
+        const payload = await ow("/workspaces", { signal: token.signal });
+        if (guardRef.current.stale(token)) return;
         const list = unwrap(payload)?.workspaces ?? payload?.workspaces ?? [];
         scopes = list.slice(0, WS_LIMIT).map((ws) => ({
           id: ws.id,
@@ -61,17 +64,17 @@ export function SearchPage({ route }) {
       }
       const groups = await Promise.all(
         scopes.map((sc) =>
-          ow(`/workspace/${encodeURIComponent(sc.id)}/opencode/session`)
+          ow(`/workspace/${encodeURIComponent(sc.id)}/opencode/session`, { signal: token.signal })
             .then((p) => (unwrap(p) ?? []).map((s) => ({ ...s, wsId: sc.id, wsName: sc.name })))
             // Workspace hỏng/riêng tư: bỏ riêng nó, còn workspace khác vẫn tìm được
             .catch(() => [])
         )
       );
-      if (seq !== loadSeq.current) return;
+      if (guardRef.current.stale(token)) return;
       setRows(groups.flat());
       setError("");
     } catch (e) {
-      if (seq !== loadSeq.current) return;
+      if (guardRef.current.stale(token) || e?.name === "AbortError") return;
       setError(errorSentence(e));
       setRows([]);
     }

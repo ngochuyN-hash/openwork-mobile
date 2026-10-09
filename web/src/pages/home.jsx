@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { ow, owDeleteSession } from "../api.js";
 import { timeAgo, unwrap } from "../lib/format.js";
 import { errorSentence } from "../lib/net.js";
+import { createLoadGuard } from "../lib/load-guard.js";
 import { navigate } from "../app.jsx";
 import { Banner, Empty, SkeletonList, SwipeRow } from "../components/ui.jsx";
 import { SearchIcon } from "../components/icons.jsx";
@@ -28,39 +29,35 @@ export function HomePage() {
   const [error, setError] = useState("");
   const [openId, setOpenId] = useState(null); // key `${wsId}:${sid}` — 1 dòng vuốt mở / lúc
   const timerRef = useRef(null);
-  // Chống race (mẫu của pages/files.jsx:41-64): poll 15s vừa bắt đầu thì người
-  // dùng bấm "Thử lại", hoặc vuốt xoá xong lại load — lượt cũ về sau không
-  // được ghi đè lượt mới. `seq` cho từng lượt, `abort` để bỏ request thừa
+  // Chống race (lib/load-guard — một primitive chung với files/search/sessions):
+  // poll 15s vừa bắt đầu thì người dùng bấm "Thử lại", hoặc vuốt xoá xong lại
+  // load — lượt cũ về sau không được ghi đè lượt mới, và request thừa bị hủy
   // (mỗi lượt là 8 workspace x 2 call — tốn băng thông điện thoại).
-  const seqRef = useRef(0);
-  const abortRef = useRef(null);
+  const guardRef = useRef(null);
+  if (!guardRef.current) guardRef.current = createLoadGuard();
   const itemsRef = useRef(null); // bản sao mới nhất, để hoàn tác xoá lạc quan
   itemsRef.current = items;
   const deletingRef = useRef(new Set());
-  const aliveRef = useRef(true);
 
   const load = useCallback(async () => {
-    const seq = ++seqRef.current;
-    abortRef.current?.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-    const stale = () => !aliveRef.current || seq !== seqRef.current;
+    const token = guardRef.current.begin();
+    const stale = () => guardRef.current.stale(token);
     try {
-      const payload = await ow("/workspaces", { signal: ctrl.signal });
+      const payload = await ow("/workspaces", { signal: token.signal });
       if (stale()) return;
       const wss = unwrap(payload)?.workspaces ?? payload?.workspaces ?? [];
       const slice = wss.slice(0, 8);
       const [sessRes, statRes] = await Promise.allSettled([
         Promise.all(
           slice.map((ws) =>
-            ow(`/workspace/${encodeURIComponent(ws.id)}/opencode/session`, { signal: ctrl.signal })
+            ow(`/workspace/${encodeURIComponent(ws.id)}/opencode/session`, { signal: token.signal })
               .then((p) => (unwrap(p) ?? []).map((s) => ({ ws, session: s })))
               .catch(() => [])
           )
         ),
         Promise.all(
           slice.map((ws) =>
-            ow(`/workspace/${encodeURIComponent(ws.id)}/opencode/session/status`, { signal: ctrl.signal })
+            ow(`/workspace/${encodeURIComponent(ws.id)}/opencode/session/status`, { signal: token.signal })
               .then((p) => ({ wsId: ws.id, map: unwrap(p) ?? p ?? {} }))
               .catch(() => null)
           )
@@ -94,13 +91,11 @@ export function HomePage() {
   }, []);
 
   useEffect(() => {
-    aliveRef.current = true;
     load();
     timerRef.current = setInterval(load, 15_000); // home poll nhẹ (SSE chỉ ở trong workspace)
     return () => {
-      aliveRef.current = false;
+      guardRef.current.invalidate(); // mọi token thành stale + hủy fetch — đừng vẽ vào màn đã đóng
       clearInterval(timerRef.current);
-      abortRef.current?.abort(); // đừng vẽ vào màn đã đóng
     };
   }, [load]);
 

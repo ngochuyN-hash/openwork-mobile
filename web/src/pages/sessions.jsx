@@ -4,6 +4,7 @@ import { timeAgo, unwrap } from "../lib/format.js";
 import { errorSentence } from "../lib/net.js";
 import { connectEvents } from "../lib/sse.js";
 import { OW_PROXY_PREFIX } from "../../../shared/contract.js";
+import { createLoadGuard } from "../lib/load-guard.js";
 import {
   // Xoá phiên + trạng thái đang chạy: luật thuần ở lib/session-ops.js để test
   // được. `dropSessionById` là phần "xoá kiểu lạc quan" (mất dòng ngay, gọi
@@ -25,27 +26,14 @@ export function SessionsPage({ route }) {
   const [openId, setOpenId] = useState(null);
 
   // ---- Chống race: đổi workspace / rời màn lúc đang tải ----
-  // `gen` tăng mỗi lần wsId đổi và lúc rời màn; request nào cũ hơn gen hiện tại
-  // thì bỏ, không vẽ đè lên danh sách của workspace MỚI (trước đây trả về
-  // trễ là danh sách sai workspace hiện lên ngay). `seq` chặn hai lượt tải
-  // CÙNG loại chạy đè nhau (SSE đến đúng lúc đang bấm "Thử lại"). Đúng cách
-  // pages/files.jsx:41-64 làm (AbortController + seq).
-  const genRef = useRef(0);
-  const seqRef = useRef({ sessions: 0, statuses: 0 });
-  const abortRef = useRef({});
-
-  function begin(kind) {
-    const seq = (seqRef.current[kind] ?? 0) + 1;
-    seqRef.current[kind] = seq;
-    abortRef.current[kind]?.abort();
-    const ctrl = new AbortController();
-    abortRef.current[kind] = ctrl;
-    return { kind, seq, gen: genRef.current, ctrl };
-  }
-
-  function isStale(token) {
-    return token.gen !== genRef.current || seqRef.current[token.kind] !== token.seq;
-  }
+  // lib/load-guard (một primitive chung với files/home/search — trước đây 4
+  // trang tự chế 4 dạng không giông nhau): `gen` tăng mỗi lần wsId đổi và lúc
+  // rời màn; token nào cũ hơn thì bỏ, không vẽ đè lên danh sách của workspace
+  // MỚI (trước đây trả về trễ là danh sách sai workspace hiện lên ngay). Kind
+  // riêng cho từng loại tải chặn hai lượt CÙNG loại chạy đè nhau (SSE đến đúng
+  // lúc đang bấm "Thử lại").
+  const guardRef = useRef(null);
+  if (!guardRef.current) guardRef.current = createLoadGuard();
 
   // Bản sao mới nhất của hai state trên, để hoàn tác xoá kiểu lạc quan KHÔNG
   // ghi đè một lượt load() nào vừa về đúng lúc đó.
@@ -58,29 +46,29 @@ export function SessionsPage({ route }) {
   const creatingRef = useRef(false); // chặn bấm nút (+) hai lần
 
   async function load() {
-    const token = begin("sessions");
+    const token = guardRef.current.begin("sessions");
     try {
       const payload = await ow(`/workspace/${encodeURIComponent(wsId)}/opencode/session`, {
-        signal: token.ctrl.signal,
+        signal: token.signal,
       });
-      if (isStale(token)) return;
+      if (guardRef.current.stale(token)) return;
       const rows = unwrap(payload) ?? [];
       rows.sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0));
       setSessions(rows);
       setError("");
     } catch (e) {
-      if (isStale(token) || e?.name === "AbortError") return;
+      if (guardRef.current.stale(token) || e?.name === "AbortError") return;
       setError(errorSentence(e));
     }
   }
 
   async function loadStatuses() {
-    const token = begin("statuses");
+    const token = guardRef.current.begin("statuses");
     try {
       const payload = await ow(`/workspace/${encodeURIComponent(wsId)}/opencode/session/status`, {
-        signal: token.ctrl.signal,
+        signal: token.signal,
       });
-      if (isStale(token)) return;
+      if (guardRef.current.stale(token)) return;
       setStatuses(unwrap(payload) ?? payload ?? {});
     } catch {
       /* status là bonus - bỏ qua lỗi */
@@ -88,7 +76,7 @@ export function SessionsPage({ route }) {
   }
 
   useEffect(() => {
-    genRef.current += 1;
+    guardRef.current.invalidate(); // token của wsId cũ thành stale (bấm nhanh qua 2 ws)
     load();
     loadStatuses();
     // Stream event engine (lib/sse.js — fetch, token bằng header): session
@@ -107,8 +95,7 @@ export function SessionsPage({ route }) {
     );
     return () => {
       clearTimeout(timer);
-      genRef.current += 1; // vô hiệu mọi request đang bay (không vẽ sau khi rời màn)
-      for (const ctrl of Object.values(abortRef.current)) ctrl?.abort();
+      guardRef.current.invalidate(); // vô hiệu mọi request đang bay (không vẽ sau khi rời màn)
       stopEvents();
     };
   }, [wsId]);

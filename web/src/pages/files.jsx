@@ -3,6 +3,7 @@ import { ow, owDownload, owUploadFile } from "../api.js";
 import { bytesToBase64, formatBytes, unwrap } from "../lib/format.js";
 import { blobUrlFor } from "../lib/blob-preview.js";
 import { errorSentence, isUnpaired } from "../lib/net.js";
+import { createLoadGuard } from "../lib/load-guard.js";
 import { DownloadIcon, FileIcon, FolderIcon, ImageIcon, RefreshIcon, UploadIcon } from "../components/icons.jsx";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
 import {
@@ -29,10 +30,11 @@ export function FilesPage({ route }) {
   const [opened, setOpened] = useState(null); // {name, path, kind: 'text'|'image'|'pdf'|'binary'}
   const uploadRef = useRef(null);
   const wsEnc = encodeURIComponent(wsId);
-  // Chống race khi bấm nhanh 2 thư mục: hủy fetch cũ (AbortController) + đếm
-  // lượt (seq) — kết quả về trễ của thư mục CŨ không được vẽ dưới breadcrumb MỚI.
-  const loadSeq = useRef(0);
-  const loadAbort = useRef(null);
+  // Chống race khi bấm nhanh 2 thư mục: lib/load-guard hủy fetch cũ + đếm lượt
+  // (một primitive chung với home/search/sessions) — kết quả về trễ của thư mục
+  // CŨ không được vẽ dưới breadcrumb MỚI.
+  const guardRef = useRef(null);
+  if (!guardRef.current) guardRef.current = createLoadGuard();
   // Tang moi moi khi nguoi dung doi workspace / hash tu ngoai. Nam trong deps
   // cua effect nap ben duoi: neu chi dua vao `path`, truong hop doi workspace
   // ma `path` trung (rat de: ca hai deu o "src") se khong co lan nap nao chay
@@ -41,15 +43,12 @@ export function FilesPage({ route }) {
 
   const load = useCallback(
     async (dir) => {
-      const seq = ++loadSeq.current;
-      loadAbort.current?.abort();
-      const controller = new AbortController();
-      loadAbort.current = controller;
+      const token = guardRef.current.begin();
       try {
         const payload = await ow(`/workspace/${wsEnc}/opencode/file?path=${encodeURIComponent(dir)}`, {
-          signal: controller.signal,
+          signal: token.signal,
         });
-        if (seq !== loadSeq.current) return null; // đã có lượt load mới hơn — bỏ kết quả stale
+        if (guardRef.current.stale(token)) return null; // đã có lượt load mới hơn — bỏ kết quả stale
         const nodes = unwrap(payload) ?? [];
         const dirs = nodes.filter((n) => n.type === "directory").sort((a, b) => a.name.localeCompare(b.name));
         const files = nodes.filter((n) => n.type !== "directory").sort((a, b) => a.name.localeCompare(b.name));
@@ -57,8 +56,8 @@ export function FilesPage({ route }) {
         setError("");
         return null; // không có lỗi
       } catch (e) {
-        if (controller.signal.aborted || e?.name === "AbortError") return null;
-        if (seq !== loadSeq.current) return null;
+        if (token.signal.aborted || e?.name === "AbortError") return null;
+        if (guardRef.current.stale(token)) return null;
         const msg = errorSentence(e);
         setError(msg);
         setEntries([]);
@@ -69,7 +68,7 @@ export function FilesPage({ route }) {
   );
 
   // Rời trang thì hủy fetch đang treo (nếu có).
-  useEffect(() => () => loadAbort.current?.abort(), []);
+  useEffect(() => () => guardRef.current.invalidate(), []);
 
   // `load` nằm trong deps: đổi workspace (`wsEnc` đổi -> useCallback sinh lại)
   // mà effect chỉ nghe `path` thì trang vẫn vẽ danh sách của workspace CŨ, và
