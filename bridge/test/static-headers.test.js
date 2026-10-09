@@ -5,15 +5,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
 import { createStaticHandler } from "../src/static.js";
+import { CSP, CSP_DIRECTIVES, renderHeadersFile, securityHeaders } from "../../shared/security-headers.js";
 
 // Cửa tunnel của bridge phục vụ web/dist trực tiếp, không đi qua Cloudflare —
 // nên nếu bridge quên gắn CSP thì web vẫn chạy trơn mà chỉ mất một mảnh giáp.
-// Test này ghim lại đúng bộ header đó, và (vì đặc tả cấm lệch) so luôn với
-// bản worker + bản _headers để ba cửa không trôi lệch nhau.
+// Từ 09/10 chính sách có MỘT nguồn (shared/security-headers.js): worker import,
+// bridge import, web/dist/_headers do build sinh từ renderHeadersFile(). Test
+// này ghim (1) hành vi thật qua handler của cửa tunnel, (2) giá trị canonical
+// của nguồn chung, (3) ba cửa vẫn đi qua đúng nguồn đó — không ai mọc bản chép
+// tay mới.
 
-// Bộ chỉ thị "đúng" — chính là hằng CSP ở worker/src/index.js. Khai báo tường
-// minh thay vì so sánh mềm, để đổi ý nghĩa (thêm/bớt chỉ thị) là một thay đổi
-// phải sửa cả ba file, không phải một so khớp âm thầm.
+// Bộ chỉ thị "đúng" — khai báo tường minh thay vì so sánh mềm, để đổi ý nghĩa
+// (thêm/bớt chỉ thị) là một thay đổi phải sửa shared + test này, không phải
+// một so khớp âm thầm.
 const EXPECTED_DIRECTIVES = [
   "default-src 'self'",
   "script-src 'self'",
@@ -147,48 +151,47 @@ test("static: asset và SPA fallback cũng mang trọn bộ header, asset cache 
   });
 });
 
-test("static: CSP của bridge khớp từng chỉ thị với worker và _headers (3 bản phải giống nhau)", () => {
-  // worker/src/index.js — đọc nguyên mảng chỉ thị rồi nối lại y hệt cách
-  // hằng CSP ở đó được dựng. Nếu ai đó đổi tên hằng thì chỗ này đỏ, và đó
-  // chính là tín hiệu buộc phải cập nhật cả ba bản trong một lần.
+test("static: chính sách một nguồn — shared ghim canonical, 3 cửa không mọc bản chép tay", () => {
+  // (1) Nguồn chung khớp bộ chỉ thị kỳ vọng — đổi chính sách là phải đi qua
+  // shared/security-headers.js, test này đỏ nếu ai sửa tay mảng ở đó.
+  assert.deepEqual(CSP_DIRECTIVES, EXPECTED_DIRECTIVES);
+  assert.equal(CSP, EXPECTED_CSP);
+  const headers = securityHeaders();
+  assert.equal(headers["content-security-policy"], EXPECTED_CSP);
+  assert.equal(headers["x-content-type-options"], "nosniff");
+  assert.equal(headers["referrer-policy"], "no-referrer");
+
+  // (2) File _headers sinh ra đúng hình dạng Cloudflare Assets đọc (cửa thứ
+  // ba) — ghim nguyên văn, gồm cả Title-Case để diff với bản tay cũ là 0.
+  const expectedFile =
+    "/*\n" +
+    "  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'\n" +
+    "  X-Content-Type-Options: nosniff\n" +
+    "  Referrer-Policy: no-referrer\n";
+  assert.equal(renderHeadersFile(), expectedFile);
+
+  // (3) Hai cửa code phải import nguồn chung, không được mọc lại mảng/object
+  // chép tay — literal chỉ thị trôi nổi ở worker hoặc bridge là drift.
   const workerSrc = readFileSync(new URL("../../worker/src/index.js", import.meta.url), "utf8");
-  const array = workerSrc.match(/const CSP = \[([\s\S]*?)\]\.join\("; "\)/);
-  assert.ok(array, "không tìm thấy hằng CSP trong worker/src/index.js — đã đổi cấu trúc? phải cập nhật cả 3 bản");
-  const workerCsp = [...array[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).join("; ");
-  assert.equal(workerCsp, EXPECTED_CSP, "bộ chỉ thị kỳ vọng của test lệch với worker");
-
-  // web/public/_headers — dòng CSP của Cloudflare Pages.
-  const headersFile = readFileSync(new URL("../../web/public/_headers", import.meta.url), "utf8");
-  const pageCsp = headersFile.match(/Content-Security-Policy:\s*(.+)/)?.[1]?.trim();
-  assert.ok(pageCsp, "web/public/_headers mất dòng Content-Security-Policy");
-
-  // Ba cửa vào web: worker (Cloudflare), bridge (tunnel), Pages. Lệch một chỗ
-  // là tấm chhiến "lọt XSS cũng không chạy được" chỉ còn ở cửa kia.
-  assert.equal(directiveSet(pageCsp).size, EXPECTED_DIRECTIVES.length);
-  for (const directive of EXPECTED_DIRECTIVES) {
-    assert.ok(directiveSet(pageCsp).has(directive), `_headers thiếu chỉ thị: ${directive}`);
-  }
-
-  // FIX-2 thêm 2 header ngoài CSP (nosniff + no-referrer) vào CẢ BA cửa. Chỉ so
-  // dòng CSP thì xoá 2 dòng này ở worker/_headers không test nào đỏ → cửa đó mất
-  // giáp mà không ai biết. Đặc tả (docs/SECURITY-FIX-SPEC-2026-10-04.md FIX-2 §2)
-  // yêu cầu 3 bản giống nhau, nên drift-guard phải ghim đủ 3 header, không riêng CSP.
   assert.ok(
-    /headers\.set\(\s*"x-content-type-options"\s*,\s*"nosniff"\s*\)/.test(workerSrc),
-    "worker/src/index.js mất headers.set x-content-type-options nosniff trong withSecurityHeaders()",
+    workerSrc.includes('from "../../shared/security-headers.js"'),
+    "worker/src/index.js phải import shared/security-headers.js",
   );
+  assert.ok(!/const CSP = \[/.test(workerSrc), "worker/src/index.js mọc lại mảng CSP chép tay");
+  assert.ok(!workerSrc.includes("frame-ancestors"), "worker/src/index.js còn literal chỉ thị CSP");
+
+  const staticSrc = readFileSync(new URL("../src/static.js", import.meta.url), "utf8");
   assert.ok(
-    /headers\.set\(\s*"referrer-policy"\s*,\s*"no-referrer"\s*\)/.test(workerSrc),
-    "worker/src/index.js mất headers.set referrer-policy no-referrer trong withSecurityHeaders()",
+    staticSrc.includes('from "../../shared/security-headers.js"'),
+    "bridge/src/static.js phải import shared/security-headers.js",
   );
-  assert.match(
-    headersFile,
-    /X-Content-Type-Options:\s*nosniff/,
-    "web/public/_headers mất dòng X-Content-Type-Options: nosniff",
-  );
-  assert.match(
-    headersFile,
-    /Referrer-Policy:\s*no-referrer/,
-    "web/public/_headers mất dòng Referrer-Policy: no-referrer",
+  assert.ok(!staticSrc.includes("frame-ancestors"), "bridge/src/static.js còn literal chỉ thị CSP");
+
+  // (4) Dây chuyền build phải còn sinh _headers — đứt dây này là cửa Cloudflare
+  // mất giáp mà không ai biết (dist_ không có file, Assets không gắn header).
+  const pkg = readFileSync(new URL("../../web/package.json", import.meta.url), "utf8");
+  assert.ok(
+    pkg.includes("node scripts/gen-headers.mjs"),
+    "web/package.json mất bước gen-headers.mjs sau vite build",
   );
 });

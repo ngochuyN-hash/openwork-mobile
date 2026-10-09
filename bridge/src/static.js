@@ -1,5 +1,6 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { extname, isAbsolute, join, normalize, relative, resolve } from "node:path";
+import { securityHeaders } from "../../shared/security-headers.js";
 
 // Minimal static file server for the built web app (web/dist), with SPA fallback.
 
@@ -26,34 +27,14 @@ const MIME = {
 // vụ chính web/dist cho cửa tunnel (*.trycloudflare.com / publicUrl tự host) —
 // cửa đó không đi qua Cloudflare nên không có CSP nào cả.
 //
-// PHẢI giữ nguyên văn 3 bản sau, đổi một chỗ là đổi cả ba:
-//   1. bridge/src/static.js (dưới đây)
-//   2. worker/src/index.js — hằng CSP + withSecurityHeaders()
-//   3. web/public/_headers — file của Cloudflare Pages
-// (web/dist/_headers là bản build sinh ra từ (3), không sửa tay.)
-// Ý nghĩa từng directive: xem comment ngay trên hằng CSP ở worker/src/index.js.
+// MỘT nguồn ở shared/security-headers.js (CSP + nosniff + no-referrer, ý nghĩa
+// từng directive nằm cạnh định nghĩa ở đó): cửa thứ nhất là worker (worker/src/
+// index.js), cửa thứ ba là Cloudflare Assets đọc web/dist/_headers do build
+// sinh ra từ cùng file đó — hết thời "3 bản chép tay, comment nhắc giữ giống".
 // An toàn với app hiện tại: dist/index.html chỉ có <script type="module"
 // crossorigin src="/assets/...">, không có inline script/style, nên
 // script-src 'self' không làm hỏng gì.
-const SECURITY_HEADERS = {
-  "content-security-policy": [
-    "default-src 'self'",
-    "script-src 'self'",
-    "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
-    "connect-src 'self'",
-    "manifest-src 'self'",
-    "object-src 'none'",
-    "base-uri 'self'",
-    "form-action 'none'",
-    "frame-ancestors 'none'",
-  ].join("; "),
-  // Chặn trình duyệt đoán content-type: file .txt/.map mà bridge phục vụ không
-  // được biến thành script khi tên file lọt "/" hoặc truy vấn hỏi.
-  "x-content-type-options": "nosniff",
-  // Không gửi URL phòng (tên phòng nằm trong mọi link QR) sang bên thứ ba.
-  "referrer-policy": "no-referrer",
-};
+const SECURITY_HEADERS = securityHeaders();
 
 /**
  * Path guard for a route that needs NO token. A plain prefix check is not

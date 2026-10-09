@@ -28,6 +28,7 @@
 // một nguồn chân lý ở shared/contract.js — wrangler/esbuild bundle theo
 // relative import bình thường.
 import { ErrorCode, HEADER_TENANT, HEADER_BRIDGE_SECRET, HEADER_INVITE, TENANT_QUERY_KEY, REGISTER_PATH, normalizeTenant } from "../../shared/contract.js";
+import { securityHeaders } from "../../shared/security-headers.js";
 
 // Nhãn kệ KV — MỘT chỗ biết cách đặt tên khoá. Trước đây prefix `machine:`/
 // `tenant:` rải ~20 chỗ trong file; đổi cách gọi khoá là phải sổ từng nơi, sót
@@ -302,41 +303,13 @@ async function relay(env, slotKey, request, url, bodyJson = null) {
   }
 }
 
-// Lớp áo giáp thứ hai của web: CSP gắn lên mọi tài nguyên tĩnh — script thì
-// tuyệt đối same-origin (không inline), nên nếu một ngày nào đó lọt XSS thì
-// code chèn động cũng bị trình duyệt cấm chạy trước khi với tới token trong
-// localStorage. blob: cho img vì khung hình stream + preview file là object
-// URL; 'unsafe-inline' chỉ cho style — UI xài style attribute dày đặc.
-// Thêm script CDN/iframe vào web thì phải nới ở đây.
-//
-// Cùng bộ áo giáp này còn được gắn ở 2 cửa nữa: bridge tự phục vụ static qua
-// tunnel (bridge/src/static.js) và Cloudflare Pages (web/public/_headers).
-// Ba bản phải GIỐNG NHAU — web có 2 cửa vào, thiếu header ở cửa nào thì tấm
-// chhiến "lọt XSS cũng không chạy được" chỉ còn ở cửa kia. Đổi CSP ở đây thì
-// sửa luôn cả hai nơi kia trong cùng một lần.
-const CSP = [
-  "default-src 'self'",
-  "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "connect-src 'self'",
-  "manifest-src 'self'",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'none'",
-  "frame-ancestors 'none'",
-].join("; ");
-
+// Lớp áo giáp của web — MỘT nguồn ở shared/security-headers.js (CSP + nosniff
+// + no-referrer, ý nghĩa từng directive nằm cạnh định nghĩa ở đó): cùng bộ này
+// còn gắn ở 2 cửa nữa — bridge tự phục vụ static qua tunnel (bridge/src/static.js)
+// và Cloudflare Assets đọc web/dist/_headers do build sinh ra từ cùng file đó.
 function withSecurityHeaders(page) {
   const headers = new Headers(page.headers);
-  headers.set("content-security-policy", CSP);
-  // nosniff: cấm trình duyệt tự đoán kiểu nội dung — chặn kiểu tấn công "file
-  // tĩnh thật ra là HTML/JS", tức làm script chạy được dù CSP có chặt.
-  // no-referrer: app không cần referrer ở đâu cả (link ngoài đã rel=noreferrer,
-  // link nội bộ là hash-route cùng origin), nên không lộ đường dẫn/token cho
-  // bên thứ ba. Giữ nguyên hai dòng này khớp bridge/src/static.js.
-  headers.set("x-content-type-options", "nosniff");
-  headers.set("referrer-policy", "no-referrer");
+  for (const [name, value] of Object.entries(securityHeaders())) headers.set(name, value);
   return new Response(page.body, { status: page.status, statusText: page.statusText, headers });
 }
 

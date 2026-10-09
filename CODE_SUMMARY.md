@@ -177,7 +177,9 @@ localStorage" argument only held on one door — and the tunnel door is the one 
 points at before the machine is paired. The CSP string is now duplicated in three
 places by design (`static.js`, the worker constant, `_headers`); **all three must
 stay identical**, because diverging in one leaves the other two armoured and one
-bare. The error branches (403/404/500) deliberately do not get the headers — they
+bare. (2026-10-09: the three copies collapsed into ONE source, `shared/security-headers.js`
+— the worker and bridge import it and the web build renders `_headers` from it,
+so the drift can no longer happen by hand; see `bridge/test/static-headers.test.js`.) The error branches (403/404/500) deliberately do not get the headers — they
 answer `text/plain`/JSON, not the app shell, so CSP has nothing to police there.
 
 **FIX-3 — the rate limit has to live where the IP can be trusted.** The bridge's
@@ -238,8 +240,11 @@ master → `masterUrl` carries `config.mobileToken`; device → **no `masterUrl`
 while the pairing part is intact; no token → 401. `bridge/test/static-headers.test.js`
 (3 cases) asserts the exact directive set on the app shell, on an asset and on the SPA
 fallback (the shell's `no-cache` and the asset's `max-age=3600` must survive), and
-**parses the worker's CSP array and `_headers` to prove all three copies match** —
-change the CSP in one place and that test names the other two you forgot.
+**pins the ONE source** (`shared/security-headers.js`, since 2026-10-09 — the worker
+and bridge import it, the web build renders `_headers` from it): canonical directives
+locked, any re-typed CSP copy in worker/bridge sources rejected, generated `_headers`
+content byte-locked, and the `vite build → gen-headers.mjs` chain asserted in
+`web/package.json`.
 The two worker changes are covered too, in `worker/test/relay.test.mjs` (mocked
 KV/fetch, never a real machine) — **7 new cases**, taking the file from 11 to **18**:
 the 11th `/api/pair` from one IP in a minute → 429 `rate_limited` while a second IP
@@ -699,7 +704,8 @@ What this round changed, in order:
    longer prints pairing codes / QR payloads / the master token (`bridge/test/startup.test.js`
    boots a real isolated process and asserts the output is credential-free), the worker refuses
    roomless bootstrap calls instead of fanning a stranger's code/key out to every live machine,
-   and `web/public/_headers` mirrors the worker CSP for the asset-first path.
+   and `web/dist/_headers` (since 2026-10-09 generated at build from `shared/security-headers.js`)
+   mirrors the worker CSP for the asset-first path.
 3. **Web API cleanup + first real unit tests** (`efe2a5f`, extended in the working tree) — see the
    section below; `web/test/` now holds 25 real tests.
 4. **Desktop GUI hardening** (`e5e4571`): `SafeInvoke` marshalling guard, `WaitForExit` timeouts on
