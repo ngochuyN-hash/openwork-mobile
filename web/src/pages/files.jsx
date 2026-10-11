@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { ow, owDownload, owUploadFile } from "../api.js";
-import { bytesToBase64, formatBytes, unwrap } from "../lib/format.js";
+import { ow, owDownload, owUploadFile, owWriteFile } from "../api.js";
+import { formatBytes, unwrap } from "../lib/format.js";
 import { blobUrlFor } from "../lib/blob-preview.js";
+import { createDownloadTask } from "../lib/download-task.js";
 import { errorSentence, isUnpaired } from "../lib/net.js";
 import { createLoadGuard } from "../lib/load-guard.js";
 import { DownloadIcon, FileIcon, FolderIcon, ImageIcon, RefreshIcon, UploadIcon } from "../components/icons.jsx";
@@ -341,23 +342,47 @@ function FileViewer({ wsEnc, file, onClose }) {
   const [error, setError] = useState("");
   const [dl, setDl] = useState(null); // {loaded, total} khi đang tải | {done, filename, url, blob} khi xong
   const [dlError, setDlError] = useState("");
-  const abortRef = useRef(null);
-  const dlToken = useRef(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  // Mirror của dl cho cleanup: effect unmount đóng qua state sẽ STALE (giá trị
-  // render đầu) — revokeObjectURL của lần tải xong không bao giờ chạy, mở vài
-  // file lớn là iOS Safari giết tab. Đọc qua ref thì luôn là giá trị mới nhất.
-  const dlRef = useRef(null);
-  dlRef.current = dl;
   // edited mới nhất: `save()` đọc qua ref để so "vừa lưu" với cái người dùng
   // đang gõ, không đọc closure cũ (xem save()).
   const editedRef = useRef(edited);
   editedRef.current = edited;
-  // Các object URL tạo ra CHỈ để share, không đi qua `dl` -> phải tự thu hồi,
-  // không thì mỗi lần bấm Chia sẻ một file chưa tải sẽ rò một blob (blobs của
-  // file 100MB không tự biến mất khỏi RAM khi document vẫn còn tham chiếu).
-  const shareUrls = useRef(new Set());
+
+  // Tham số tải GẦN NHẤT: task tạo MỘT lần cho đời component, callback đọc qua
+  // ref để lượt tải luôn đi đúng file ĐANG mở — `file` có thể đổi mà component
+  // không remount (mở link ?open= khác khi viewer đang mở).
+  const downloadArgsRef = useRef(null);
+  downloadArgsRef.current = { wsId: decodeURIComponent(wsEnc), path: file.path, name: file.name };
+  // Vòng đời tải/chi sẻ/huỷ/revoke nằm ở lib/download-task.js (node --test được):
+  // controller abort + token chống race huỷ/bấm-lại + revoke URL done + URL share
+  // riêng + cleanup lúc unmount — bản cũ nhốt cả bốn mối trong JSX với 0 test,
+  // comment ghi lại 2 leak thật và 1 bug "hủy chết".
+  const taskRef = useRef(null);
+  if (!taskRef.current) {
+    taskRef.current = createDownloadTask({
+      download: ({ signal, onProgress }) => {
+        const args = downloadArgsRef.current;
+        return owDownload(args.wsId, args.path, { signal, onProgress, fallbackName: args.name });
+      },
+      onChange: setDl,
+      onError: (e) => setDlError(`Download failed: ${e.message}`),
+      onSaved: ({ filename, url }) => {
+        // <a download> gốc hay bị Safari/PWA bỏ qua (mở file trong tab thay vì
+        // lưu) — blob sẵn sàng thì kích link thật. DOM là việc của trang, task
+        // chỉ báo xong.
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      },
+    });
+  }
+  const task = taskRef.current;
+  // Rời viewer: huỷ lượt đang tải + revoke MỌI URL (done + share) — lib làm.
+  useEffect(() => () => task.dispose(), []);
 
   // Nút Đóng mượn topbar (ghim cố định): báo lên App qua event nội bộ, gửi 1 lần lúc mở.
   useEffect(() => {
@@ -466,11 +491,7 @@ function FileViewer({ wsEnc, file, onClose }) {
     setSaving(true);
     setError("");
     try {
-      const base64 = bytesToBase64(new TextEncoder().encode(text));
-      await ow(`/workspace/${wsEnc}/files/raw`, {
-        method: "POST",
-        body: { path: file.path, dataBase64: base64 },
-      });
+      await owWriteFile(decodeURIComponent(wsEnc), file.path, text);
       setContent(text);
       // Người dùng có thể gõ tiếp TRONG lúc đang lưu. So với bản gõ mới nhất
       // (đọc qua ref) chứ không setDirty(false) cứng: setDirty(false) khiến phần
@@ -483,105 +504,46 @@ function FileViewer({ wsEnc, file, onClose }) {
     }
   }
 
-  // Tải qua fetch + Blob: <a download> gốc hay bị Safari/PWA bỏ qua (mở file
-  // trong tab thay vì lưu). Bản này hiện % + hủy được, xong mới kích <a download>.
-  //
-  // `dlToken` chống race giữa lượt HUỶ và lượt BẤM LẠI: `cancelDownload` xoá
-  // controller NGAY, nên người dùng bấm Tải lại được trong khoảnh vài ms trong
-  // khi promise cũ còn đang unwind. `finally` của lượt cũ từng set
-  // `abortRef.current = null` — xoá luôn controller MỚI, khiến lần bấm Hủy tiếp
-  // theo không làm gì cả và % chết đứng. Token đánh dấu lượt nào còn hợp lệ;
-  // mọi callback của lượt cũ trở nên vô hiệu.
-  async function downloadFile() {
-    if (abortRef.current) return;
-    // Mở URL blob mới trước khi mở: thu hồi URL lần tải trước ngay tại đây
-    // (setDl({loaded:0,...}) bên dưới sẽ đè trạng thái done cũ — không revoke
-    // ở đây thì URL cũ leak cho tới khi unmount).
-    if (dlRef.current?.url) URL.revokeObjectURL(dlRef.current.url);
-    dlRef.current = null;
-    const controller = new AbortController();
-    abortRef.current = controller;
-    const token = Symbol("download");
-    dlToken.current = token;
-    setDl({ loaded: 0, total: 0 });
+  // Tải/chi sẻ/huỷ: toàn bộ máy trạng thái nằm trong `task`
+  // (lib/download-task.js) — start() tự chặn bấm kép, tự revoke URL lượt trước,
+  // tự im lặng với AbortError. Xong lượt thì onSaved ở trên kích <a download>.
+  function downloadFile() {
     setDlError("");
-    try {
-      const { blob, filename } = await owDownload(decodeURIComponent(wsEnc), file.path, {
-        signal: controller.signal,
-        fallbackName: file.name,
-        onProgress: ({ loaded, total }) => {
-          if (dlToken.current === token) setDl({ loaded, total });
-        },
-      });
-      if (dlToken.current !== token) return;
-      const url = URL.createObjectURL(blob);
-      setDl({ done: true, filename, url, blob });
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    } catch (e) {
-      if (dlToken.current !== token) return;
-      if (e?.name !== "AbortError") setDlError(`Download failed: ${e.message}`);
-      setDl(null);
-    } finally {
-      if (dlToken.current === token) abortRef.current = null;
-    }
+    task.start();
   }
 
   function cancelDownload() {
-    dlToken.current = null;
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setDl(null);
+    task.cancel();
   }
 
   // iOS chỉ cho "Lưu về Files" qua Share sheet — hiện nút này khi hỗ trợ.
   async function shareFile() {
-    // Đang tải dở thì không chia sẻ: `dl?.done` false khiến nhánh dưới tải LẠI
-    // cùng file một lần nữa — hai luồng đọc chung một đường dẫn, và nút Hủy chỉ
-    // nắm được luồng của `downloadFile`. Khoá nút thay vì để sinh thêm.
-    if (abortRef.current) return;
+    // Đang tải dở thì không chia sẻ: getForShare sẽ tải LẠI cùng file một lần
+    // nữa — hai luồng đọc chung một đường dẫn, và nút Hủy chỉ nắm được luồng
+    // của start(). Khoá nút thay vì để sinh thêm.
+    if (task.busy()) return;
     try {
-      const ready = dl?.done ? dl : await (async () => {
-        const r = await owDownload(decodeURIComponent(wsEnc), file.path, { fallbackName: file.name });
-        return { done: true, ...r };
-      })();
+      const ready = await task.getForShare();
       const nav = navigator;
       const f = new File([ready.blob], ready.filename, { type: ready.blob.type || undefined });
       if (nav.canShare?.({ files: [f] })) {
         await nav.share({ files: [f], title: ready.filename });
         return;
       }
-      // Không có Share sheet (desktop): mở tab. URL tạo ở đây thuộc về
-      // component này nên PHẢI ghi vào shareUrls để cleanup thu hồi — bản cũ tạo
-      // xong bỏ rơi, mỗi lần Chia sẻ một file lớn là một blob bị rò.
-      const owned = ready.url ? null : URL.createObjectURL(ready.blob);
-      if (owned) shareUrls.current.add(owned);
-      const url = ready.url ?? owned;
+      // Không có Share sheet (desktop): mở tab. URL task tự quản — URL done
+      // được dùng lại, URL riêng cho lần share task tự thu hồi lúc dispose.
+      const url = ready.url ?? ready.ownedUrl;
       // window.open có thể bị chặn (popup blocker) vì đã await mất "user
-      // activation" — trả về null. Báo lỗi thay vì im lặng.
+      // activation" — trả về null. Báo lỗi thay vì im lặng. Chỉ báo khi URL là
+      // của riêng lần share này; URL done thì nút Download vẫn còn đường mở.
       const win = window.open(url, "_blank", "noopener");
-      if (!win && owned) {
+      if (!win && ready.ownedUrl) {
         setDlError("Browser blocked new window — tap Download to save file instead.");
       }
     } catch (e) {
       if (e?.name !== "AbortError") setDlError(`Share failed: ${e.message}`);
     }
   }
-
-  useEffect(
-    () => () => {
-      abortRef.current?.abort();
-      const url = dlRef.current?.url;
-      if (url) URL.revokeObjectURL(url);
-      for (const u of shareUrls.current) URL.revokeObjectURL(u);
-      shareUrls.current.clear();
-    },
-    []
-  );
 
   const dlBusy = !!dl && !dl.done;
   const dlLabel = !dl

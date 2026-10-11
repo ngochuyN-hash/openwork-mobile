@@ -8,7 +8,7 @@ import { buildPromptModelFields } from "./lib/model-behavior.js";
 import { errorSentence, unpairedError, withTimeoutSignal } from "./lib/net.js";
 import { getTenant, getTenantName, getToken } from "./lib/identity-store.js";
 import { addKey } from "./lib/keyring.js";
-import { filenameFromDisposition, formatBytes, unwrap } from "./lib/format.js";
+import { bytesToBase64, filenameFromDisposition, formatBytes, unwrap } from "./lib/format.js";
 import {
   BRIDGE_ROUTES,
   HEADER_TENANT,
@@ -477,4 +477,18 @@ export async function owUploadFile(wsId, dir, file) {
     body: { path, dataBase64 },
   });
   return path;
+}
+
+/**
+ * Ghi NỘI DUNG CHUỖI vào 1 file workspace (POST /files/raw) — cùng seam với
+ * owUploadFile. Trước đây save() của FileViewer tự cuộn base64 + POST, thành
+ * seam ghi-file thứ hai chép tay: sửa một nơi là quên nơi kia. Blob/file nhị
+ * phân hãy dùng owUploadFile.
+ */
+export async function owWriteFile(wsId, path, content) {
+  const base64 = bytesToBase64(new TextEncoder().encode(String(content ?? "")));
+  await ow(`/workspace/${encodeURIComponent(wsId)}/files/raw`, {
+    method: "POST",
+    body: { path, dataBase64: base64 },
+  });
 }
