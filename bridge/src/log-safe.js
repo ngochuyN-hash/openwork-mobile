@@ -112,6 +112,11 @@ export function redactUrl(input) {
 // Tiền tố chìa khóa của OpenWork — danh sách prefix nằm ở shared/contract.js
 // (web/src/pages/pairing.jsx dựng regex kiểm tra hình dạng từ cùng nguồn).
 const TOKEN_LIKE = new RegExp(`\\b${TOKEN_PREFIX_SOURCE}[0-9a-zA-Z]+`, "g");
+// Secret phòng (ows_ do tenant.mjs sinh, owls_ là lookupSecret của bridge)
+// KHÔNG được thêm vào TOKEN_PREFIX_SOURCE — web phải từ chối chúng làm chìa
+// bridge — nhưng chúng vẫn là bí mật: nếu một sink log tương lai in trúng thì
+// cũng phải bị che như token.
+const ROOM_SECRET_LIKE = /\b(?:ows|owls)_[0-9a-fA-F]+/g;
 
 /**
  * Quét bất kỳ chuỗi nào (message lỗi, stack) và thay mọi chìa khóa trần bên
@@ -122,5 +127,5 @@ const TOKEN_LIKE = new RegExp(`\\b${TOKEN_PREFIX_SOURCE}[0-9a-zA-Z]+`, "g");
  */
 export function redactSecrets(input) {
   if (typeof input !== "string") return input;
-  return input.replace(TOKEN_LIKE, REDACTED);
+  return input.replace(TOKEN_LIKE, REDACTED).replace(ROOM_SECRET_LIKE, REDACTED);
 }

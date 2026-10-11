@@ -100,8 +100,16 @@ function copyToClipboard(text) {
 
 const [, , action, user, ...rest] = process.argv;
 
+// Reserved names + shape bản ghi nằm ở tenant-record.mjs (module thuần để test
+// import được — file này là CLI có side-effect ở top-level).
+import { RESERVED_TENANT_NAMES, tenantRecord } from "./tenant-record.mjs";
+
 if (action === "add") {
   const name = String(user ?? "").toLowerCase();
+  if (RESERVED_TENANT_NAMES.has(name)) {
+    console.log(`❌ Tên phòng "${name}" là tên dành riêng — chọn tên khác.`);
+    process.exit(1);
+  }
   if (!TENANT_RE.test(name)) {
     console.log('Dùng: node scripts/tenant.mjs add <user> "Tên hiển thị" [địa-chỉ-worker]');
     console.log("      user chỉ gồm a-z, 0-9, dấu gạch ngang (2-32 ký tự), vd: nam");
@@ -132,11 +140,10 @@ if (action === "add") {
     console.log("   Muốn xóa hẳn: node scripts/tenant.mjs revoke " + name);
     process.exit(1);
   }
-  kv(
-    "put",
-    `tenant:${name}`,
-    JSON.stringify({ secret, name: displayName, createdAt: Date.now() })
-  );
+  // Chỉ lưu sha256 vào KV (invariant chung với /api/tenant/create) — mật khẩu
+  // gốc chỉ sống trong thẻ mời in ra cho chủ worker, không nằm ở at-rest.
+  const record = tenantRecord(secret, displayName);
+  kv("put", `tenant:${name}`, JSON.stringify(record));
   // Link mời: điện thoại bấm là tự đăng nhập (web bắt #i=), máy tính dán vào
   // `openpocket edge join <link>` cũng đọc được user/pass ngay trong link.
   const inviteLink = `${workerUrl}/#i=${name}:${secret}`;

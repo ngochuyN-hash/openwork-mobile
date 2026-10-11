@@ -112,7 +112,15 @@ export class PairingService {
     const token = `owd_${randomBytes(24).toString("hex")}`;
     const device = {
       id: `d_${randomUUID().slice(0, 8)}`,
-      label: String(label ?? "").trim().slice(0, 40) || `Device ${new Date(this.now()).toLocaleString("en-US")}`,
+      // Label do khách gõ (cửa public /api/pair) nhưng bị in thẳng vào log:
+      // bớt ký tự xuống dòng/dấu nháy để không ai giả mạo dòng log bridge
+      // (log-forgery). Vẫn giữ dấu cách/có dấu tiếng Việt cho dễ đọc.
+      label:
+        String(label ?? "")
+          .replace(/[\u0000-\u001f\u007f"'\\]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 40) || `Device ${new Date(this.now()).toLocaleString("en-US")}`,
       tokenHash: sha256(token),
       createdAt: this.now(),
       lastSeenAt: this.now(),

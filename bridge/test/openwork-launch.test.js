@@ -52,3 +52,16 @@ test("bóc nháy xong thì tên file phải khớp OpenWork.exe", () => {
   assert.equal(isOpenWorkExeName(raw), false, "chưa bóc thì tên file có dấu nháy");
   assert.equal(isOpenWorkExeName(normalizeExePathInput(raw)), true);
 });
+
+// Cùng cửa route đó nhưng biến thể MẠNG: \host\share\OpenWork.exe qua được
+// existsSync, mà spawn() lúc đó chạy code do NGƯỜI GIỮ share cung cấp — không
+// phải file nằm sẵn trên máy chủ nhà. Path tương đối cũng cấm cho tồn nghĩa.
+test("isOpenWorkExeName: chặn UNC/WebDAV và path tương đối, chỉ nhận ổ local", () => {
+  assert.equal(isOpenWorkExeName("\\\\may-le\\share\\OpenWork.exe"), false, "UNC path bị chặn");
+  assert.equal(isOpenWorkExeName("//may-le/share/OpenWork.exe"), false, "dạng gạch xuôi của UNC cũng bị chặn");
+  assert.equal(isOpenWorkExeName("Apps\\OpenWork.exe"), false, "path tương đối bị chặn");
+  assert.equal(isOpenWorkExeName("OpenWork.exe"), false, "chỉ tên file không phải đường dẫn tuyệt đối");
+  assert.equal(isOpenWorkExeName("C:OpenWork.exe"), false, "thiếu dấu sổ sau ký tự ổ");
+  assert.equal(isOpenWorkExeName("C:\\Apps\\OpenWork.exe"), true, "ổ local vẫn đi qua");
+  assert.equal(isOpenWorkExeName("D:/Apps/openwork.exe"), true, "gạch xuôi trên ổ local vẫn đi qua");
+});

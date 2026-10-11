@@ -115,6 +115,19 @@ export async function proxyToOpenWork(req, res, upstreamPath, { baseUrl, ownerTo
   const query = req.url?.split("?")[1];
   if (query) upstream.search = `?${query}`;
 
+  // Chốt whitelist lần hai trên pathname ĐÃ qua URL(): normalizeDotSegments chỉ
+  // dọn dot-segment dạng CHỮ, còn WHATWG URL gộp thêm cả dạng %-encode ("%2e%2e",
+  // ".%2e"...) và backslash thành "../" — chỉ xét một lần thì chuỗi "%252e%252e"
+  // qua mắt whitelist (đọc là chữ lẹt) rồi bị URL() gộp thành đường ngoài trắng.
+  // Xét lại trên upstream.pathname (đã chuẩn hoá, chưa gắn query) vá đúng khe đó.
+  if (!isProxyPathAllowed(upstream.pathname)) {
+    res.writeHead(403, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({ code: "forbidden", message: `Path not allowed through bridge: ${upstream.pathname}` })
+    );
+    return;
+  }
+
   // SSRF guard: proxy này CHỈ được nói chuyện với openwork-server cục bộ.
   // baseUrl đến từ discovery trên chính máy này, nhưng khoá cứng protocol +
   // hostname loopback để fetch không bao giờ trỏ ra ngoài kể cả khi discovery

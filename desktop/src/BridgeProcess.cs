@@ -124,7 +124,16 @@ namespace OpenPocket.Desktop
                     {
                         try
                         {
-                            Process.GetProcessById(pid).Kill();
+                            // PID reuse / pid file bị ghi đè: bridge.pid nằm trong
+                            // %APPDATA% (process cùng user không nâng quyền ghi được),
+                            // nên con số trong file KHÔNG đáng tin — CLI cũng kiểm
+                            // cùng điều kiện trước khi tin pid file. Kill sai mục tiêu
+                            // từ tiến trình elevated là lỗi confused-deputy.
+                            var target = Process.GetProcessById(pid);
+                            if (target.ProcessName.Equals("node", StringComparison.OrdinalIgnoreCase))
+                            {
+                                target.Kill();
+                            }
                         }
                         catch { }
                     }

@@ -71,3 +71,14 @@ test("redactSecrets: chuỗi không có token giữ nguyên", () => {
   assert.equal(redactSecrets("ECONNREFUSED 127.0.0.1:8788"), "ECONNREFUSED 127.0.0.1:8788");
   assert.equal(redactSecrets(7), 7);
 });
+// Secret phòng (ows_ do tenant.mjs sinh, owls_ là lookupSecret) không phải
+// prefix chìa bridge nhưng vẫn là bí mật — sink log tương lai in trúng thì
+// phải bị che như token (bridge/src/log-safe.js ROOM_SECRET_LIKE).
+test("redactSecrets: che thêm secret phòng ows_/owls_ (không đụng prefix chìa web)", () => {
+  const roomSecret = "ows_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const lookupSecret = "owls_00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+  const out = redactSecrets(`đăng nhập phòng lỗi với ${roomSecret} và ${lookupSecret}`);
+  assert.ok(!out.includes("ows_0123"), `owes_ còn sót: ${out}`);
+  assert.ok(!out.includes("owls_0011"), `owls_ còn sót: ${out}`);
+  assert.ok(out.includes("<redacted>"));
+});

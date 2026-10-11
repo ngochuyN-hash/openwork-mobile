@@ -1232,3 +1232,49 @@ test("LIMIT-2: nhà thật sau NAT đăng nhập 3 phòng với ĐÚNG mật kh�
   assert.equal((await blocked.json()).code, "rate_limited");
   assert.equal(calls.length, 30, "lượt bị chặn không relay đi đâu");
 });
+
+// Đốt hạn mức KV: nhánh /__register đọc tenant:<id> TRƯỚC khi so secret mà
+// trước đây KHÔNG có trần — 1 IP đổi tenant hợp lệ liên tục là đốt KV đọc
+// chung của cả tài khoản. Trần 10/phút/IP (worker/src/index.js nhánh register).
+test("LIMIT-3: /__register trần 10/phút/IP, lượt 11 bị 429", async (t) => {
+  const cache = useCountingCache(t);
+  const env = {
+    OWM_STATE: mockKV({ "tenant:t1": JSON.stringify({ secretHash: sha256("pw-register") }) }),
+  };
+  const mk = () =>
+    apiRequest("/__register", {
+      headers: { "x-owm-secret": "pw-register", "cf-connecting-ip": "9.9.9.9" },
+      body: JSON.stringify({ tenant: "t1", url: "https://ok.trycloudflare.com" }),
+    });
+  for (let i = 0; i < 10; i += 1) {
+    const res = await fetchWorker(mk(), env);
+    assert.equal(res.status, 200, `lượt ${i + 1} phải qua`);
+  }
+  const blocked = await fetchWorker(mk(), env);
+  assert.equal(blocked.status, 429);
+  assert.equal(cache.count("register", "9.9.9.9"), 10, "trần chặn đúng 10");
+});
+
+// Relay fall-through đọc slot máy từ KV MỖI lượt — trần thô 120/phút/IP giữ
+// mức đốt của 1 IP lạ xuống có chặn, trong khi PWA thật (poll + SSE) không bao
+// giờ chạm. Trần cao gấp 4 lần pair-tenant-ip (30) nên không vướng NAT nhà dùng chung.
+test("LIMIT-4: relay fall-through trần 120/phút/IP", async (t) => {
+  const cache = useCountingCache(t);
+  const mocked = mockFetch(() => jsonRes(200, { ok: true }));
+  t.after(() => mocked.restore());
+  const env = {
+    OWM_STATE: mockKV({ "machine:m1": slot("https://ok.trycloudflare.com") }),
+  };
+  const mk = () =>
+    apiRequest("/api/devices", {
+      method: "GET",
+      headers: { "x-owm-tenant": "m1", "cf-connecting-ip": "8.8.8.8" },
+    });
+  for (let i = 0; i < 120; i += 1) {
+    const res = await fetchWorker(mk(), env);
+    assert.equal(res.status, 200, `lượt ${i + 1} phải qua`);
+  }
+  const blocked = await fetchWorker(mk(), env);
+  assert.equal(blocked.status, 429);
+  assert.equal(cache.count("relay", "8.8.8.8"), 120, "trần chặn đúng 120");
+});

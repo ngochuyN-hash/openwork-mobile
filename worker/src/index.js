@@ -345,6 +345,14 @@ async function handle(request, env) {
   // 1. Bridge đăng ký địa chỉ tunnel hiện tại của phòng mình (shape: REGISTER_PATH
   // trong shared/contract.js)
   if (url.pathname === REGISTER_PATH && request.method === "POST") {
+    // Trần thô theo IP TRƯỚC khi đọc body/đọc KV: mỗi lượt /__register đều đọc
+    // tenant:<id> từ KV (dòng dưới) trước khi so secret, mà nhánh này trước đây
+    // KHÔNG có trần — 1 IP đổi tenant hợp lệ liên tục là đốt hạn mức KV đọc
+    // chung của cả tài khoản. Bridge thật chỉ register khi URL đổi hoặc heartbeat
+    // 15 phút/lần nên trần 10/phút/IP dư sức thẳng đứng.
+    if (await rateLimited(request, "register", 10)) {
+      return json({ error: "rate_limited" }, 429);
+    }
     const body = await readJson(request);
     const tenant = normalizeTenant(body?.tenant);
     if (tenant) {
@@ -522,6 +530,15 @@ async function handle(request, env) {
         },
         400
       );
+    }
+    // Trần thô theo IP cho mọi lối relay rơi tự do còn lại: relay đọc slot máy
+    // từ KV ở MỖI lượt gọi, nên nhánh này cũng đốt hạn mức KV đọc chung của cả
+    // tài khoản y như các cửa đăng nhập (đã vá ở rateLimited). 120/phút/IP là
+    // trần cao gấp 4 lần trần IP của pair-tenant — PWA thật (poll + SSE tự nối
+    // lại ≤ 16s/lần) không bao giờ chạm; nhà sau NAT chia nhau vài người vẫn dư.
+    // Kẻ lạ thì bị chặn mức ~173k đọc/ngày thay vì vô hạn.
+    if (await rateLimited(request, "relay", 120)) {
+      return json({ code: ErrorCode.RATE_LIMITED, message: "Too many requests - slow down." }, 429);
     }
     return relay(env, tenant ? kvKey.machine(tenant) : MAIN_KEY, request, url);
   }

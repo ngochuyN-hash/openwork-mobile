@@ -252,6 +252,19 @@ The 04/10 audit ended with a list of accepted risks and small debts. With only t
 
 Test floor after the pass: bridge **111** (was 86), worker **48** (was 18), web **432** (the −28 is the parallel session's `session-organize` removal, not this pass). This pass is committed but **not deployed**: one `wrangler deploy` + one web rebuild + one bridge restart bring it live.
 
+## Audit-driven hardening (2026-10-11) — committed, not yet deployed
+
+A full run of the Cloudflare `security-audit` skill (quick profile, source-only, 23 agent invocations: 4 reconnaissance, 7 hunters, 1 coverage critic, 11 independent verifiers) produced **zero confirmed vulnerabilities** and 9 source-grounded `needs_validation` leads — two hunter candidates were refuted by their independent verifiers (the PWA never loads a proxied URL as a document, and blob: documents inherit the app's CSP, so the local-storage and inline-HTML leads collapsed). The cheap in-source mitigations for the leads are in this pass, each with its own test:
+
+- **Proxy whitelist re-checked on the final URL pathname** — a double-encoded dot segment (`%252e%252e`) passed the textual whitelist and was collapsed into `../` by WHATWG `URL()`, reaching any engine path with the injected owner token; the whitelist now judges the post-normalization pathname too.
+- **cloudflared found on PATH is hash-verified** like the downloaded and cached copies; a mismatched binary is refused and the pinned build is downloaded instead.
+- **`/api/openwork/path` accepts local drive paths only** — a reachable UNC/WebDAV path named `OpenWork.exe` would let the share owner supply the binary that wake/auto-launch executes.
+- **The elevated desktop GUI validates the pid-file kill target** (`ProcessName == "node"`) before killing, matching the CLI's own guard.
+- **The worker meters `/__register` (10/min/IP) and the generic relay fall-through (120/min/IP)** — both read the account-wide KV on every unauthenticated request and were the two doors left outside the quota protection.
+- **`tenant.mjs` writes `secretHash` instead of the plaintext room password** and honors the worker's reserved-name blocklist; pairing labels are log-sanitized and `redactSecrets` covers `ows_`/`owls_` room secrets.
+
+Verified: bridge **156/156**, worker **60/60**, desktop compile clean. Full run artifacts (coverage ledger, findings, reports) live outside the repo in `~/security-audit-skill/openwork-mobile-app/run-1/`. Deployment needed to go live: one `wrangler deploy`, one bridge restart, one GUI rebuild.
+
 ## Reliability checks (2026-09-18, local changes)
 
 - Listener retries share one counter: at most ten retries, 400 ms apart. The startup smoke test runs a real bridge process against temporary bridge/OpenWork data directories, releases a deliberately occupied port, and checks authenticated/unauthenticated HTTP responses.

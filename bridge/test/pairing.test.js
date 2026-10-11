@@ -95,3 +95,19 @@ test("mintDevice: cấp khóa vĩnh viễn không cần mã (dùng cho đăng nh
     restore();
   }
 });
+
+// Label do khách gõ trên cửa public /api/pair nhưng bị in thẳng vào log bridge:
+// xuống dòng/dấu nháy trong label cho phép GIẢ MẠO dòng log (log-forgery).
+test("mintDevice: label bị dọn ký tự xuống dòng/nháy trước khi lưu và in log", () => {
+  const { service, restore } = freshService();
+  try {
+    const code = service.ensureCode();
+    const { device } = service.pair(code, "iPhone\n[2026-10-11 03:00] PAIRED owm_fake\" quoted\\path");
+    assert.ok(!device.label.includes("\n"), "không còn xuống dòng");
+    assert.ok(!device.label.includes('"'), "không còn dấu nháy kép");
+    assert.ok(!device.label.includes("\\"), "không còn backslash");
+    assert.ok(device.label.startsWith("iPhone"), "phần đầu giữ nguyên");
+  } finally {
+    restore();
+  }
+});

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseListeningPorts, isOpenWorkServerHealth } from "../src/discovery.js";
-import { isProxyPathAllowed, isMethodAllowed, normalizeDotSegments, filenameFromQuery, shouldForceDownload } from "../src/proxy.js";
+import { isProxyPathAllowed, isMethodAllowed, normalizeDotSegments, filenameFromQuery, shouldForceDownload, proxyToOpenWork } from "../src/proxy.js";
 import { isAuthorized, isTokenAuthorized, requestToken } from "../src/auth.js";
 import { hashToken } from "../src/bootstrap.js";
 import { candidateExePaths, findOpenWorkExe } from "../src/openwork-launch.js";
@@ -61,6 +61,38 @@ test("proxy whitelist allows management paths, blocks everything else", () => {
 test("normalizeDotSegments resolves traversal before whitelist", () => {
   assert.equal(normalizeDotSegments("/workspace/ws_1/opencode/../../hack"), "/workspace/hack");
   assert.equal(normalizeDotSegments("/a/./b/../c/"), "/a/c");
+});
+
+// Whitelist phải được chốt trên pathname ĐÃ qua URL(): WHATWG URL gộp cả
+// dot-segment dạng %-encode ("%2e%2e", ".%2e"...) mà normalizeDotSegments chỉ
+// dọn dạng CHỮ — chuỗi "%252e%252e" qua mắt lần xét đầu (đọc là chữ) rồi bị
+// URL() gộp thành "../" trỏ ra ngoài trắng. Vá: xét lần hai trên
+// upstream.pathname sau khi dựng URL (bridge/src/proxy.js).
+test("proxy chốt whitelist lần hai trên pathname đã qua URL (chặn %252e%252e)", async () => {
+  // Đối chứng unit: URL() thật sự gộp %2e%2e thành "../", và đường gộp ra
+  // /tokens không thuộc whitelist nào.
+  const collapsed = new URL("/workspaces/%2e%2e/%2e%2e/tokens", "http://127.0.0.1:59999").pathname;
+  assert.equal(collapsed, "/tokens", "WHATWG URL phải gộp %2e%2e như dot-segment");
+  assert.equal(isProxyPathAllowed(collapsed), false);
+
+  // End-to-end qua proxyToOpenWork: request double-encoded phải bị 403 TRƯỚC
+  // khi fetch upstream (không mạng, không cần server thật).
+  let status = 0;
+  let body = "";
+  const res = {
+    writeHead(code) { status = code; },
+    end(payload) { body = String(payload ?? ""); },
+  };
+  const req = { method: "GET", url: "/api/ow/workspaces/%252e%252e/%252e%252e/tokens", headers: {} };
+  await proxyToOpenWork(req, res, "/workspaces/%2e%2e/%2e%2e/tokens", {
+    baseUrl: "http://127.0.0.1:59999",
+    ownerToken: "owt_test",
+  });
+  assert.equal(status, 403, `kỳ vọng 403 sau lần xét thứ hai, nhận ${status} ${body}`);
+
+  // Đường hợp lệ thì lần xét thứ hai phải VƯỢT (pathname giữ nguyên hình dạng).
+  const legit = new URL("/workspaces/ws_1/files/raw?path=a.txt", "http://127.0.0.1:59999").pathname;
+  assert.equal(isProxyPathAllowed(legit), true, "đường thật không được bị chặn nhầm");
 });
 
 test("method allowlist", () => {

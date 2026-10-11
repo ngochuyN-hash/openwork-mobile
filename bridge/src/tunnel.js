@@ -113,7 +113,8 @@ export function cloudflaredPath() {
   return join(bridgeDataDir(), process.platform === "win32" ? "cloudflared.exe" : "cloudflared");
 }
 
-async function ensureCloudflared(log) {
+// Export cho test (tunnel-integrity): nhánh PATH phải qua verify như bản tải.
+export async function ensureCloudflared(log) {
   const target = cloudflaredPath();
   const { url, sha256 } = cloudflaredSource();
   // File đã có sẵn (tải lần trước): verify MỖI LẦN start — file đã cài có thể bị
@@ -132,7 +133,11 @@ async function ensureCloudflared(log) {
       }
     }
   }
-  // Có sẵn trên PATH thì dùng luôn
+  // Có sẵn trên PATH thì dùng luôn — nhưng vẫn phải qua kiểm tra hash như bản
+  // tải về: nhánh PATH từng là chỗ DUY NHẤT bỏ qua verifyCloudflared, nghĩa là
+  // một cloudflared giả nằm trong thư mục user-writable nào đó trên PATH (vd
+  // %LOCALAPPDATA%\Microsoft\WindowsApps) được spawn thay bản ghim. Sai hash thì
+  // bỏ qua file đó và rơi xuống tải bản ghim — đúng tinh thần "sai là xoá, đừng chạy".
   const fromPath = await new Promise((resolve) => {
     const probe = spawn(process.platform === "win32" ? "where" : "which", ["cloudflared"], { windowsHide: true });
     let out = "";
@@ -140,7 +145,14 @@ async function ensureCloudflared(log) {
     probe.on("close", (code) => resolve(code === 0 ? out.split(/\r?\n/)[0].trim() : ""));
     probe.on("error", () => resolve(""));
   });
-  if (fromPath) return fromPath;
+  if (fromPath) {
+    try {
+      verifyCloudflared(readFileSync(fromPath), sha256);
+      return fromPath;
+    } catch (error) {
+      log(`[tunnel] cloudflared on PATH (${fromPath}) failed integrity check (${error.message}) - ignoring it, downloading the pinned build...`);
+    }
+  }
 
   log(`[tunnel] downloading cloudflared ${CLOUDFLARED_VERSION} to ${target} (first run only, ~50MB)...`);
   // Hard deadline: a hung GitHub download used to leave this promise unsettled

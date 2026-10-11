@@ -50,6 +50,15 @@ export function candidateExePaths(configOpenworkExe = "") {
 export function isOpenWorkExeName(candidatePath) {
   const p = String(candidatePath ?? "").trim();
   if (!p) return false;
+  // CHỈ nhận đường dẫn ổ cứng local: UNC/WebDAV (\\may\share\...) hay path
+  // tương đối thì existsSync vẫn chấp nhận, mà spawn() lúc đó chạy code do
+  // NGƯỜI GIỮ share chọn — không phải file nằm sẵn trên máy chủ nhà. Path
+  // tương đối cũng cấm luôn cho tồn nghĩa tuyệt đối.
+  if (process.platform === "win32") {
+    if (!/^[a-zA-Z]:[\\/]/.test(p)) return false;
+  } else if (!p.startsWith("/")) {
+    return false;
+  }
   // Windows không phân biệt hoa/thường trong tên file, nên so cũng vậy.
   return basename(p).toLowerCase() === "openwork.exe";
 }
