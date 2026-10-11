@@ -42,6 +42,32 @@ const kvKey = {
 const MAIN_KEY = kvKey.machine("main");
 const STALE_MS = 20 * 60 * 1000; // bridge heartbeat 15 phút/lần — quá 20 phút coi như offline
 const TENANT_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
+
+// Tên phòng KHÔNG cho tự tạo qua /api/tenant/create: "main" là slot
+// machine:main của chủ worker — cho tạo tenant:main là bridge lạ đăng ký đè
+// luôn địa chỉ máy nhà; còn lại là tên hay đụng đường dẫn/subdomain.
+const RESERVED_TENANT_NAMES = ["main", "admin", "root", "api", "www"];
+
+/**
+ * Validate body của /api/tenant/create — tách khỏi if-chain (round 5, 11/10)
+ * để worker test bắn được không cần mock KV. Trả {user, secret, name} khi hợp
+ * lệ (user đã qua normalizeTenant, name đã làm sạch), {error: {code, message}}
+ * khi không — caller json() đúng 400. Mã invalid_user/invalid_secret giữ
+ * literal: chỉ worker phát, không ai so chéo xuyên tầng.
+ */
+export function validateTenantCreate(body) {
+  const user = normalizeTenant(body?.user);
+  const secret = String(body?.secret ?? "");
+  if (!TENANT_RE.test(user) || RESERVED_TENANT_NAMES.includes(user)) {
+    return { error: { code: "invalid_user", message: "Room name must be 2-32 characters of a-z, 0-9 or dashes." } };
+  }
+  if (secret.length < 8 || secret.length > 128 || /[\s"':&]/.test(secret)) {
+    return { error: { code: "invalid_secret", message: "Password must be 8-128 characters with no spaces, quotes, ':' or '&'." } };
+  }
+  let name = String(body?.name ?? "").replace(/[\r\n"']/g, "").trim().slice(0, 60);
+  if (!name) name = user;
+  return { user, secret, name };
+}
 const TUNNEL_RE = /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i;
 
 // Cờ ALLOW_ROOM_CREATE khóa cửa tạo phòng. Chấp nhận mọi cách viết của "tắt"
@@ -408,16 +434,11 @@ async function handle(request, env) {
         );
       }
       const body = await readJson(request);
-      const user = normalizeTenant(body?.user);
-      const secret = String(body?.secret ?? "");
-      if (!TENANT_RE.test(user) || ["main", "admin", "root", "api", "www"].includes(user)) {
-        return json({ code: "invalid_user", message: "Room name must be 2-32 characters of a-z, 0-9 or dashes." }, 400);
+      const checked = validateTenantCreate(body);
+      if (checked.error) {
+        return json({ code: checked.error.code, message: checked.error.message }, 400);
       }
-      if (secret.length < 8 || secret.length > 128 || /[\s"':&]/.test(secret)) {
-        return json({ code: "invalid_secret", message: "Password must be 8-128 characters with no spaces, quotes, ':' or '&'." }, 400);
-      }
-      let name = String(body?.name ?? "").replace(/[\r\n"']/g, "").trim().slice(0, 60);
-      if (!name) name = user;
+      const { user, secret, name } = checked;
       const existing = await env.OWM_STATE.get(kvKey.tenant(user), "json").catch(() => null);
       if (existing) {
         if (await secretMatches(existing, secret)) {

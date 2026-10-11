@@ -195,7 +195,7 @@ bridge/          # Node.js — discovery, token bootstrap, proxy, static, QR
   test/          # unit tests — 22 files, 117 tests (npm test)
   scripts/       # e2e-live.mjs, dbg-prompt.mjs (live tests against a real OpenWork)
 worker/          # Cloudflare Worker "openpocket" — fixed URL + multi-tenant
-  src/index.js   # /__register (room check-in) · /api/* (per-room relay) · serves the web app
+  src/index.js   # /__register (room check-in) · /api/* (per-room relay) · /api/tenant/create (validateTenantCreate — reserved names, secret dải, name sanitize) · serves the web app
   scripts/tenant.mjs # issue/delete rooms (user/pass accounts) on KV
 web/             # PWA Preact + Vite → builds to web/dist served by the bridge
   src/pages/     # pairing (two ways in: 8-char code / permanent key + room box) · workspaces · sessions · chat · files · settings (bridge status + paired devices)
