@@ -292,6 +292,72 @@ export function dropStatusById(map, id) {
   return next;
 }
 
+/**
+ * Xoá kiểu lạc quan cho list page — invariant rủi nhất của màn danh sách,
+ * từng sống song song ở home.jsx VÀ sessions.jsx (home tự comment "cùng ba
+ * lỗi đã sửa ở sessions.jsx"): (1) chặn xoá hai lần trên cùng một dòng,
+ * (2) mất dòng NGAY để người dùng đỡ bấm tiếp tưởng chưa xoá, (3) API hỏng
+ * thì hoàn tác — nhưng CHỈ khi chưa có lượt load() nào về đè: so REF (bản
+ * mới nhất) chứ không so state chụp lúc bấm, hoàn tác mù là đè mất danh sách
+ * mới hơn. dropSessionById/dropSessionItem/dropStatusById là phần thuần bỏ
+ * dòng; đây là phần sở hữu vòng đời (khoá in-flight + hoàn-tác-có-điều-kiện),
+ * node --test được với ref giả.
+ */
+export function createOptimisticRemove() {
+  const inFlight = new Set();
+  return {
+    /** false = key này đang có lượt xoá bay (vuốt hai lần bị chặn). */
+    remove(key, entries, del, { onDone, onFail } = {}) {
+      if (!key || inFlight.has(key)) return false;
+      inFlight.add(key);
+      (async () => {
+        // Áp drop lạc quan cho MỖI list (sessions có HAI list: phiên + trạng
+        // thái), nhớ cặp before/after của từng list để hoàn tác đúng cặp đó.
+        const undos = entries.map(({ ref, drop, commit }) => {
+          const before = ref.current;
+          const after = drop(before);
+          commit(after);
+          return () => {
+            if (ref.current === after) commit(before);
+          };
+        });
+        try {
+          await del();
+          onDone?.();
+        } catch (e) {
+          for (const undo of undos) undo();
+          onFail?.(e);
+        } finally {
+          inFlight.delete(key);
+        }
+      })();
+      return true;
+    },
+  };
+}
+
+/**
+ * Ghép feed Home: `groups` — mỗi workspace một mảng hàng `{ws, session}` —
+ * thành một danh sách GỘP sort theo `time.updated` (mới nhất trên cùng) và
+ * giữ 30 dòng; `statusResults` — mỗi lượt /session/status một entry
+ * `{wsId, map}` — thành map key \`\${wsId}:\${sid}\` -> type. Thuần, test được.
+ * Caller tự quyết có áp `statuses` hay không (lượt status hỏng thì GIỮ map cũ
+ * — chấm "đang chạy" không tắt oan chỉ vì một lượt poll lỗi).
+ */
+export function mergeHomeFeed(groups, statusResults) {
+  const merged = (Array.isArray(groups) ? groups : [])
+    .flat()
+    .sort((a, b) => (b?.session?.time?.updated ?? 0) - (a?.session?.time?.updated ?? 0));
+  const statuses = {};
+  for (const entry of Array.isArray(statusResults) ? statusResults : []) {
+    if (!entry || typeof entry !== "object") continue;
+    for (const [sid, info] of Object.entries(entry.map ?? {})) {
+      statuses[`${String(entry.wsId ?? "")}:${sid}`] = info?.type;
+    }
+  }
+  return { items: merged.slice(0, 30), statuses };
+}
+
 /** Chi phí phiên: engine trả `cost` (USD) — hiện "$0.0123" hoặc "—". */
 export function formatCost(cost) {
   const n = Number(cost);

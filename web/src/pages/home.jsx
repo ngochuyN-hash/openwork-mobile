@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { ow, owDeleteSession } from "../api.js";
-import { timeAgo, unwrap } from "../lib/format.js";
+import { timeAgo, unwrap, wsColor } from "../lib/format.js";
 import { errorSentence } from "../lib/net.js";
 import { createLoadGuard } from "../lib/load-guard.js";
 import { navigate } from "../app.jsx";
@@ -8,18 +8,13 @@ import { Banner, Empty, SkeletonList, SwipeRow } from "../components/ui.jsx";
 import { SearchIcon } from "../components/icons.jsx";
 import { sessionTitleOf } from "../lib/session-rename.js";
 import {
-  // Xoá kiểu lạc quan + nhận diện "đang chạy" (luật thuần ở lib/session-ops.js).
+  // Xoá kiểu lạc quan (vòng đời + phần thuần) + nhận diện "đang chạy" —
+  // luật thuần ở lib/session-ops.js để node --test khoá được.
+  createOptimisticRemove,
   dropSessionItem,
   isSessionBusy,
+  mergeHomeFeed,
 } from "../lib/session-ops.js";
-
-/** Màu chấm nhận diện workspace — hash id, đúng kiểu desktop (mỗi ws 1 màu). */
-const WS_COLORS = ["#d6409f", "#30a46c", "#f76b15", "#0090ff", "#6e56cf", "#e2a336", "#12a594", "#e54666"];
-export function wsColor(id = "") {
-  let h = 0;
-  for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return WS_COLORS[h % WS_COLORS.length];
-}
 
 /** Home = danh sách session gần đây GỘP từ mọi workspace
  *  (pattern Happy/Omnara: mở app là thấy session, không phải list workspace). */
@@ -37,7 +32,10 @@ export function HomePage() {
   if (!guardRef.current) guardRef.current = createLoadGuard();
   const itemsRef = useRef(null); // bản sao mới nhất, để hoàn tác xoá lạc quan
   itemsRef.current = items;
-  const deletingRef = useRef(new Set());
+  // Vòng đời xoá lạc quan (khoá vuốt-hai-lần + hoàn-tác-có-điều-kiện) — dùng
+  // chung với sessions.jsx, trước đây chép tay hai nơi.
+  const removerRef = useRef(null);
+  if (!removerRef.current) removerRef.current = createOptimisticRemove();
 
   const load = useCallback(async () => {
     const token = guardRef.current.begin();
@@ -65,21 +63,14 @@ export function HomePage() {
       ]);
       if (stale()) return;
       const groups = sessRes.status === "fulfilled" ? sessRes.value : [];
-      const merged = groups.flat().sort(
-        (a, b) => (b.session.time?.updated ?? 0) - (a.session.time?.updated ?? 0)
-      );
-      setItems(merged.slice(0, 30));
+      // Ghép + sort + slice 30 + map trạng thái nằm ở lib/session-ops (thuần,
+      // test được). Lượt status hỏng thì GIỮ map cũ — chấm "đang chạy" không
+      // tắt oan chỉ vì một lượt poll lỗi.
+      const statResults = statRes.status === "fulfilled" ? statRes.value : [];
+      const { items: merged, statuses: next } = mergeHomeFeed(groups, statResults);
+      setItems(merged);
       setError("");
-      if (statRes.status === "fulfilled") {
-        const next = {};
-        for (const entry of statRes.value) {
-          if (!entry) continue;
-          for (const [sid, info] of Object.entries(entry.map)) {
-            next[`${entry.wsId}:${sid}`] = info?.type;
-          }
-        }
-        setStatuses(next);
-      }
+      if (statRes.status === "fulfilled") setStatuses(next);
     } catch (e) {
       if (stale() || e?.name === "AbortError") return;
       // KHÔNG xoá sạch danh sách khi một lượt poll hỏng: máy tính ngủ hoặc
@@ -106,31 +97,27 @@ export function HomePage() {
   const shown = items;
 
   /**
-   * Xoá phiên bằng cử chỉ vuốt — cùng ba lỗi đã sửa ở sessions.jsx:
-   * chặn vuốt hai lần, mất dòng ngay (đỡ tay bấm tiếp tưởng chưa xoá), và
-   * lỗi xoá KHÔNG bị `load()` ngay sau đó xoá mất (trước đây `load()` gọi
-   * setError("") nên máy tính ngủ lúc vuốt là không có một chữ báo nào).
+   * Xoá phiên bằng cử chỉ vuốt: vòng đời (chặn xoá hai lần, mất dòng ngay,
+   * hoàn tác CHỈ khi chưa có load() mới về đè) nằm ở lib/session-ops
+   * createOptimisticRemove — dùng chung với sessions.jsx, trước đây chép tay
+   * hai nơi và home sống sót nhờ chép đúng ba bug cũ.
    */
-  async function remove(ws, session) {
+  function remove(ws, session) {
     setOpenId(null);
     const sid = String(session?.id ?? "");
     const wsId = String(ws?.id ?? "");
-    const key = `${wsId}:${sid}`;
-    if (!sid || deletingRef.current.has(key)) return;
-    deletingRef.current.add(key);
-    const before = itemsRef.current;
-    const afterDrop = dropSessionItem(before, wsId, sid);
-    setItems(afterDrop);
-    try {
-      await owDeleteSession(wsId, sid);
-      setError("");
-      load();
-    } catch (e) {
-      if (itemsRef.current === afterDrop) setItems(before);
-      setError(`Failed to delete this session: ${errorSentence(e)}`);
-    } finally {
-      deletingRef.current.delete(key);
-    }
+    removerRef.current.remove(
+      `${wsId}:${sid}`,
+      [{ ref: itemsRef, drop: (list) => dropSessionItem(list, wsId, sid), commit: setItems }],
+      () => owDeleteSession(wsId, sid),
+      {
+        onDone: () => {
+          setError("");
+          load();
+        },
+        onFail: (e) => setError(`Failed to delete this session: ${errorSentence(e)}`),
+      }
+    );
   }
 
   return (

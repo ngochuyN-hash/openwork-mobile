@@ -20,6 +20,7 @@ import {
   shouldClearRevertCursor,
   questionAnswered,
   isSessionBusy,
+  createOptimisticRemove,
   dropSessionById,
   dropSessionItem,
   dropStatusById,
@@ -320,4 +321,94 @@ test("lỗi phẳng / chỉ có tên / không có lỗi", () => {
   assert.equal(messageErrorOf({ info: { error: { data: {} } } }), "");
   assert.equal(messageErrorOf({ info: { role: "assistant" }, parts: [{ type: "text", text: "ok" }] }), "");
   assert.equal(messageErrorOf(null), "");
+});
+
+
+// ---- createOptimisticRemove() — vòng đời xoá lạc quan dùng chung home/sessions ----
+// Trước đây invariant này chép tay HAI nơi (home tự comment "cùng ba lỗi đã
+// sửa ở sessions.jsx") — test dưới đây khoá đúng ba điều đó ở MỘT chỗ.
+
+function makeRef(v) {
+  const r = { current: v };
+  return r;
+}
+
+test("createOptimisticRemove: drop lạc quan áp ngay, del xong gọi onDone", async () => {
+  const remover = createOptimisticRemove();
+  const list = makeRef([{ id: "a" }, { id: "b" }, { id: "c" }]);
+  const committed = [];
+  const events = [];
+  const ok = remover.remove(
+    "b",
+    [{ ref: list, drop: (rows) => rows.filter((r) => r.id !== "b"), commit: (next) => { committed.push(next); list.current = next; } }],
+    async () => {},
+    { onDone: () => events.push("done") }
+  );
+  assert.equal(ok, true);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(committed, [[{ id: "a" }, { id: "c" }]]);
+  assert.deepEqual(events, ["done"]);
+});
+
+test("createOptimisticRemove: cùng key đang bay thì chặn (vuốt hai lần)", () => {
+  const remover = createOptimisticRemove();
+  const gate = new Promise(() => {});
+  const list = makeRef([{ id: "a" }]);
+  const first = remover.remove("a", [{ ref: list, drop: () => [], commit: () => {} }], () => gate);
+  const second = remover.remove("a", [{ ref: list, drop: () => [], commit: () => {} }], () => gate);
+  assert.equal(first, true);
+  assert.equal(second, false, "lượt hai trên cùng một dòng phải bị chặn");
+});
+
+test("createOptimisticRemove: del hỏng -> hoàn tác khi chưa có load mới về đè", async () => {
+  const remover = createOptimisticRemove();
+  const list = makeRef([{ id: "a" }, { id: "b" }]);
+  const before = list.current;
+  let failErr = null;
+  remover.remove(
+    "b",
+    [{
+      ref: list,
+      drop: (rows) => rows.filter((r) => r.id !== "b"),
+      commit: (next) => { list.current = next; },
+    }],
+    async () => { throw new Error("máy ngủ"); },
+    { onFail: (e) => { failErr = e; } }
+  );
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(failErr?.message, "máy ngủ");
+  assert.deepEqual(list.current, before, "hoàn tác về danh sách trước lúc xoá");
+});
+
+test("createOptimisticRemove: del hỏng NHƯNG load mới đã về đè -> KHÔNG hoàn tác", async () => {
+  const remover = createOptimisticRemove();
+  const list = makeRef([{ id: "a" }, { id: "b" }]);
+  remover.remove(
+    "b",
+    [{
+      ref: list,
+      drop: (rows) => rows.filter((r) => r.id !== "b"),
+      commit: (next) => { list.current = next; },
+    }],
+    async () => {
+      // Giả lập load() về đè giữa lúc DELETE đang bay: ref trỏ sang mảng MỚI.
+      list.current = [{ id: "a" }, { id: "c" }, { id: "d" }];
+      throw new Error("máy ngủ");
+    },
+    {}
+  );
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(
+    list.current,
+    [{ id: "a" }, { id: "c" }, { id: "d" }],
+    "danh sách mới hơn là đúng hơn — hoàn tác mù sẽ đè ngược mất nó"
+  );
+});
+
+test("createOptimisticRemove: key rỗng -> false, không gọi del", () => {
+  const remover = createOptimisticRemove();
+  let called = 0;
+  const ok = remover.remove("", [{ ref: makeRef([]), drop: () => [], commit: () => {} }], () => { called += 1; });
+  assert.equal(ok, false);
+  assert.equal(called, 0);
 });

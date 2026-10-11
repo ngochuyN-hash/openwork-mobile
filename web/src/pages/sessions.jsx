@@ -9,6 +9,7 @@ import {
   // Xoá phiên + trạng thái đang chạy: luật thuần ở lib/session-ops.js để test
   // được. `dropSessionById` là phần "xoá kiểu lạc quan" (mất dòng ngay, gọi
   // máy tính sau), `isSessionBusy` để chấm trạng thái không chỉ nhìn "busy".
+  createOptimisticRemove,
   dropSessionById,
   dropStatusById,
   isSessionBusy,
@@ -42,7 +43,10 @@ export function SessionsPage({ route }) {
   const statusesRef = useRef(statuses);
   statusesRef.current = statuses;
 
-  const deletingRef = useRef(new Set()); // id đang bay, chặn vuốt hai lần
+  // Vòng đời xoá lạc quan (khoá vuốt-hai-lần + hoàn-tác-có-điều-kiện) — dùng
+  // chung với home.jsx, trước đây chép tay hai nơi.
+  const removerRef = useRef(null);
+  if (!removerRef.current) removerRef.current = createOptimisticRemove();
   const creatingRef = useRef(false); // chặn bấm nút (+) hai lần
 
   async function load() {
@@ -120,39 +124,35 @@ export function SessionsPage({ route }) {
   }
 
   /**
-   * Xoá phiên bằng cử chỉ vuốt. Ba lỗi cũ đã sửa ở đây:
+   * Xoá phiên bằng cử chỉ vuốt. Ba lỗi cũ đã sửa ở đây — giờ nằm ở
+   * createOptimisticRemove (lib/session-ops.js) dùng chung với home.jsx:
    *   1. Vuốt hai lần trong lúc request cũ còn bay -> hai lệnh DELETE, lần hai
    *      trả 404 và người dùng thấy banner lỗi oang oang dù phiên ĐÃ xoá.
    *   2. Xoá hỏng (máy tính ngủ, mất mạng) thì `load()` ngay sau đó gọi
    *      setError("") và XOÁ MẤT chính dòng báo lỗi — phiên quay lại y như cũ,
    *      không có một chữ nào giải thích.
    *   3. Cho tới khi `load()` về, dòng vẫn còn nguyên trên màn nên tay bấm
-   *      tiếp cứ tưởng chưa xoá. Giờ mất dòng ngay, hỏng thì trả lại.
+   *      tiếp cứ tưởng chưa xoá. Giờ mất dòng ngay, hỏng thì trả lại CHỈ khi
+   *      chưa có lượt load() mới về đè.
    */
-  async function remove(s) {
+  function remove(s) {
     setOpenId(null);
     const id = String(s?.id ?? "");
-    if (!id || deletingRef.current.has(id)) return;
-    deletingRef.current.add(id);
-    const beforeSessions = sessionsRef.current;
-    const beforeStatuses = statusesRef.current;
-    const afterDrop = dropSessionById(beforeSessions, id);
-    const afterStatuses = dropStatusById(beforeStatuses, id);
-    setSessions(afterDrop);
-    setStatuses(afterStatuses);
-    try {
-      await owDeleteSession(wsId, id);
-      setError("");
-      load(); // nạp lại cho chắc: engine có thể đã đổi thêm sau lúc ta xoá
-    } catch (e) {
-      // Chỉ trả lại lúc này nếu chưa có lượt load() nào về đè giữa chừng —
-      // nếu có thì danh sách mới đã đúng hơn, giữ nguyên nó.
-      if (sessionsRef.current === afterDrop) setSessions(beforeSessions);
-      if (statusesRef.current === afterStatuses) setStatuses(beforeStatuses);
-      setError(`Failed to delete this session: ${errorSentence(e)}`);
-    } finally {
-      deletingRef.current.delete(id);
-    }
+    removerRef.current.remove(
+      id,
+      [
+        { ref: sessionsRef, drop: (list) => dropSessionById(list, id), commit: setSessions },
+        { ref: statusesRef, drop: (map) => dropStatusById(map, id), commit: setStatuses },
+      ],
+      () => owDeleteSession(wsId, id),
+      {
+        onDone: () => {
+          setError("");
+          load(); // nạp lại cho chắc: engine có thể đã đổi thêm sau lúc ta xoá
+        },
+        onFail: (e) => setError(`Failed to delete this session: ${errorSentence(e)}`),
+      }
+    );
   }
 
   const list = sessions ?? [];

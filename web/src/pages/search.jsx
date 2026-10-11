@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { ow } from "../api.js";
-import { timeAgo, unwrap } from "../lib/format.js";
+import { timeAgo, unwrap, wsColor } from "../lib/format.js";
 import { errorSentence } from "../lib/net.js";
 import { createLoadGuard } from "../lib/load-guard.js";
 import { navigate } from "../app.jsx";
 import { Banner, Empty, SkeletonList } from "../components/ui.jsx";
 import { SearchIcon } from "../components/icons.jsx";
-import { wsColor } from "./home.jsx"; // màu nhận diện workspace, cùng hàm home dùng
 import {
   normalizeQuery, searchSessions, sessionContentText, scanPlan, mapLimit,
 } from "../lib/session-search.js";

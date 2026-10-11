@@ -1,15 +1,13 @@
 import { useEffect, useState } from "preact/hooks";
 import { apiPair } from "../api.js";
-import { pairingCodeFromHash, setTenant, setToken } from "../lib/identity-store.js";
+import { parsePermanentKey, pairingCodeFromHash, setTenant, setToken } from "../lib/identity-store.js";
 import { errorSentence } from "../lib/net.js";
 import { Banner } from "../components/ui.jsx";
 import { OpenWorkMark } from "../components/logo.jsx";
 import {
   BRIDGE_ROUTES,
   ErrorCode,
-  MASTER_TOKEN_HASH,
   TENANT_HASH_KEY,
-  TOKEN_PREFIX_SOURCE,
   normalizeTenant,
 } from "../../../shared/contract.js";
 
@@ -50,23 +48,8 @@ export function PairingScreen({ onPaired }) {
     if (value) pairWithCode(value);
   }
 
-  // Bóc link master dạng ...#t=<khóa>&m=<phòng> (nút "Sao chép link master")
-  // hoặc khóa trần owd_/owt_ không kèm phòng.
-  function parsePermanentKey(raw) {
-    const text = String(raw ?? "").trim();
-    const fromLink = new RegExp(
-      `#${MASTER_TOKEN_HASH}=([^&\\s]+)(?:&${TENANT_HASH_KEY}=([^&\\s]+))?`
-    ).exec(text);
-    if (fromLink?.[1]) {
-      return {
-        token: decodeURIComponent(fromLink[1]),
-        tenant: fromLink[2] ? normalizeTenant(decodeURIComponent(fromLink[2])) : "",
-      };
-    }
-    const bare = text.replace(/\s+/g, "");
-    if (new RegExp(`^${TOKEN_PREFIX_SOURCE}[0-9a-f]{8,}$`, "i").test(bare)) return { token: bare, tenant: "" };
-    return null;
-  }
+  // parsePermanentKey (bóc link master / khóa trần) nằm ở lib/identity-store —
+  // logic nhận diện chìa vĩnh viễn ăn hằng số contract, node --test phải tới được.
 
   async function loginWithKey() {
     const parsed = parsePermanentKey(key);

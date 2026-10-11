@@ -1,11 +1,10 @@
 import { useEffect, useState } from "preact/hooks";
 import { apiFsList, apiFsMkdir, ow } from "../api.js";
-import { unwrap } from "../lib/format.js";
+import { unwrap, wsColor } from "../lib/format.js";
 import { errorSentence } from "../lib/net.js";
 import { navigate } from "../app.jsx";
 import { FolderIcon, WsIcon } from "../components/icons.jsx";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
-import { wsColor } from "./home.jsx";
 
 export function WorkspacesPage() {
   const [workspaces, setWorkspaces] = useState(null);

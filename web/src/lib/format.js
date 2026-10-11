@@ -65,3 +65,16 @@ export function filenameFromDisposition(header) {
   const plain = /filename\s*=\s*"?([^";]+)"?/i.exec(header);
   return plain?.[1]?.trim() ?? "";
 }
+
+// ---- Màu nhận diện workspace ----
+// Mỗi workspace một màu chấm theo hash id — cùng kiểu desktop. Trước đây sống
+// trong pages/home.jsx và search/workspaces phải import XUYÊN TRANG
+// (`from "./home.jsx"`): một helper thuần không có lý do gì nằm trong một
+// trang, đổi bảng màu là phải sửa ba file cùng lúc.
+const WS_COLORS = ["#d6409f", "#30a46c", "#f76b15", "#0090ff", "#6e56cf", "#e2a336", "#12a594", "#e54666"];
+
+export function wsColor(id = "") {
+  let h = 0;
+  for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return WS_COLORS[h % WS_COLORS.length];
+}

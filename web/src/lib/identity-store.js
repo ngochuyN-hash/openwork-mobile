@@ -2,7 +2,13 @@
 // 09/10) để "app biết mình là ai" không còn sống trong file transport.
 // Chuẩn hoá phòng đi qua contract normalizeTenant — web không tự có luật riêng
 // (trước đây api.js tự chép trim+lowercase, màn login còn strip thêm).
-import { MASTER_TOKEN_HASH, PAIR_CODE_HASH, normalizeTenant } from "../../../shared/contract.js";
+import {
+  MASTER_TOKEN_HASH,
+  PAIR_CODE_HASH,
+  TENANT_HASH_KEY,
+  TOKEN_PREFIX_SOURCE,
+  normalizeTenant,
+} from "../../../shared/contract.js";
 import { parseHashParam } from "./route.js";
 
 const TOKEN_KEY = "owm_token";
@@ -74,4 +80,27 @@ export function pairingCodeFromHash() {
     return parsed.value;
   }
   return "";
+}
+
+/**
+ * Bóc link master dạng ...#t=<khóa>&m=<phòng> (nút "Sao chép link master" của
+ * OpenPocket) hoặc khóa trần owd_/owt_ KHÔNG kèm phòng. Trả `{token, tenant}`
+ * (tenant đã qua normalizeTenant — luật contract, một quy tắc ba tầng) hoặc
+ * null khi không khớp shape nào. Trước đây nhốt trong PairingScreen — logic
+ * nhận diện CHÌA vĩnh viễn ăn hằng số contract nhưng node --test với không tới.
+ */
+export function parsePermanentKey(raw) {
+  const text = String(raw ?? "").trim();
+  const fromLink = new RegExp(
+    `#${MASTER_TOKEN_HASH}=([^&\\s]+)(?:&${TENANT_HASH_KEY}=([^&\\s]+))?`
+  ).exec(text);
+  if (fromLink?.[1]) {
+    return {
+      token: decodeURIComponent(fromLink[1]),
+      tenant: fromLink[2] ? normalizeTenant(decodeURIComponent(fromLink[2])) : "",
+    };
+  }
+  const bare = text.replace(/\s+/g, "");
+  if (new RegExp(`^${TOKEN_PREFIX_SOURCE}[0-9a-f]{8,}$`, "i").test(bare)) return { token: bare, tenant: "" };
+  return null;
 }
