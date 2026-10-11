@@ -20,10 +20,11 @@ import {
   LOGON_TRIGGER_XML, WATCHDOG_TRIGGER_XML,
 } from "../src/autostart.js";
 import { loadTunnelState } from "../src/tunnel.js";
+import { loadPairingState } from "../src/pairing-state.js";
 // Hình dạng link ghép (#p= / #t= / &m=) thuộc shared contract — CLI từng tự
 // tay ghép ngoài contract (contract.js xưng "chỗ duy nhất" nhưng CLI sinh
 // TRƯỚC contract). 07/10: kéo vào cùng một seam với bridge/web/worker.
-import { buildPairingUrl } from "../../shared/contract.js";
+import { BRIDGE_ROUTES, buildPairingUrl } from "../../shared/contract.js";
 
 const BIN_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -35,6 +36,23 @@ function pidFile() {
 }
 function logFile() {
   return join(bridgeDataDir(), "bridge.log");
+}
+
+// Dựng bridge nền — dùng chung start/ensure (trước đây hai khối chép y nhau
+// 12 dòng: mở log append, spawn detached ẩn cửa sổ, ghi pid, unref).
+async function spawnBridge() {
+  const { spawn } = await import("node:child_process");
+  const { openSync } = await import("node:fs");
+  const logFd = openSync(logFile(), "a");
+  const entry = join(BIN_DIR, "..", "src", "index.js");
+  const child = spawn(process.execPath, [entry], {
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    windowsHide: true,
+  });
+  child.unref();
+  writeFileSync(pidFile(), String(child.pid));
+  return child;
 }
 function readPid() {
   try {
@@ -90,18 +108,7 @@ if (cmd === "start") {
     console.log("   Mở terminal của bridge để xem QR, hoặc chạy: openpocket code");
     process.exit(0);
   }
-  const { spawn } = await import("node:child_process");
-  const { openSync } = await import("node:fs");
-  const logFd = openSync(logFile(), "a");
-  const entry = join(BIN_DIR, "..", "src", "index.js");
-  const child = spawn(process.execPath, [entry], {
-    detached: true,
-    stdio: ["ignore", logFd, logFd],
-    windowsHide: true,
-  });
-  child.unref();
-  const { writeFileSync } = await import("node:fs");
-  writeFileSync(pidFile(), String(child.pid));
+  const child = await spawnBridge();
   console.log(`✅ Bridge đã chạy nền (pid ${child.pid}).`);
   console.log(`   Log: ${logFile()}`);
   console.log("   Đợi ~10s rồi chạy: openpocket code  (để xem mã ghép + QR)");
@@ -148,17 +155,7 @@ if (cmd === "ensure") {
     );
     process.exit(0);
   }
-  const { spawn } = await import("node:child_process");
-  const { openSync } = await import("node:fs");
-  const logFd = openSync(logFile(), "a");
-  const entry = join(BIN_DIR, "..", "src", "index.js");
-  const child = spawn(process.execPath, [entry], {
-    detached: true,
-    stdio: ["ignore", logFd, logFd],
-    windowsHide: true,
-  });
-  child.unref();
-  writeFileSync(pidFile(), String(child.pid));
+  const child = await spawnBridge();
   console.log(`[${new Date().toISOString()}] bridge đã chết — máy canh dựng lại (pid ${child.pid}).`);
   process.exit(0);
 }
@@ -415,38 +412,40 @@ if (cmd === "code") {
   const port = config.port || 8788;
   const baseFixed = (config.lookupUrl || "").replace(/\/+$/, ""); // worker = địa chỉ cố định (ưu tiên)
 
-  // 1) Lấy mã ĐANG SỐNG từ API của bridge (đúng nhất — log có thể stale).
+  // 1) Lấy mã ĐANG SỐNG từ API của bridge (đúng nhất — file state có thể stale).
+  // Đường đi qua BRIDGE_ROUTES (contract) — literal tay cuối cùng của CLI ở
+  // đây từng lọt ngoài mọi drift-guard của web/bridge.
   let live = null;
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/pairing-code`, {
+    const res = await fetch(`http://127.0.0.1:${port}${BRIDGE_ROUTES.pairingCode}`, {
       headers: { authorization: `Bearer ${config.mobileToken}` },
       signal: AbortSignal.timeout(4000),
     });
     if (res.ok) live = await res.json();
   } catch {}
 
-  // 2) Fallback: bridge cũ (chưa có endpoint) hoặc chưa chạy — parse log.
+  // 2) Fallback: bridge chết / chưa lên — đọc ảnh chụp pairing-state.json
+  //    (bridge ghi MỖI lần sinh mã, bridge/src/pairing-state.js). KHÔNG còn
+  //    parse lời log: nguồn số 2 cũ sống nhờ so chuỗi "Mã ghép:" — bridge đổi
+  //    một câu chữ là chết im lặng. Hết hạn thì nói rõ, đừng in mã chết.
   if (!live) {
-    if (!existsSync(logFile())) {
-      console.log("Bridge chưa chạy. Chạy: openpocket start");
+    const snap = loadPairingState();
+    if (!snap) {
+      console.log("Bridge chưa chạy / chưa sinh mã nào. Chạy: openpocket start");
       process.exit(1);
     }
-    const text = readFileSync(logFile(), "utf8");
-    const blocks = text.split(/Mã ghép:/);
-    const latest = blocks[blocks.length - 1];
-    const codeMatch = latest?.match(/([A-Z2-9]{4}-?[A-Z2-9]{4})/);
-    const urls = [...text.matchAll(/https:\/\/[^\s]+\/#p=([A-Z2-9]+)/gi)];
-    if (!codeMatch && !urls.length) {
-      console.log("Không đọc được mã ghép — bridge đang khởi động, đợi ~10s rồi thử lại.");
+    const secondsLeft = Math.floor((Number(snap.expiresAt) - Date.now()) / 1000);
+    if (!(secondsLeft > 0)) {
+      console.log("Mã ghép trong ảnh chụp đã hết hạn — bridge đang chết nên không sinh mã mới.");
+      console.log("Chạy: openpocket start  (hoặc mở OpenPocket.exe) rồi đợi ~10s.");
       process.exit(1);
     }
-    const raw = codeMatch ? codeMatch[1].replace(/-/g, "") : urls[urls.length - 1][1];
-    const urlBase = (urls.length ? new URL(urls[urls.length - 1][0]).origin : `http://127.0.0.1:${port}`);
+    const raw = String(snap.code || "").replace(/-/g, "");
     live = {
       code: raw,
       codeFormatted: `${raw.slice(0, 4)}-${raw.slice(4)}`,
-      baseUrl: urlBase === `http://127.0.0.1:${port}` && baseFixed ? baseFixed : urlBase,
-      secondsLeft: null,
+      baseUrl: snap.baseUrl || "",
+      secondsLeft,
     };
   }
 

@@ -7,6 +7,7 @@ import { openworkFilePath } from "./paths.js";
 import { startQuickTunnel, tunnelStateSnapshot } from "./tunnel.js";
 import { startLookup } from "./lookup.js";
 import { PairingService, CODE_TTL_MINUTES } from "./pairing.js";
+import { savePairingState } from "./pairing-state.js";
 import { launchOpenWork } from "./openwork-launch.js";
 import { rotateStaleLogs, scheduleDailyWipe, wipeLogs } from "./logwipe.js";
 import { redactUrl, redactSecrets } from "./log-safe.js";
@@ -74,7 +75,11 @@ const currentBase = () => pairingBaseUrl(config, state.tunnelUrl, config.publicU
 // Link ghép nối gắn phòng để web tự điền: hình dạng (#p=...&m= / #t=...&m=)
 // do shared/contract.js định nghĩa một chỗ duy nhất (buildPairingUrl).
 let printingPairing = false;
-pairing.onCode = () => {
+pairing.onCode = (code, expiresAt) => {
+  // Ảnh chụp mã đang sống ra pairing-state.json — nguồn số 2 của `openpocket
+  // code` lúc bridge chết/chưa lên. Bản cũ CLI PARSE LỜI LOG (so chuỗi "Mã
+  // ghép:"): bridge đổi một câu chữ là nguồn số 2 chết im lặng.
+  savePairingState({ code, expiresAt, baseUrl: currentBase() });
   // Mã mới (thiết bị vừa ghép xong hoặc mã cũ hết hạn) -> in lại QR
   if (!printingPairing) printPairing(currentBase(), "[pairing] NEW pairing code:");
 };
