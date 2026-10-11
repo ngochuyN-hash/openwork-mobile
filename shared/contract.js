@@ -138,3 +138,37 @@ export function buildPairingUrl({ base, kind = "pair", value, tenant = "" }) {
   const suffix = tenant ? `&${TENANT_HASH_KEY}=${encodeURIComponent(tenant)}` : "";
   return `${cleanBase}/#${hashKey}=${value}${suffix}`;
 }
+
+// --- Shape của GET /api/state -------------------------------------------------
+// Bridge ghép (bridge/src/routes/status.js), web poll mỗi 15s (app.jsx +
+// settings.jsx đọc từng field). Trước đây chỉ slice `tunnel` được ghim
+// (shared/host-contract.js stateTunnelKeys); nửa còn lại là kiến thức hai đầu
+// KHÔNG ai ghim — đổi tên một field là web đọc ra `undefined` im lặng.
+//
+// GHIM Ở MỨC TEST: bridge/test/state-shape.test.js so response THẬT với key-list
+// này (HAI chiều, gồm cả nested); web/test/contract-fixture.test.js quét
+// app.jsx/settings.jsx chỉ được đọc field NẰM TRONG shape. Đổi shape mà chưa
+// sửa đây là đỏ ngay. Đây là KEY-LIST chứ không phải type descriptor: giá trị
+// placeholder chỉ để tên key đọc được; `server`/`engine`/`publicUrl` có thể là
+// null lúc runtime (máy chưa thấy engine-server / registry) — test so key lúc
+// chúng khác null. `tunnel` trùng stateTunnelKeys của host-contract (file dùng
+// tên `nextAttemptAt`, API dùng `nextRetryAt` — hai tên KHÁC NHAU CÓ CHỦ ĐÍCH,
+// xem host-contract.js) — test so chéo hai nguồn.
+export const STATE_SHAPE = {
+  ok: true,
+  bridgeVersion: "",
+  dataDir: "",
+  server: { baseUrl: "", version: "", opencodeVersion: "" },
+  tokenActive: true,
+  restartRequired: true,
+  engine: { pid: 0, enginePort: 0 },
+  publicUrl: "",
+  tunnel: { phase: "", url: "", streak: 0, nextRetryAt: 0 },
+  edge: { tenant: "", machineName: "" },
+  devices: 0,
+  pairingCodeSecondsLeft: 0,
+  openworkExeFound: true,
+  openwork: { found: true, exe: "", version: "", source: "", running: true, candidates: [] },
+  autoLaunchOpenWork: true,
+  thisDevice: { id: "", label: "" },
+};

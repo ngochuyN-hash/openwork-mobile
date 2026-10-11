@@ -27,6 +27,7 @@ import {
   TOKEN_PREFIX_SOURCE,
   normalizeTenant,
   buildPairingUrl,
+  STATE_SHAPE,
 } from "../../shared/contract.js";
 import { parseHashParam } from "../src/lib/route.js";
 
@@ -136,5 +137,47 @@ test("contract: web chuẩn hoá phòng qua normalizeTenant — không còn lu�
     const src = readFileSync(join(ROOT, rel), "utf8");
     assert.ok(src.includes("normalizeTenant"), `${rel} phải dùng normalizeTenant của contract`);
     assert.ok(!/\[\^a-z0-9-\]/.test(src), `${rel} còn luật strip phòng riêng ngoài contract`);
+  }
+});
+
+test("contract: web chỉ đọc /api/state trong STATE_SHAPE — field lạ là drift im lặng", () => {
+  // Round 5 (11/10): shape của /api/state là kiến thức bridge↔web không ai
+  // ghim — web đọc từng field, bridge đổi tên một field là `undefined` im
+  // lặng (bridge/test/state-shape.test.js ghim PHÍA SẢN XUẤT; test này ghim
+  // PHÍA TIÊU THỤ). app.jsx + settings.jsx là hai consumer chính: mọi truy
+  // cập `state.X` / `state?.X` (kèm hop thứ hai tunnel/openwork/edge/…)
+  // phải nằm trong STATE_SHAPE. Strip comment TRƯỚC khi scan — comment giải
+  // thích chứa tên field là trúng oan (bài học đã gặp hai lần).
+  // Strip KHỐ lẫn INLINE comment (bản cũ chỉ strip comment cả dòng — inline
+  // `// ... state.js ...` sau code là trúng oan). `\s//` né được "https://"
+  // (dấu // trong URL không có khoảng trắng đứng trước).
+  const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s\/\/.*$/gm, "");
+  const topKeys = Object.keys(STATE_SHAPE);
+  // `error` là field web TỰ GHÉP vào state khi poll hỏng (app.jsx refreshState:
+  // `setState({ ok: false, error: ... })`) — không phải field bridge trả, nên
+  // không nằm trong STATE_SHAPE (shape phía dây). Cho phép biết tên ở đây thay
+  // vì nhét vào hợp đồng wire.
+  const CLIENT_STATE_FIELDS = ["error"];
+  const allowed = [...topKeys, ...CLIENT_STATE_FIELDS];
+  const nestedOf = (name) =>
+    STATE_SHAPE[name] && typeof STATE_SHAPE[name] === "object" ? Object.keys(STATE_SHAPE[name]) : null;
+  for (const rel of [join("web", "src", "app.jsx"), join("web", "src", "pages", "settings.jsx")]) {
+    const code = stripComments(readFileSync(join(ROOT, rel), "utf8"));
+    // Lookbehind chặn `settings-state.js` trong import path (state đứng sau
+    // dấu - / . / quote là tên file, không phải truy cập state).
+    for (const m of code.matchAll(/(?<![\w."'/-])state\s*(\?)?\.\s*(\w+)((\?)?\.\s*\w+)?/g)) {
+      const top = m[2];
+      assert.ok(allowed.includes(top), `${rel} đọc state.${top} — ngoài STATE_SHAPE (shared/contract.js)`);
+      if (m[3]) {
+        const sub = nestedOf(top);
+        const second = m[3].replace(/^[\s?]*/, "").replace(/^\./, "").trim();
+        if (sub) {
+          assert.ok(
+            sub.includes(second),
+            `${rel} đọc state.${top}.${second} — ngoài STATE_SHAPE.${top}`
+          );
+        }
+      }
+    }
   }
 });
