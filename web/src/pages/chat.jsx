@@ -52,6 +52,7 @@ import {
   RenameSheet, MessageActionSheet, AgentPicker, QuestionCard,
 } from "../components/chat-sheets.jsx";
 import { isModelUsable, resolveKnownModel } from "../lib/model-behavior.js";
+import { createTapGuard } from "../lib/tap-guard.js";
 import { navigate } from "../app.jsx";
 import { ClipIcon, StopIcon, ThoughtIcon, ChevronDownIcon } from "../components/icons.jsx";
 
@@ -122,10 +123,11 @@ export function ChatPage({ route }) {
   const [shareBusy, setShareBusy] = useState(false);
   const [compacting, setCompacting] = useState(false);
   const renameInputRef = useRef(null);
-  // Khoá chạm kép: state (`busyAction`/`shareBusy`) chỉ đổi ở RENDER kế tiếp,
-  // nên hai chạm liền nhau vẫn chạy cùng handler cũ và bắn hai PATCH /share.
-  const renameLockRef = useRef(false);
-  const shareLockRef = useRef(false);
+  // Khoá chạm kép — invariant dùng chung nằm ở lib/tap-guard.js (state chỉ đổi
+  // ở render kế, guard là chốt thật). Mỗi nhóm hành động một khoá riêng để hai
+  // hành động KHÁC nhóm vẫn chạy song song được như trước.
+  const renameGuard = useRef(createTapGuard()).current;
+  const shareGuard = useRef(createTapGuard()).current;
   const attachRef = useRef(null);
   const queueRef = useRef(createQueue("", []));
   // Ô gõ + file đính kèm cất theo phiên, để bấm nhầm Back rồi quay lại không
@@ -203,20 +205,16 @@ export function ChatPage({ route }) {
   // Đánh dấu "đang sửa tin" để con trỏ hoàn tác được nhả đúng lúc — xem chỗ
   // dùng trong send().
   const revertForNewMessageRef = useRef(false);
-  // Khoá gửi theo REF: hai chạm nút Gửi (hoặc Ctrl+Enter hai lần) trong cùng
-  // một nhịp render dùng chung handler cũ, nên state `sending` chưa kịp đổi
-  // và cả hai lượt đều đi qua. Xem chỗ khoá trong send().
-  const sendLockRef = useRef(false);
-  // Khoá dừng: `aborting` cũng chỉ đổi ở render kế tiếp, chạm kép sẽ bắn hai
-  // request abort (và abort lần hai rơi vào phiên đã rảnh).
-  const abortLockRef = useRef(false);
-  // Khoá thao tác tin (xoá/hoàn tác/nhánh/trả lời): `busyAction` đổi ở render
-  // kế tiếp, chạm kép sẽ chạy thao tác hai lần.
-  const actionLockRef = useRef(false);
-  // Thẻ "Agent xin phép" đang được trả lời: id để khoá nút, ref để chặn
-  // chạm kép trước lúc render kế tiếp.
+  // Khoá gửi / dừng / thao-tác tin — cùng invariant chạm kép ở lib/tap-guard.js
+  // (hai chạm trong cùng nhịp render dùng chung handler cũ, state chưa kịp đổi).
+  const sendGuard = useRef(createTapGuard()).current;
+  const abortGuard = useRef(createTapGuard()).current;
+  const actionGuard = useRef(createTapGuard()).current;
+  // Thẻ "Agent xin phép" đang được trả lời: state để khoá nút, guard (chìa =
+  // pid) để chặn chạm kép trước lúc render kế tiếp — hai thẻ KHÁC pid vẫn trả
+  // lời song song được.
   const [permissionBusy, setPermissionBusy] = useState("");
-  const permissionBusyRef = useRef("");
+  const permissionGuard = useRef(createTapGuard()).current;
 
   const base = `/workspace/${encodeURIComponent(wsId)}/opencode`;
 
@@ -405,10 +403,10 @@ export function ChatPage({ route }) {
     // Đếm tin chờ tính RIÊNG cho từng phiên (lib/session-steer) — đổi phiên
     // thì phải tính lại, không phải giữ số của phiên trước.
     setQueueCount(queueFor(queueRef.current, sessionId).length);
-    sendLockRef.current = false;
-    abortLockRef.current = false;
-    actionLockRef.current = false;
-    permissionBusyRef.current = "";
+    sendGuard.clear();
+    abortGuard.clear();
+    actionGuard.clear();
+    permissionGuard.clear();
     setPermissionBusy("");
     setPermissions([]);
 
@@ -730,11 +728,10 @@ export function ChatPage({ route }) {
   // Gộp ở một chỗ để mọi thao tác đều: bật busy, báo lỗi rõ, nạp lại thật.
 
   async function run(action, fn) {
-    // Khoá bằng ref: `busyAction` chỉ đổi ở render kế tiếp, chạm kép (rất dễ
-    // trên điện thoại) sẽ chạy cùng một thao tác hai lần — xoá tin hai lần,
-    // hoàn tác hai lần, tạo nhánh hai nhánh mồ côi.
-    if (actionLockRef.current) return;
-    actionLockRef.current = true;
+    // Khoá bằng guard (lib/tap-guard.js): `busyAction` chỉ đổi ở render kế
+    // tiếp, chạm kép (rất dễ trên điện thoại) sẽ chạy cùng một thao tác hai
+    // lần — xoá tin hai lần, hoàn tác hai lần, tạo nhánh hai nhánh mồ côi.
+    if (!actionGuard.begin()) return;
     const mineSession = sessionId;
     // Lưu ID hành động, không phải nhãn: MessageActionSheet/QuestionCard so
     // busyAction với id ("revert", "answer"…) để bật chữ "Đang làm…".
@@ -755,7 +752,7 @@ export function ChatPage({ route }) {
       if (sessionIdRef.current !== mineSession) return;
       setError(errorSentence(e));
     } finally {
-      actionLockRef.current = false;
+      actionGuard.end();
       // Đã sang phiên khác: đừng đụng state của phiên mới — effect vào phiên
       // mới đã tự dọn `busyAction`/`menu` rồi, xoá tiếp ở đây là xoá nhầm
       // trạng thái của màn đang mở (ví dụ câu trả lời agent đang chờ).
@@ -844,7 +841,6 @@ export function ChatPage({ route }) {
   }
 
   async function saveRename() {
-    if (renameLockRef.current) return;
     const clean = normalizeSessionTitle(renameDraft);
     if (!clean.ok) {
       setRenameErr(clean.error); // giữ nguyên nội dung ô nhập, không đóng sheet
@@ -854,7 +850,10 @@ export function ChatPage({ route }) {
       setRenaming(false); // không đổi gì -> khỏi tốn một vòng mạng
       return;
     }
-    renameLockRef.current = true;
+    // Khoá bằng guard (lib/tap-guard.js). Đặt SAU các nhánh return ở trên vì
+    // nhánh đó phải nhả khoá nếu giữ trước — không có await nào ở đây nên hai
+    // chạm không chen được tới điểm này, begin() một bước là đủ.
+    if (!renameGuard.begin()) return;
     setBusyAction("rename");
     setRenameErr("");
     try {
@@ -867,7 +866,7 @@ export function ChatPage({ route }) {
     } catch (e) {
       setRenameErr(errorSentence(e));
     } finally {
-      renameLockRef.current = false;
+      renameGuard.end();
       setBusyAction("");
     }
   }
@@ -875,8 +874,9 @@ export function ChatPage({ route }) {
   // ---- Chia sẻ: bật/tắt link trên máy, rồi đưa link ra điện thoại ----
 
   async function toggleShare() {
-    if (shareLockRef.current) return;
-    shareLockRef.current = true;
+    // Khoá bằng guard (lib/tap-guard.js): hai PATCH /share cùng lúc là hai
+    // link chia sẻ được bật/tắt lệch nhau.
+    if (!shareGuard.begin()) return;
     setShareBusy(true);
     const wasShared = isShared(session);
     try {
@@ -907,7 +907,7 @@ export function ChatPage({ route }) {
     } catch (e) {
       setError(shareError(e));
     } finally {
-      shareLockRef.current = false;
+      shareGuard.end();
       setShareBusy(false);
     }
   }
@@ -957,14 +957,12 @@ export function ChatPage({ route }) {
     // hàng trong app), còn thiếu nội dung hoặc đang tải file thì mới khoá.
     const decision = sendDecision({ running, sending, text, hasFiles: attached.length > 0 });
     if (decision.action === "wait") return;
-    // Khoá bằng REF chứ không bằng state `sending`: state chỉ đổi ở lần render
-    // kế tiếp, mà hai chạm (bấm hai lần nút Gửi, Ctrl+Enter hai lần — rất dễ
-    // trên điện thoại) dùng CHUNG một handler cũ nên cả hai đều thấy
-    // `sending === false` và cùng đi qua. Hệ quả: tin gửi trùng, engine chạy
-    // hai lượt. Khoá ở đây, trước cả nhánh hoàn tác của chế độ "sửa tin" —
-    // nhánh đó có await nên cửa sổ bấm kép dài hơn nhiều.
-    if (sendLockRef.current) return;
-    sendLockRef.current = true;
+    // Khoá bằng guard (lib/tap-guard.js) chứ không bằng state `sending`: hai
+    // chạm (bấm hai lần nút Gửi, Ctrl+Enter hai lần) dùng CHUNG một handler cũ
+    // nên cả hai đều thấy `sending === false` và cùng đi qua — tin gửi trùng,
+    // engine chạy hai lượt. Khoá ở đây, trước cả nhánh hoàn tác của chế độ
+    // "sửa tin" — nhánh đó có await nên cửa sổ bấm kép dài hơn nhiều.
+    if (!sendGuard.begin()) return;
     // Chốt phiên ngay từ đầu: mọi await bên dưới (hoàn tác, upload, gửi) đều
     // có thể bị người dùng cắt ngang bằng một cú bấm Back.
     const mine = sessionId;
@@ -1075,7 +1073,7 @@ export function ChatPage({ route }) {
       }
       if (failed && sent) setError("Some files failed to upload — the agent only sees the files that uploaded successfully.");
     } finally {
-      sendLockRef.current = false;
+      sendGuard.end();
     }
   }
 
@@ -1091,10 +1089,10 @@ export function ChatPage({ route }) {
   }
 
   async function abort() {
-    // Khoá bằng ref: `aborting` chỉ đổi ở render kế tiếp, nên chạm kép vào
-    // nút Dừng vẫn chạy cả hai nhánh và bắn hai request abort.
-    if (abortLockRef.current) return;
-    abortLockRef.current = true;
+    // Khoá bằng guard (lib/tap-guard.js): `aborting` chỉ đổi ở render kế tiếp,
+    // nên chạm kép vào nút Dừng vẫn chạy cả hai nhánh và bắn hai request abort
+    // (lượt hai rơi vào phiên đã rảnh).
+    if (!abortGuard.begin()) return;
     const mine = sessionId;
     setAborting(true);
     try {
@@ -1116,17 +1114,17 @@ export function ChatPage({ route }) {
       // nói thẳng lỗi rồi để họ tự quyết định gửi tiếp hay không.
       setRunning(false);
     } finally {
-      abortLockRef.current = false;
+      abortGuard.end();
       setAborting(false);
     }
   }
 
   async function replyPermission(permission, reply) {
     const pid = permission.id ?? permission.requestID;
-    // Khoá bằng ref để chạm kép không bắn hai reply cho cùng một thẻ; state
-    // bên cạnh chỉ để khoá nút (ref đổi không render lại).
-    if (permissionBusyRef.current === pid) return;
-    permissionBusyRef.current = pid;
+    // Khoá bằng guard với chìa = pid (lib/tap-guard.js): chạm kép không bắn
+    // hai reply cho cùng một thẻ, còn hai thẻ KHÁC pid vẫn trả lời song song
+    // được; state bên cạnh chỉ để khoá nút (guard đổi không render lại).
+    if (!permissionGuard.begin(pid)) return;
     setPermissionBusy(pid);
     try {
       await ow(`${base}/permission/${encodeURIComponent(pid)}/reply`, {
@@ -1139,7 +1137,7 @@ export function ChatPage({ route }) {
     } catch (e) {
       setError(`Could not answer the agent's question: ${errorSentence(e)}`);
     } finally {
-      if (permissionBusyRef.current === pid) permissionBusyRef.current = "";
+      permissionGuard.end(pid);
       setPermissionBusy("");
     }
   }

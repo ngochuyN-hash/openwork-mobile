@@ -14,6 +14,7 @@ import {
 import { getTenant, getTenantName, getToken } from "../lib/identity-store.js";
 import { notifyKeysChanged, removeKey } from "../lib/keyring.js";
 import { unwrap } from "../lib/format.js";
+import { createTapGuard } from "../lib/tap-guard.js";
 import { UNPAIRED_SENTENCE, errorSentence, isUnpaired } from "../lib/net.js";
 import {
   formatPairingCountdown,
@@ -44,6 +45,12 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
   const [wakeMsg, setWakeMsg] = useState("");
   const [checkMsg, setCheckMsg] = useState("");
   const [confirmDialog, askConfirm] = useConfirm();
+  // Khoá chạm kép theo hành động (invariant ở lib/tap-guard.js): state `busy`
+  // chỉ đổi ở render kế tiếp, hai chạm liền nhau chạy cùng handler cũ. Trước
+  // đây các nút trang này KHÔNG có khoá nào — chạm kép bắn hai POST/DELETE.
+  // Mỗi hành động một chìa, nên hai hành động khác nhau vẫn song song được;
+  // Revoke/Unpair khỏi khoá: hộp xác nhận của useConfirm đã chặn bấm kép.
+  const tapGuard = useRef(createTapGuard()).current;
   const [devices, setDevices] = useState(null);
   const [devicesErr, setDevicesErr] = useState(false);
   const [thisDeviceLabel, setThisDeviceLabel] = useState("");
@@ -165,6 +172,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
   }
 
   async function recheck() {
+    if (!tapGuard.begin("recheck")) return;
     setBusy(true);
     setCheckMsg("");
     try {
@@ -176,11 +184,13 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       // còn tự chế một biến thể khác với ba action bên dưới nó.
       setCheckMsg(isUnpaired(e) ? UNPAIRED_SENTENCE : `Check failed: ${errorSentence(e)}`);
     } finally {
+      tapGuard.end("recheck");
       setBusy(false);
     }
   }
 
   async function wake() {
+    if (!tapGuard.begin("wake")) return;
     setWaking(true);
     setWakeMsg("");
     try {
@@ -203,6 +213,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
         setWakeCandidates((prev) => mergeCandidates(prev, e.candidates));
       }
     } finally {
+      tapGuard.end("wake");
       setWaking(false);
     }
   }
@@ -224,40 +235,44 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
   async function choosePath(path) {
     const target = String(path ?? "").trim();
     if (!target) return;
+    if (!tapGuard.begin("choosePath")) return;
     setSavingPath(true);
     setPathMsg("");
     setPathErr("");
-    let payload;
     try {
-      payload = await apiOpenWorkPath(target);
-    } catch (e) {
-      setPathErr(errorSentence(e));
-      throw e; // xem JSDoc — không nuốt, component cần rejection để giữ ô gõ
+      let payload;
+      try {
+        payload = await apiOpenWorkPath(target);
+      } catch (e) {
+        setPathErr(errorSentence(e));
+        throw e; // xem JSDoc — không nuốt, component cần rejection để giữ ô gõ
+      }
+      // Cố ý viết NGOÀI try ở trên: nhánh `throw` bên dưới không bị catch nuốt
+      // mất và thay bằng `String(e.message)` — lỗi "bridge không thấy file"
+      // phải hiện nguyên văn tiếng Việt của ta, không phải "openwork_not_found".
+      setOpenworkOverride(payload?.openwork ?? null);
+      setWakeCandidates([]);
+      onRecheck(); // config đã đổi — bảng trạng thái cũng phải thấy giá trị mới
+      if (!openworkFoundOf(payload?.openwork)) {
+        // Lỗi này đi qua `pathErr` (Banner đỏ), KHÔNG phải `pathMsg` (Banner
+        // xanh): băng xanh nói "Đã lưu nhưng bridge vẫn không thấy file" đọc như
+        // thành công có ngoặt.
+        setPathErr("Saved, but bridge still cannot find this file — check the path.");
+        // Throw để `submit` GIỮ NGUYÊN ô gõ: đường dẫn này người dùng vừa gõ tay
+        // hoặc vừa bấm "Dùng", xoá đi thì phải làm lại từ đầu đúng lúc app chưa
+        // thấy exe. Giữ cả danh sách ứng viên vì còn giá trị để bấm tiếp.
+        throw new Error("openwork_not_found");
+      }
+      // Xong thì đóng khối chọn, không chiếm màn hình.
+      setEditing(false);
+      // Không lặp lại "bấm Mở OpenWork…" ở đây: điều kiện hiện nút đó đã tự
+      // dựng từ `openworkRunning` ngay phía trên, và chỉ hiện đúng lúc app chưa
+      // mở. Nhánh app đang mở không cần hướng dẫn mở app.
+      setPathMsg("Path set.");
     } finally {
+      tapGuard.end("choosePath");
       setSavingPath(false);
     }
-    // Cố ý viết NGOÀI try: nhánh `throw` bên dưới không được `catch` ở trên
-    // nuốt mất và thay bằng `String(e.message)` — lỗi "bridge không thấy file"
-    // phải hiện nguyên văn tiếng Việt của ta, không phải "openwork_not_found".
-    setOpenworkOverride(payload?.openwork ?? null);
-    setWakeCandidates([]);
-    onRecheck(); // config đã đổi — bảng trạng thái cũng phải thấy giá trị mới
-    if (!openworkFoundOf(payload?.openwork)) {
-      // Lỗi này đi qua `pathErr` (Banner đỏ), KHÔNG phải `pathMsg` (Banner
-      // xanh): băng xanh nói "Đã lưu nhưng bridge vẫn không thấy file" đọc như
-      // thành công có ngoặt.
-      setPathErr("Saved, but bridge still cannot find this file — check the path.");
-      // Throw để `submit` GIỮ NGUYÊN ô gõ: đường dẫn này người dùng vừa gõ tay
-      // hoặc vừa bấm "Dùng", xoá đi thì phải làm lại từ đầu đúng lúc app chưa
-      // thấy exe. Giữ cả danh sách ứng viên vì còn giá trị để bấm tiếp.
-      throw new Error("openwork_not_found");
-    }
-    // Xong thì đóng khối chọn, không chiếm màn hình.
-    setEditing(false);
-    // Không lặp lại "bấm Mở OpenWork…" ở đây: điều kiện hiện nút đó đã tự
-    // dựng từ `openworkRunning` ngay phía trên, và chỉ hiện đúng lúc app chưa
-    // mở. Nhánh app đang mở không cần hướng dẫn mở app.
-    setPathMsg("Path set.");
   }
 
   /** Chép đường dẫn để dán chỗ khác. Clipboard API cần ngữ cảnh an toàn (https);
@@ -292,6 +307,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
       setMachineErr("Machine name is empty.");
       return;
     }
+    if (!tapGuard.begin("machineName")) return;
     setMachineBusy(true);
     setMachineErr("");
     try {
@@ -302,11 +318,13 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     } catch (e) {
       setMachineErr(errorSentence(e));
     } finally {
+      tapGuard.end("machineName");
       setMachineBusy(false);
     }
   }
 
   async function restartTunnel() {
+    if (!tapGuard.begin("restartTunnel")) return;
     setTunnelBusy(true);
     setTunnelMsg("");
     try {
@@ -315,11 +333,13 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     } catch (e) {
       setTunnelMsg(errorSentence(e));
     } finally {
+      tapGuard.end("restartTunnel");
       setTunnelBusy(false);
     }
   }
 
   async function loadPairingCode() {
+    if (!tapGuard.begin("pairingCode")) return;
     setPairingBusy(true);
     setPairingErr("");
     try {
@@ -333,6 +353,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     } catch (e) {
       setPairingErr(errorSentence(e));
     } finally {
+      tapGuard.end("pairingCode");
       setPairingBusy(false);
     }
   }
@@ -353,6 +374,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
    * có action tương đương trong Settings với fallback restart app — web không
    * tự restart app được, lỗi thì người dùng dùng nút "Mở OpenWork" phía trên. */
   async function reloadEngine() {
+    if (!tapGuard.begin("reloadEngine")) return;
     setReloading(true);
     setReloadMsg("");
     try {
@@ -373,6 +395,7 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     } catch (e) {
       setReloadMsg(errorSentence(e));
     } finally {
+      tapGuard.end("reloadEngine");
       setReloading(false);
     }
   }
