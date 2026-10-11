@@ -5,31 +5,11 @@
 // lúc import nên import động là an toàn).
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { tmpdir } from "node:os";
-import { mkdtempSync } from "node:fs";
+import { installBrowserShim, createStorageShim } from "./helpers/shim.js";
 
 // House rule: tests never touch a real bridge / openwork data directory.
-process.env.OPENWORK_BRIDGE_DIR = mkdtempSync(`${tmpdir()}/owm-test-bridge-`);
-process.env.OPENWORK_DIR = mkdtempSync(`${tmpdir()}/owm-test-data-`);
-
-function createStorageShim() {
-  const map = new Map();
-  return {
-    getItem: (k) => (map.has(k) ? map.get(k) : null),
-    setItem: (k, v) => map.set(k, String(v)),
-    removeItem: (k) => map.delete(k),
-    clear: () => map.clear(),
-    key: (i) => [...map.keys()][i] ?? null,
-    get length() {
-      return map.size;
-    },
-  };
-}
-
-globalThis.localStorage = createStorageShim();
-globalThis.location = { hash: "", pathname: "/", search: "" };
-globalThis.history = { replaceState() {} };
-globalThis.window = globalThis;
+// Browser + data-dir shim dùng chung — web/test/helpers/shim.js.
+installBrowserShim();
 
 // Round 4 tách api.js: setToken/setTenant dời sang lib/identity-store — gộp lại.
 const api = {
@@ -122,12 +102,12 @@ test("apiOpenWorkPath ném UNPAIRED khi 401 để App về màn ghép nối", as
   );
 });
 
-test("apiOpenWorkPath rơi về 'path <status>' khi body lỗi không phải JSON", async () => {
+test("apiOpenWorkPath rơi về fallback chung 'HTTP <status>' khi body lỗi không phải JSON", async () => {
   globalThis.fetch = async () => respond(500, "boom");
   await assert.rejects(
     () => api.apiOpenWorkPath("C:/OpenWork/OpenWork.exe"),
     (err) => {
-      assert.equal(err.message, "path 500");
+      assert.equal(err.message, "HTTP 500"); // bridge() hợp đồng chung: không có message thì HTTP <status>
       return true;
     }
   );

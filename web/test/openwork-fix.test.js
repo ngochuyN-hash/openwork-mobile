@@ -23,31 +23,11 @@
 // này (bridge client, localStorage) vẫn chạy được.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { tmpdir } from "node:os";
-import { mkdtempSync } from "node:fs";
+import { installBrowserShim } from "./helpers/shim.js";
 
 // House rule: tests never touch a real bridge / openwork data directory.
-process.env.OPENWORK_BRIDGE_DIR = mkdtempSync(`${tmpdir()}/owm-test-bridge-`);
-process.env.OPENWORK_DIR = mkdtempSync(`${tmpdir()}/owm-test-data-`);
-
-function createStorageShim() {
-  const map = new Map();
-  return {
-    getItem: (k) => (map.has(k) ? map.get(k) : null),
-    setItem: (k, v) => map.set(k, String(v)),
-    removeItem: (k) => map.delete(k),
-    clear: () => map.clear(),
-    key: (i) => [...map.keys()][i] ?? null,
-    get length() {
-      return map.size;
-    },
-  };
-}
-
-globalThis.localStorage = createStorageShim();
-globalThis.location = { hash: "", pathname: "/", search: "" };
-globalThis.history = { replaceState() {} };
-globalThis.window = globalThis;
+// Browser + data-dir shim dùng chung — web/test/helpers/shim.js.
+installBrowserShim();
 
 const {
   mergeCandidates,

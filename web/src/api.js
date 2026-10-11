@@ -8,7 +8,7 @@ import { buildPromptModelFields } from "./lib/model-behavior.js";
 import { errorSentence, unpairedError, withTimeoutSignal } from "./lib/net.js";
 import { getTenant, getTenantName, getToken } from "./lib/identity-store.js";
 import { addKey } from "./lib/keyring.js";
-import { filenameFromDisposition, unwrap } from "./lib/format.js";
+import { filenameFromDisposition, formatBytes, unwrap } from "./lib/format.js";
 import {
   BRIDGE_ROUTES,
   HEADER_TENANT,
@@ -51,17 +51,12 @@ export async function apiPair(code, label) {
 }
 
 export async function apiDevices() {
-  const res = await fetch(BRIDGE_ROUTES.devices, { headers: authHeaders() });
-  if (res.status === 401) throw unpairedError();
-  if (!res.ok) throw new Error(`devices ${res.status}`);
-  return (await res.json()).devices ?? [];
+  const payload = await bridge(BRIDGE_ROUTES.devices);
+  return payload?.devices ?? [];
 }
 
-export async function apiRevokeDevice(id) {
-  const res = await fetch(`${BRIDGE_ROUTES.devices}/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
-  if (!res.ok) throw new Error(`revoke ${res.status}`);
-  return res.json();
-}
+export const apiRevokeDevice = (id) =>
+  bridge(`${BRIDGE_ROUTES.devices}/${encodeURIComponent(id)}`, { method: "DELETE" });
 
 // Authorization + tenant headers, optionally for a key other than the active one.
 function authHeadersFor(token, tenant, extra = {}) {
@@ -84,81 +79,68 @@ function tenantHeaders(extra = {}) {
   return headers;
 }
 
-export async function apiState() {
-  const guard = withTimeoutSignal(null, OW_TIMEOUT_MS);
-  let res;
-  try {
-    res = await fetch(BRIDGE_ROUTES.state, { headers: authHeaders(), signal: guard.signal });
-  } finally {
-    guard.release();
-  }
-  if (res.status === 401) throw unpairedError();
-  if (!res.ok) throw new Error(`state ${res.status}`);
-  return res.json();
-}
-
-export async function apiRecheck() {
-  const res = await fetch(BRIDGE_ROUTES.recheck, { method: "POST", headers: authHeaders() });
-  if (res.status === 401) throw unpairedError();
-  return res.json();
-}
-
-/** Bật OpenWork desktop trên máy tính (khi máy đang bật mà app chưa mở). */
-export async function apiWakeOpenWork() {
-  const res = await fetch(BRIDGE_ROUTES.openworkWake, { method: "POST", headers: authHeaders() });
+/**
+ * Transport cho các API CỦA BRIDGE (fetch thẳng, không qua proxy engine — khác
+ * `ow()` bên dưới). Một chỗ sở hữu error contract mà trước đây từng wrapper tự
+ * cuộn theo một kiểu riêng: 401 → `unpairedError()`; body `{code,message}` →
+ * `error.message` (câu tiếng Việt của bridge, UI hiện nguyên văn) + `error.code`;
+ * `error.candidates` khi bridge gửi kèm danh sách đường dẫn (lỗi wake không thấy
+ * exe — giữ lại cho bộ chọn ở settings + banner, đừng vứt); không có message thì
+ * `HTTP <status>`. Body JSON tuỳ chọn; caller đọc `.status` khi cần phân nhánh
+ * riêng (pairing screen đọc `error.code`).
+ */
+async function bridge(path, { method = "GET", body, headers = {}, signal } = {}) {
+  const res = await fetch(path, {
+    method,
+    headers: authHeaders(body !== undefined ? { "content-type": "application/json", ...headers } : headers),
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal,
+  });
   if (res.status === 401) throw unpairedError();
   const payload = await res.json().catch(() => null);
   if (!res.ok) {
-    const error = new Error(payload?.message ?? `wake ${res.status}`);
+    const error = new Error(payload?.message ?? `HTTP ${res.status}`);
     error.status = res.status;
-    // Bridge trả kèm `candidates` khi không tìm thấy exe (openwork_exe_not_found) —
-    // giữ lại để màn Cài đặt đưa vào chung bộ chọn đường dẫn, đừng vứt đi.
+    error.code = typeof payload?.code === "string" ? payload.code : "";
     error.candidates = Array.isArray(payload?.candidates) ? payload.candidates : [];
     throw error;
   }
   return payload;
 }
 
-/** Chỉ đường dẫn OpenWork.exe khi bridge chưa tìm thấy (POST /api/openwork/path).
- * Đây là API của bridge (không đi qua proxy /api/ow) nên gọi fetch thẳng, y hệt
- * apiWakeOpenWork. Bridge tự kiểm tra file rồi lưu config — web không spawn, không
- * kiểm tra gì cả. Lỗi ném ra mang đúng `message` tiếng Việt của bridge để UI hiện
- * nguyên văn cho người dùng. */
-export async function apiOpenWorkPath(path) {
-  const res = await fetch(BRIDGE_ROUTES.openworkPath, {
-    method: "POST",
-    headers: authHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({ path: String(path ?? "").trim() }),
-  });
-  if (res.status === 401) throw unpairedError();
-  const payload = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(payload?.message ?? `path ${res.status}`);
-  return payload; // { ok: true, openwork: { found, exe, version, source, candidates } }
+export async function apiState() {
+  const guard = withTimeoutSignal(null, OW_TIMEOUT_MS);
+  try {
+    return await bridge(BRIDGE_ROUTES.state, { signal: guard.signal });
+  } finally {
+    guard.release();
+  }
 }
+
+export async function apiRecheck() {
+  return bridge(BRIDGE_ROUTES.recheck, { method: "POST" });
+}
+
+/** Bật OpenWork desktop trên máy tính (khi máy đang bật mà app chưa mở). */
+export const apiWakeOpenWork = () => bridge(BRIDGE_ROUTES.openworkWake, { method: "POST" });
+
+/** Chỉ đường dẫn OpenWork.exe khi bridge chưa tìm thấy (POST /api/openwork/path).
+ * Bridge tự kiểm tra file rồi lưu config — web không spawn, không kiểm tra gì cả.
+ * Lỗi ném ra mang đúng `message` tiếng Việt của bridge để UI hiện nguyên văn. */
+export const apiOpenWorkPath = (path) =>
+  bridge(BRIDGE_ROUTES.openworkPath, { method: "POST", body: { path: String(path ?? "").trim() } });
 
 /** Mã ghép one-time đang sống trên bridge (GET /api/pairing-code, cần khóa máy).
  * Trả {code, codeFormatted, secondsLeft, pairUrl, qr, masterUrl, masterQr, ...}.
  * UI chủ đích KHÔNG vẽ masterUrl/masterQr: token master vĩnh viễn chỉ nên nằm
  * trong terminal/GUI trên máy tính, còn mã one-time tự vô hiệu sau 1 lần dùng. */
-export async function apiPairingCode() {
-  const res = await fetch(BRIDGE_ROUTES.pairingCode, { headers: authHeaders() });
-  if (res.status === 401) throw unpairedError();
-  const payload = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(payload?.message ?? `pairing-code ${res.status}`);
-  return payload;
-}
+export const apiPairingCode = () => bridge(BRIDGE_ROUTES.pairingCode);
 
 /** Restart tunnel thủ công (POST /api/tunnel/restart): thay cloudflared, giữ
  * nguyên bridge — dùng khi tunnel kẹt backoff 429 mà chưa tự nhả. 409 = tunnel
  * không chạy (hoặc đang restart dở). Lưu ý: tunnel chết HẲN thì điện thoại
  * không gọi tới được máy — lúc đó phải bấm nút ↻ trên GUI máy tính. */
-export async function apiRestartTunnel() {
-  const res = await fetch(BRIDGE_ROUTES.tunnelRestart, { method: "POST", headers: authHeaders() });
-  if (res.status === 401) throw unpairedError();
-  const payload = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(payload?.message ?? `tunnel ${res.status}`);
-  return payload; // { ok: true, tunnel: {...} }
-}
+export const apiRestartTunnel = () => bridge(BRIDGE_ROUTES.tunnelRestart, { method: "POST" });
 
 /** Đổi tên máy (POST /api/machine/name) — thiết bị ghép SAU sẽ thấy tên mới ở
  * màn đăng nhập. Bridge tự dẹp ký tự lạ và cắt 60 ký tự; tên rỗng chặn ngay ở
@@ -166,40 +148,17 @@ export async function apiRestartTunnel() {
 export async function apiSetMachineName(name) {
   const clean = String(name ?? "").trim();
   if (!clean) throw new Error("Machine name is empty.");
-  const res = await fetch(BRIDGE_ROUTES.machineName, {
-    method: "POST",
-    headers: authHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({ name: clean }),
-  });
-  if (res.status === 401) throw unpairedError();
-  const payload = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(payload?.message ?? `machine ${res.status}`);
-  return payload; // { ok: true, machineName }
+  return bridge(BRIDGE_ROUTES.machineName, { method: "POST", body: { name: clean } });
 }
 
 /** Duyệt thư mục máy tính để chọn path khi tạo workspace.
  * Không truyền path → trả {roots, quick, home}; truyền path → {path, parent, dirs}. */
-export async function apiFsList(path) {
-  const qs = path ? `?path=${encodeURIComponent(path)}` : "";
-  const res = await fetch(`${BRIDGE_ROUTES.fsList}${qs}`, { headers: authHeaders() });
-  if (res.status === 401) throw unpairedError();
-  const payload = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(payload?.message ?? `fs ${res.status}`);
-  return payload;
-}
+export const apiFsList = (path) =>
+  bridge(`${BRIDGE_ROUTES.fsList}${path ? `?path=${encodeURIComponent(path)}` : ""}`);
 
 /** Tạo thư mục mới con bên trong `dir` (nút "+ Thư mục mới" trong picker). */
-export async function apiFsMkdir(dir, name) {
-  const res = await fetch(BRIDGE_ROUTES.fsMkdir, {
-    method: "POST",
-    headers: authHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({ dir, name }),
-  });
-  if (res.status === 401) throw unpairedError();
-  const payload = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(payload?.message ?? `mkdir ${res.status}`);
-  return payload;
-}
+export const apiFsMkdir = (dir, name) =>
+  bridge(BRIDGE_ROUTES.fsMkdir, { method: "POST", body: { dir, name } });
 
 /**
  * Gọi openwork-server qua bridge. path bắt đầu bằng "/".
@@ -489,26 +448,6 @@ function guessName(path) {
  * với lỗi không giải thích được. Đổi con số này thì phải sửa cả thông báo.
  */
 const MAX_UPLOAD_BYTES = 5_000_000;
-
-/** Định dạng dung lượng theo Intl (vi-VN). */
-export function formatBytes(bytes) {
-  if (bytes == null) return "";
-  const nf = new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 1 });
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${nf.format(bytes / 1024)} KB`;
-  return `${nf.format(bytes / (1024 * 1024))} MB`;
-}
-
-/** Uint8Array/ArrayBuffer -> base64 theo chunk (không tràn stack như spread). */
-export function bytesToBase64(bytes) {
-  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  let bin = "";
-  const CHUNK = 0x8000;
-  for (let i = 0; i < u8.length; i += CHUNK) {
-    bin += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
-  }
-  return btoa(bin);
-}
 
 /** File/Blob -> base64 (qua FileReader, gọn RAM hơn arrayBuffer + btoa). */
 function fileToBase64(file) {
