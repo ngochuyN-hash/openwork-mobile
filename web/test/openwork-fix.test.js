@@ -49,9 +49,14 @@ globalThis.location = { hash: "", pathname: "/", search: "" };
 globalThis.history = { replaceState() {} };
 globalThis.window = globalThis;
 
-const { mergeCandidates, openworkFoundOf, openworkRunningOf, openworkStatusLabel } = await import(
-  "../src/lib/openwork-fix.js"
-);
+const {
+  mergeCandidates,
+  openworkFoundOf,
+  openworkRunningOf,
+  openworkStatusLabel,
+  createOpenWorkFixFlow,
+  OPENWORK_SAVED_BUT_NOT_FOUND,
+} = await import("../src/lib/openwork-fix.js");
 
 // ---- mergeCandidates() ----
 
@@ -243,4 +248,115 @@ test("openworkStatusLabel dùng runningFallback khi running KHÔNG phải boolea
   assert.equal(openworkStatusLabel({ found: true }, {}), "installed, not running");
   assert.equal(openworkStatusLabel({ found: true, running: 1 }), "installed, not running");
   assert.equal(openworkStatusLabel({ found: true, running: null }), "installed, not running");
+});
+
+// ---- createOpenWorkFixFlow() — máy trạng thái dùng chung app.jsx/settings.jsx ----
+// Hai màn từng giữ tay HAI bản chép của cùng một state machine và đã bắt đầu
+// lệch (policy dọn candidates, override). Test dưới đây khoá phần GIỐNG NHAU
+// nằm ở lib: contract reject 2 trường hợp, hook onSaved chạy ở CẢ nhánh, wake
+// recheck đúng lúc app đang chạy.
+
+function fakeFlow({ pathResult, wakeResult } = {}) {
+  const calls = { path: [], pathBody: null, wake: 0, recheck: 0, onRecheck: 0, onSaved: [] };
+  const apiOpenWorkPath = async (path) => {
+    calls.path.push(path);
+    if (pathResult?.reject) throw pathResult.reject;
+    return pathResult?.payload ?? { ok: true, openwork: { found: true } };
+  };
+  const apiWakeOpenWork = async () => {
+    calls.wake += 1;
+    if (wakeResult?.reject) throw wakeResult.reject;
+    return wakeResult?.payload ?? { alreadyRunning: false };
+  };
+  const apiRecheck = async () => {
+    calls.recheck += 1;
+    return { ok: true };
+  };
+  const onRecheck = () => {
+    calls.onRecheck += 1;
+  };
+  const flow = createOpenWorkFixFlow({ apiOpenWorkPath, apiWakeOpenWork, apiRecheck, onRecheck });
+  return { flow, calls };
+}
+
+test("submitPath: bridge thấy file -> resolve payload, onSaved chạy 1 lần", async () => {
+  const { flow, calls } = fakeFlow({
+    pathResult: { payload: { ok: true, openwork: { found: true, exe: "C:\\x\\OpenWork.exe" } } },
+  });
+  const onSaved = (p) => calls.onSaved.push(p);
+  const payload = await flow.submitPath("C:\\x\\OpenWork.exe", onSaved);
+  assert.equal(payload.openwork.found, true);
+  assert.equal(calls.path[0], "C:\\x\\OpenWork.exe");
+  assert.equal(calls.onSaved.length, 1);
+});
+
+test("submitPath: HTTP 200 nhưng found=false -> PHẢI reject với cờ saved (onSaved vẫn chạy)", async () => {
+  // Trường hợp CÓ THẬT: route trả 200 kèm openworkStateInfo() mà
+  // describeOpenWorkInstall nuốt lỗi đọc version -> {found:false} dù file có
+  // thật. Nuốt lỗi này rồi resolve = component XOÁ ô gõ người dùng vừa gõ.
+  const { flow, calls } = fakeFlow({
+    pathResult: { payload: { ok: true, openwork: { found: false } } },
+  });
+  await assert.rejects(
+    flow.submitPath("C:\\x\\OpenWork.exe", (p) => calls.onSaved.push(p)),
+    (e) => e.saved === true && e.message === "openwork_not_found"
+  );
+  assert.equal(calls.onSaved.length, 1, "bridge ĐÃ LƯU config — caller phải thấy kết quả mới ở cả hai nhánh");
+});
+
+test("submitPath: found là chuỗi 'false' (payload rác) cũng phải reject", async () => {
+  // openworkFoundOf chỉ tin boolean thật — cùng quy tắc với openworkFoundOf.
+  const { flow } = fakeFlow({ pathResult: { payload: { ok: true, openwork: { found: "false" } } } });
+  await assert.rejects(flow.submitPath("a.exe"), (e) => e.saved === true);
+});
+
+test("submitPath: api ném -> reject nguyên lỗi, onSaved KHÔNG chạy", async () => {
+  const boom = new Error("bridge từ chối");
+  const { flow, calls } = fakeFlow({ pathResult: { reject: boom } });
+  await assert.rejects(flow.submitPath("a.exe", () => calls.onSaved.push(1)), (e) => e === boom);
+  assert.equal(calls.onSaved.length, 0);
+});
+
+test("submitPath: path rỗng -> resolve undefined, KHÔNG gọi mạng", async () => {
+  const { flow, calls } = fakeFlow();
+  assert.equal(await flow.submitPath("   "), undefined);
+  assert.equal(calls.path.length, 0);
+});
+
+test("wake: app đang chạy -> tự recheck + onRecheck, câu báo rỗng", async () => {
+  const { flow, calls } = fakeFlow({ wakeResult: { payload: { alreadyRunning: true } } });
+  const result = await flow.wake();
+  assert.equal(result.alreadyRunning, true);
+  assert.equal(calls.recheck, 1, "alreadyRunning thì flow tự gọi apiRecheck");
+  assert.equal(calls.onRecheck, 1, "và tự gọi onRecheck của màn");
+  assert.equal(flow.wakeMessage(result), "");
+});
+
+test("wake: app chưa chạy -> KHÔNG recheck, câu báo 'đã gửi lệnh'", async () => {
+  const { flow, calls } = fakeFlow({ wakeResult: { payload: { alreadyRunning: false } } });
+  const result = await flow.wake();
+  assert.equal(calls.recheck, 0);
+  assert.equal(calls.onRecheck, 0);
+  assert.equal(
+    flow.wakeMessage(result),
+    "Launch command sent to OpenWork — wait ~20s then tap Recheck."
+  );
+});
+
+test("wake: lỗi mang candidates -> candidatesFromError trả nguyên, không có thì rỗng", async () => {
+  const { flow } = fakeFlow({
+    wakeResult: { reject: Object.assign(new Error("exe not found"), { candidates: ["a.exe", "b.exe"] }) },
+  });
+  await assert.rejects(flow.wake());
+  const { flow: flow2 } = fakeFlow({ wakeResult: { reject: new Error("network dead") } });
+  await assert.rejects(flow2.wake());
+  assert.deepEqual(flow.candidatesFromError(Object.assign(new Error("x"), { candidates: ["a.exe"] })), ["a.exe"]);
+  assert.deepEqual(flow2.candidatesFromError(new Error("x")), []);
+  assert.deepEqual(flow2.candidatesFromError(undefined), []);
+});
+
+test("OPENWORK_SAVED_BUT_NOT_FOUND là MỘT câu dùng chung hai banner", async () => {
+  // Hai màn từng viết tay cùng câu này — lệch một chữ là hai banner nói hai
+  // điều kiện giống nhau bằng hai câu khác nhau. Ghim nguyên văn.
+  assert.equal(OPENWORK_SAVED_BUT_NOT_FOUND, "Saved, but bridge still cannot find this file — check the path.");
 });

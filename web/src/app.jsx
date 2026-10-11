@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "preact/hooks";
+import { useEffect, useState, useCallback, useMemo } from "preact/hooks";
 import { apiState, apiWakeOpenWork, apiRecheck, apiOpenWorkPath } from "./api.js";
 import { getToken } from "./lib/identity-store.js";
 import { parseHashRoute } from "./lib/route.js";
@@ -6,7 +6,12 @@ import { errorSentence, isUnpaired, networkErrorMessage } from "./lib/net.js";
 import { BackIcon, WsIcon, GearIcon, MessageIcon } from "./components/icons.jsx";
 import { Banner } from "./components/ui.jsx";
 import { OpenWorkFix } from "./components/openwork-fix.jsx";
-import { mergeCandidates, openworkFoundOf } from "./lib/openwork-fix.js";
+import {
+  createOpenWorkFixFlow,
+  mergeCandidates,
+  openworkFoundOf,
+  OPENWORK_SAVED_BUT_NOT_FOUND,
+} from "./lib/openwork-fix.js";
 import { PairingScreen } from "./pages/pairing.jsx";
 import { HomePage } from "./pages/home.jsx";
 import { OpenWorkMark } from "./components/logo.jsx";
@@ -177,6 +182,12 @@ export function App() {
 
 /** `view` = route.view của hash router, dùng để tắt bản sửa trùng ở #/settings. */
 function StatusBanners({ state, onRecheck, view }) {
+  // Máy trạng thái sửa-OpenWork dùng chung với settings.jsx nằm ở
+  // lib/openwork-fix.js — trước đây hai màn giữ tay hai bản chép và đã lệch.
+  const flow = useMemo(
+    () => createOpenWorkFixFlow({ apiOpenWorkPath, apiWakeOpenWork, apiRecheck, onRecheck }),
+    [onRecheck]
+  );
   const [waking, setWaking] = useState(false);
   const [wakeMsg, setWakeMsg] = useState("");
   // Đường dẫn .exe do bridge GỢI Ý, tích luỹ suốt phiên:
@@ -196,49 +207,34 @@ function StatusBanners({ state, onRecheck, view }) {
   const [fixMsg, setFixMsg] = useState("");
 
   /**
-   * Gửi một đường dẫn .exe lên bridge (POST /api/openwork/path).
-   *
-   * CONTRACT của `OpenWorkFix`: promise này PHẢI REJECT khi lưu thất bại —
-   * component dựa vào nhánh reject để GIỮ NGUYÊN đường dẫn vừa gõ tay trong
-   * ô (openwork-fix.jsx, phần `submit`: resolve → `setManualPath("")`).
-   * Nuốt lỗi rồi resolve thì ô bị xoá dù bridge đã từ chối, đúng cái điều
-   * người dùng phải gõ lại.
-   *
-   * "Thất bại" ở đây gồm HAI trường hợp, không chỉ lỗi HTTP:
-   *   1. `apiOpenWorkPath` ném (bridge từ chối / mạng hỏng);
-   *   2. HTTP 200 nhưng `openwork.found` false — bridge nhận đường dẫn rồi
-   *      vẫn không thấy file. Xem nhánh dưới.
+   * Gửi một đường dẫn .exe lên bridge (POST /api/openwork/path). Máy trạng
+   * thái (contract reject + nhánh "đã lưu mà chưa thấy file") nằm ở
+   * lib/openwork-fix.js — bản trước đây chép tay y hệt settings.jsx. Chỉ còn
+   * policy của banner: lỗi hiện `fixErr`, thành công thì nhắc bấm nút Launch
+   * phía trên.
    */
   async function chooseExePath(path) {
     setFixing(true);
     setFixErr("");
     setFixMsg("");
-    let payload;
     try {
-      payload = await apiOpenWorkPath(path);
+      const payload = await flow.submitPath(path);
+      if (!payload) return; // path rỗng — component đã chặn, phòng thủ thêm
+      // KHÔNG xoá `wakeCandidates` ở đây: `openworkStateInfo` gửi kèm
+      // `candidates` ở MỌI lần gọi (bridge/src/index.js:231-233 — "Luôn kèm,
+      // kể cả khi đã tìm thấy"), nên danh sách hợp nhất vẫn còn dù xoá state.
+      // Việc ẩn khối sửa dựa vào cờ `openworkFound` bên dưới, không dựa vào
+      // việc dọn mảng.
+      setFixMsg("Path set. Tap “Launch OpenWork on computer” above to start the app.");
+      onRecheck();
     } catch (e) {
-      setFixErr(errorSentence(e));
-      throw e;
+      // Lỗi "đã lưu mà chưa thấy file" phải hiện nguyên văn câu của lib
+      // (OPENWORK_SAVED_BUT_NOT_FOUND), không nuốt thành errorSentence lạ.
+      setFixErr(e.saved ? OPENWORK_SAVED_BUT_NOT_FOUND : errorSentence(e));
+      throw e; // contract <OpenWorkFix>: rejection giữ nguyên ô gõ + danh sách
     } finally {
       setFixing(false);
     }
-    // Cố ý viết NGOÀI try: nhánh `throw` dưới đây không được `catch` ở trên
-    // nuốt mất và thay bằng `String(e.message)` — lỗi "bridge không thấy file"
-    // phải hiện nguyên văn tiếng Việt của ta, không phải "openwork_not_found".
-    if (!openworkFoundOf(payload?.openwork)) {
-      setFixErr("Saved, but bridge still cannot find this file — check the path.");
-      // Throw để `submit` GIỮ NGUYÊN cả ô gõ lẫn danh sách: đường dẫn này
-      // người dùng vừa gõ tay hoặc vừa bấm "Dùng", xoá đi thì phải làm lại
-      // từ đầu đúng lúc app chưa thấy exe.
-      throw new Error("openwork_not_found");
-    }
-    // Bridge đã thấy exe. KHÔNG xoá `wakeCandidates` ở đây: `openworkStateInfo`
-    // gửi kèm `candidates` ở MỌI lần gọi (bridge/src/index.js:231-233 — "Luôn
-    // kèm, kể cả khi đã tìm thấy"), nên danh sách hợp nhất vẫn còn dù xoá
-    // state. Việc ẩn khối sửa dựa vào cờ `openworkFound` bên dưới, không dựa
-    // vào việc dọn mảng.
-    setFixMsg("Path set. Tap “Launch OpenWork on computer” above to start the app.");
-    onRecheck();
   }
 
   if (!state) return null;
@@ -298,19 +294,15 @@ function StatusBanners({ state, onRecheck, view }) {
       setFixErr("");
       setFixMsg("");
       try {
-        const result = await apiWakeOpenWork();
-        if (result?.alreadyRunning) {
-          await apiRecheck();
-          onRecheck();
-        } else {
-          setWakeMsg("Launch command sent to OpenWork — wait ~20s then tap Recheck.");
-        }
+        // flow.wake tự recheck khi app đang chạy (phần giống nhau của hai màn).
+        setWakeMsg(flow.wakeMessage(await flow.wake()));
       } catch (e) {
         setWakeMsg(errorSentence(e));
         // Bridge không tìm thấy exe nên gửi kèm `candidates`. Trước đây mảng này
         // bị vứt ở đây — chỉ còn lại dòng lỗi chết. Giữ lại để khối sửa ngay
         // dưới banner có ngay dòng để bấm, không phải đi tìm trang Cài đặt.
-        if (e?.candidates?.length) setWakeCandidates((prev) => mergeCandidates(prev, e.candidates));
+        const fresh = flow.candidatesFromError(e);
+        if (fresh.length) setWakeCandidates((prev) => mergeCandidates(prev, fresh));
       } finally {
         setWaking(false);
       }

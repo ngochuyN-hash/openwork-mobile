@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
   apiRecheck,
   apiDevices,
@@ -25,10 +25,12 @@ import { useConfirm, Banner } from "../components/ui.jsx";
 import { PcsIcon } from "../components/icons.jsx";
 import { OpenWorkFix } from "../components/openwork-fix.jsx";
 import {
+  createOpenWorkFixFlow,
   mergeCandidates,
   openworkFoundOf,
   openworkRunningOf,
   openworkStatusLabel,
+  OPENWORK_SAVED_BUT_NOT_FOUND,
 } from "../lib/openwork-fix.js";
 import {
   deviceListOf,
@@ -51,6 +53,13 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
   // Mỗi hành động một chìa, nên hai hành động khác nhau vẫn song song được;
   // Revoke/Unpair khỏi khoá: hộp xác nhận của useConfirm đã chặn bấm kép.
   const tapGuard = useRef(createTapGuard()).current;
+  // Máy trạng thái sửa-OpenWork dùng chung với banner (app.jsx) nằm ở
+  // lib/openwork-fix.js — trước đây hai màn giữ tay hai bản chép và đã lệch
+  // (dọn candidates, override). Phần dưới chỉ còn policy riêng của màn này.
+  const flow = useMemo(
+    () => createOpenWorkFixFlow({ apiOpenWorkPath, apiWakeOpenWork, apiRecheck, onRecheck }),
+    [apiOpenWorkPath, apiWakeOpenWork, apiRecheck, onRecheck]
+  );
   const [devices, setDevices] = useState(null);
   const [devicesErr, setDevicesErr] = useState(false);
   const [thisDeviceLabel, setThisDeviceLabel] = useState("");
@@ -194,44 +203,27 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     setWaking(true);
     setWakeMsg("");
     try {
-      const result = await apiWakeOpenWork();
-      if (result?.alreadyRunning) {
-        await apiRecheck();
-        onRecheck();
-      } else {
-        setWakeMsg("Launch command sent to OpenWork — wait ~20s then tap Recheck.");
-      }
+      // flow.wake tự recheck khi app đang chạy; câu báo là phần giống nhau của
+      // hai màn nên nằm ở lib (wakeMessage).
+      setWakeMsg(flow.wakeMessage(await flow.wake()));
     } catch (e) {
       setWakeMsg(errorSentence(e));
-      // Không tìm thấy exe: bridge kèm sẵn danh sách đường dẫn nghi vấn — đừng bỏ
-      // qua, đưa vào đúng bộ chọn bên dưới để người dùng chỉ được luôn.
-      // CỘNG DỒN, không thay thế: bấm "Bật OpenWork" lần thứ hai trả về một danh
-      // sách khác, `setWakeCandidates(e.candidates)` sẽ XOÁ mất ứng viên bridge
-      // gửi ở lần trước. `mergeCandidates(prev, ...)` giữ cả hai và bỏ trùng —
-      // cùng cách banner ở app.jsx làm.
-      if (e?.candidates?.length) {
-        setWakeCandidates((prev) => mergeCandidates(prev, e.candidates));
-      }
+      // Không tìm thấy exe: bridge kèm sẵn danh sách đường dẫn nghi vấn — đừng
+      // bỏ qua, đưa vào đúng bộ chọn bên dưới. CỘNG DỒN qua mergeCandidates,
+      // không thay thế: `setWakeCandidates(e.candidates)` sẽ XOÁ mất ứng viên
+      // bridge gửi ở lần bấm trước — cùng cách banner ở app.jsx làm.
+      const fresh = flow.candidatesFromError(e);
+      if (fresh.length) setWakeCandidates((prev) => mergeCandidates(prev, fresh));
     } finally {
       tapGuard.end("wake");
       setWaking(false);
     }
   }
 
-  /** Gửi 1 đường dẫn exe lên bridge. Thành công thì vẽ lại từ `openwork` bridge
-   * trả về; thất bại thì hiện nguyên văn message tiếng Việt của bridge.
-   *
-   * PHẢI reject khi lưu thất bại (contract của <OpenWorkFix>): component giữ
-   * nguyên đường dẫn trong ô gõ ở nhánh reject. Nuốt lỗi rồi resolve sẽ xoá
-   * sạch ô gõ dù bridge đã từ chối — người dùng phải gõ lại từ đầu.
-   *
-   * "Thất bại" gồm HAI trường hợp, không chỉ lỗi HTTP:
-   *   1. `apiOpenWorkPath` ném (bridge từ chối / mạng hỏng);
-   *   2. HTTP 200 nhưng `openwork.found` false — bridge đã lưu đường dẫn nhưng
-   *      vẫn không thấy file. Trường hợp này CÓ THẬT: route trả 200 kèm
-   *      `openworkStateInfo()` mà `describeOpenWorkInstall` nuốt lỗi khi đọc
-   *      version ném (bridge/src/openwork-version.js) → `{found:false}` dù file
-   *      có thật. Cùng cách `chooseExePath` ở app.jsx xử lý. */
+  /** Gửi 1 đường dẫn exe lên bridge. Contract reject + nhánh "đã lưu mà chưa
+   * thấy file" nằm ở lib/openwork-fix.js (dùng chung banner); ở đây chỉ còn
+   * policy riêng của màn: vẽ NGAY `openwork` bridge trả về qua override, dọn
+   * candidates wake, đóng khối chọn. */
   async function choosePath(path) {
     const target = String(path ?? "").trim();
     if (!target) return;
@@ -240,35 +232,25 @@ export function SettingsPage({ state, onRecheck, onUnpaired }) {
     setPathMsg("");
     setPathErr("");
     try {
-      let payload;
-      try {
-        payload = await apiOpenWorkPath(target);
-      } catch (e) {
-        setPathErr(errorSentence(e));
-        throw e; // xem JSDoc — không nuốt, component cần rejection để giữ ô gõ
-      }
-      // Cố ý viết NGOÀI try ở trên: nhánh `throw` bên dưới không bị catch nuốt
-      // mất và thay bằng `String(e.message)` — lỗi "bridge không thấy file"
-      // phải hiện nguyên văn tiếng Việt của ta, không phải "openwork_not_found".
-      setOpenworkOverride(payload?.openwork ?? null);
-      setWakeCandidates([]);
-      onRecheck(); // config đã đổi — bảng trạng thái cũng phải thấy giá trị mới
-      if (!openworkFoundOf(payload?.openwork)) {
-        // Lỗi này đi qua `pathErr` (Banner đỏ), KHÔNG phải `pathMsg` (Banner
-        // xanh): băng xanh nói "Đã lưu nhưng bridge vẫn không thấy file" đọc như
-        // thành công có ngoặt.
-        setPathErr("Saved, but bridge still cannot find this file — check the path.");
-        // Throw để `submit` GIỮ NGUYÊN ô gõ: đường dẫn này người dùng vừa gõ tay
-        // hoặc vừa bấm "Dùng", xoá đi thì phải làm lại từ đầu đúng lúc app chưa
-        // thấy exe. Giữ cả danh sách ứng viên vì còn giá trị để bấm tiếp.
-        throw new Error("openwork_not_found");
-      }
+      const payload = await flow.submitPath(target, (fresh) => {
+        // Hook "bridge ĐÃ LƯU config" — chạy ở CẢ nhánh thấy/không thấy file
+        // (trước đây nằm trước lệnh throw nên đúng vị trí này). Bảng trạng
+        // thái phải thấy kết quả mới ngay, kẻo đợi vòng poll 15s kế.
+        setOpenworkOverride(fresh?.openwork ?? null);
+        setWakeCandidates([]);
+        onRecheck();
+      });
       // Xong thì đóng khối chọn, không chiếm màn hình.
       setEditing(false);
       // Không lặp lại "bấm Mở OpenWork…" ở đây: điều kiện hiện nút đó đã tự
       // dựng từ `openworkRunning` ngay phía trên, và chỉ hiện đúng lúc app chưa
       // mở. Nhánh app đang mở không cần hướng dẫn mở app.
       setPathMsg("Path set.");
+    } catch (e) {
+      // Lỗi "đã lưu mà chưa thấy file" đi qua `pathErr` (Banner đỏ), KHÔNG
+      // phải `pathMsg` (Banner xanh): băng xanh đọc như thành công có ngoặt.
+      setPathErr(e.saved ? OPENWORK_SAVED_BUT_NOT_FOUND : errorSentence(e));
+      throw e; // contract <OpenWorkFix>: rejection giữ nguyên ô gõ
     } finally {
       tapGuard.end("choosePath");
       setSavingPath(false);

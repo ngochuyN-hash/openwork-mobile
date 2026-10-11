@@ -151,3 +151,95 @@ export function openworkStatusLabel(info, opts = {}) {
     ? "running"
     : "installed, not running";
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Máy trạng thái "sửa OpenWork" — phần GIỐNG NHAU của hai màn dùng
+// <OpenWorkFix>. Trước đây app.jsx (StatusBanners) và pages/settings.jsx giữ
+// tay HAI bản chép của cùng một state machine — kèm hai bản doc contract 25
+// dòng chép nhau — và đã bắt đầu lệch thật: policy dọn `wakeCandidates` mỗi
+// bên một kiểu, settings còn giữ `openworkOverride` mà banner thì không. Phần
+// giống nhau sống ở đây; policy riêng từng màn (câu báo nào vào banner nào,
+// override, đóng khối chọn) là tham số/callback của caller.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Câu báo khi bridge ĐÃ LƯU đường dẫn nhưng vẫn không thấy file (HTTP 200 +
+ * `openwork.found` false). Phải đi qua banner ĐỎ (`pathErr`/`fixErr`) — nhét
+ * vào banner xanh thì đọc như thành công có ngoặt. */
+export const OPENWORK_SAVED_BUT_NOT_FOUND =
+  "Saved, but bridge still cannot find this file — check the path.";
+
+/**
+ * Tạo máy trạng thái sửa-OpenWork cho một màn. Deps là ba API của bridge + cửa
+ * nạp lại state của màn gọi (`onRecheck`) — wake thành công khi app đang mở
+ * phải recheck ngay, đó là phần GIỐNG NHAU của hai màn.
+ *
+ * CONTRACT "phải reject" của <OpenWorkFix> — doc đầy đủ ở
+ * components/openwork-fix.jsx: `submitPath` PHẢI reject khi lưu thất bại, vì
+ * component dựa vào nhánh reject để GIỮ nguyên đường dẫn người dùng vừa gõ
+ * (resolve → xoá ô). "Thất bại" gồm HAI trường hợp, không chỉ lỗi HTTP:
+ *   1. `apiOpenWorkPath` ném (bridge từ chối / mạng hỏng) — reject nguyên lỗi;
+ *   2. HTTP 200 nhưng `openwork.found` false — bridge ĐÃ LƯU đường dẫn nhưng
+ *      vẫn không thấy file. CÓ THẬT: route trả 200 kèm `openworkStateInfo()`
+ *      mà `describeOpenWorkInstall` nuốt lỗi đọc version
+ *      (bridge/src/openwork-version.js) → `{found:false}` dù file có thật.
+ *      Reject với `error.saved = true` — caller hiện
+ *      OPENWORK_SAVED_BUT_NOT_FOUND, đừng nuốt thành errorSentence lạ.
+ *
+ * Bỏ mắt xích `found:false` ở một caller là lỗi người đọc dễ bỏ: promise vẫn
+ * resolve, component xoá sạch ô gõ, đường dẫn vừa gõ tay mất đúng lúc app
+ * chưa thấy exe. Vì thế nhánh này nằm ở MỘT chỗ duy nhất, không phải hai.
+ */
+export function createOpenWorkFixFlow({ apiOpenWorkPath, apiWakeOpenWork, apiRecheck, onRecheck }) {
+  return {
+    /**
+     * Gửi 1 đường dẫn exe lên bridge. Resolve = bridge ĐÃ THẤY file (payload
+     * gốc, caller tự đọc `.openwork`); `undefined` khi path rỗng (không gọi
+     * mạng — component đã chặn Enter rỗng, đây là phòng thủ thứ hai); reject
+     * theo contract ở trên.
+     *
+     * `onSaved(payload)` chạy NGAY SAU khi bridge trả 200 — kể cả khi chưa thấy
+     * file — TRƯỚC khi reject. Đó là điểm "bridge đã lưu config": caller muốn
+     * vẽ lại state từ kết quả mới (override, dọn candidates, recheck) phải làm
+     * ở CẢ hai nhánh, làm ở caller sau khi await là bỏ sót nhánh reject.
+     */
+    async submitPath(path, onSaved) {
+      const target = String(path ?? "").trim();
+      if (!target) return undefined;
+      const payload = await apiOpenWorkPath(target);
+      onSaved?.(payload);
+      if (!openworkFoundOf(payload?.openwork)) {
+        const error = new Error("openwork_not_found");
+        error.saved = true;
+        throw error;
+      }
+      return payload;
+    },
+
+    /** Bật OpenWork trên máy. App đang mở thì tự recheck (đổ lại state của
+     * `onRecheck`) — caller chỉ còn chọn câu báo theo `wakeMessage`. */
+    async wake() {
+      const result = await apiWakeOpenWork();
+      if (result?.alreadyRunning) {
+        await apiRecheck();
+        onRecheck();
+      }
+      return result;
+    },
+
+    /** Câu báo sau wake: rỗng khi app đã chạy (màn tự vẽ lại từ /api/state),
+     * ngược lại là câu "đã gửi lệnh" — hai màn từng viết Y HỆT chuỗi này. */
+    wakeMessage(result) {
+      return result?.alreadyRunning
+        ? ""
+        : "Launch command sent to OpenWork — wait ~20s then tap Recheck.";
+    },
+
+    /** Candidates bridge gửi kèm trong lỗi wake (api.js gắn `error.candidates`
+     * lúc không tìm thấy exe). Mảng rỗng khi không có — caller `mergeCandidates`
+     * vào state (CỘNG DỒN, không thay thế: `setWakeCandidates(e.candidates)`
+     * từng XOÁ mất ứng viên bridge gửi ở lần bấm trước). */
+    candidatesFromError(error) {
+      return error?.candidates?.length ? error.candidates : [];
+    },
+  };
+}
