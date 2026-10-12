@@ -236,7 +236,7 @@ A three-layer audit (worker → bridge → web, 04/10) found **no critical hole*
 
 The three risks this pass had deliberately **not** changed — the `?_t=` token on GET, plaintext secrets at rest, and cloudflared without integrity verification — were all closed in the next pass the same day; see the section below. Full reasoning, evidence and per-fix design: [docs/SECURITY-FIX-SPEC-2026-10-04.md](./docs/SECURITY-FIX-SPEC-2026-10-04.md).
 
-## Remaining-risk closure pass (2026-10-05) — committed, not yet deployed
+## Remaining-risk closure pass (2026-10-05) — deployed (live at the latest with the 2026-10-13 deploy)
 
 The 04/10 audit ended with a list of accepted risks and small debts. With only the owner running the app, breaking changes are cheap, so a parallel 8-agent pass closed the list. Each fix ships with its own test, six of the guards were mutation-verified (guard removed → the matching test goes red → guard restored, diff unchanged), and three independent reviewers read the result.
 
@@ -250,9 +250,9 @@ The 04/10 audit ended with a list of accepted risks and small debts. With only t
 - **The owner token survives restarts.** `ensureOwnerToken` (`bridge/src/bootstrap.js`) re-inserts the hash of the raw token it already holds when `tokens.json` loses the entry, instead of minting a new token and forcing yet another OpenWork restart (the 04/10 `restartRequired` loop). Covered by `bridge/test/bootstrap-owner-token.test.js`.
 - **Service worker bumped to v55** so installed PWAs pull a bundle from the post-`?_t=` world on their next open.
 
-Test floor after the pass: bridge **111** (was 86), worker **48** (was 18), web **432** (the −28 is the parallel session's `session-organize` removal, not this pass). This pass is committed but **not deployed**: one `wrangler deploy` + one web rebuild + one bridge restart bring it live.
+Test floor after the pass: bridge **111** (was 86), worker **48** (was 18), web **432** (the −28 is the parallel session's `session-organize` removal, not this pass). This pass is live: the 2026-10-13 deploy replaced the worker + web assets and restarted the bridge onto the current tree.
 
-## Audit-driven hardening (2026-10-11) — committed, not yet deployed
+## Audit-driven hardening (2026-10-11) — deployed 2026-10-13
 
 A full run of the Cloudflare `security-audit` skill (quick profile, source-only, 23 agent invocations: 4 reconnaissance, 7 hunters, 1 coverage critic, 11 independent verifiers) produced **zero confirmed vulnerabilities** and 9 source-grounded `needs_validation` leads — two hunter candidates were refuted by their independent verifiers (the PWA never loads a proxied URL as a document, and blob: documents inherit the app's CSP, so the local-storage and inline-HTML leads collapsed). The cheap in-source mitigations for the leads are in this pass, each with its own test:
 
@@ -263,7 +263,7 @@ A full run of the Cloudflare `security-audit` skill (quick profile, source-only,
 - **The worker meters `/__register` (10/min/IP) and the generic relay fall-through (120/min/IP)** — both read the account-wide KV on every unauthenticated request and were the two doors left outside the quota protection.
 - **`tenant.mjs` writes `secretHash` instead of the plaintext room password** and honors the worker's reserved-name blocklist; pairing labels are log-sanitized and `redactSecrets` covers `ows_`/`owls_` room secrets.
 
-Verified: bridge **156/156**, worker **60/60**, desktop compile clean. Full run artifacts (coverage ledger, findings, reports) live outside the repo in `~/security-audit-skill/openwork-mobile-app/run-1/`. Deployment needed to go live: one `wrangler deploy`, one bridge restart, one GUI rebuild.
+Verified: bridge **156/156**, worker **60/60**, desktop compile clean. Full run artifacts (coverage ledger, findings, reports) live outside the repo in `~/security-audit-skill/openwork-mobile-app/run-1/`. Deployed 2026-10-13: worker version `2b97c430` (the rate limits + tenant hash are live), the bridge restarted onto this tree (new tunnel URL reported to the worker), and the GUI rebuilt with the pid guard.
 
 ## Reliability checks (2026-09-18, local changes)
 
