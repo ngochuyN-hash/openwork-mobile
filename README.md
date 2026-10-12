@@ -263,7 +263,7 @@ A full run of the Cloudflare `security-audit` skill (quick profile, source-only,
 - **The worker meters `/__register` (10/min/IP) and the generic relay fall-through (120/min/IP)** — both read the account-wide KV on every unauthenticated request and were the two doors left outside the quota protection.
 - **`tenant.mjs` writes `secretHash` instead of the plaintext room password** and honors the worker's reserved-name blocklist; pairing labels are log-sanitized and `redactSecrets` covers `ows_`/`owls_` room secrets.
 
-Verified: bridge **156/156**, worker **60/60**, desktop compile clean. Full run artifacts (coverage ledger, findings, reports) live outside the repo in `~/security-audit-skill/openwork-mobile-app/run-1/`. Deployed 2026-10-13: worker version `2b97c430` (the rate limits + tenant hash are live), the bridge restarted onto this tree (new tunnel URL reported to the worker), and the GUI rebuilt with the pid guard.
+Verified: bridge **156/156**, worker **60/60**, desktop compile clean. Full run artifacts (coverage ledger, findings, reports) live outside the repo in `~/security-audit-skill/openwork-mobile-app/run-1/`. Deployed 2026-10-13: worker version `8c1f543a` (the round-5 web bundle, validateTenantCreate, rate limits and tenant hash are live; sw v56), the bridge restarted onto this tree (new tunnel URL reported to the worker), and the GUI rebuilt with the pid guard.
 
 ## Reliability checks (2026-09-18, local changes)
 
