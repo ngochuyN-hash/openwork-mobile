@@ -11,9 +11,6 @@ import {
   shouldSuggestCompact,
   compactHint,
   compactBlockReason,
-  buildSummarizeBody,
-  buildCompactCommandBody,
-  summarizePath,
   formatSummaryText,
   summaryView,
 } from "../src/lib/session-compact.js";
@@ -146,49 +143,6 @@ test("compactBlockReason nói rõ vì sao chưa nén được", () => {
   assert.match(compactBlockReason({ turns: 10, running: true }), /Agent is running/);
   assert.match(compactBlockReason({ turns: 1 }), /Only a few messages/);
   assert.match(compactBlockReason({ turns: 10, busy: true }), /Already compacting/);
-});
-
-// ---- Body hai đường nén: KHÁC NHAU ----
-// parseModelId không còn là export riêng — dùng chung parseModelValue của
-// lib/model-behavior.js (trước đây bản split("/") hai đoạn đã từng mất
-// modelID chứa dấu "/" ở giữa). Test qua body builder để bám đúng consumer.
-
-test("summarize nhận TỪNG field providerID/modelID, không có model chuỗi", () => {
-  assert.deepEqual(buildSummarizeBody("openai/gpt-5"), { providerID: "openai", modelID: "gpt-5" });
-  // KHÔNG có provider/model dạng chuỗi, KHÔNG có directory
-  assert.deepEqual(Object.keys(buildSummarizeBody("openai/gpt-5")).sort(), ["modelID", "providerID"]);
-  assert.equal(buildSummarizeBody(""), null);
-});
-
-test("model id có dấu '/' ở giữa giữ nguyên — chỉ cắt ở dấu đầu tiên", () => {
-  // openrouter/anthropic/claude-sonnet-4: provider=openrouter, model=phần còn lại.
-  assert.deepEqual(buildSummarizeBody("openrouter/anthropic/claude-sonnet-4"), {
-    providerID: "openrouter",
-    modelID: "anthropic/claude-sonnet-4",
-  });
-  assert.equal(buildSummarizeBody("khong-co-dau-gach"), null);
-});
-
-test("đường dự phòng command 'compact' thì model LẠI là chuỗi", () => {
-  assert.deepEqual(buildCompactCommandBody("openai/gpt-5"), {
-    command: "compact",
-    arguments: "",
-    model: "openai/gpt-5",
-  });
-  assert.equal(buildCompactCommandBody("gpt-5"), null);
-});
-
-test("summarizePath đúng mount của engine, directory đi qua query", () => {
-  assert.equal(
-    summarizePath("ws 1", "ses_a/b"),
-    "/workspace/ws%201/opencode/session/ses_a%2Fb/summarize"
-  );
-  assert.equal(
-    summarizePath("ws1", "ses1", { directory: "C:/proj x" }),
-    "/workspace/ws1/opencode/session/ses1/summarize?directory=C%3A%2Fproj%20x"
-  );
-  // Không directory thì không dính dấu "?" thừa
-  assert.ok(!summarizePath("ws1", "ses1").includes("?"));
 });
 
 // ---- Định dạng phần tóm tắt ----

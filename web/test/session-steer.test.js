@@ -258,19 +258,19 @@ test("hàng đợi offline đứng yên thì KHÔNG bật vòng quay", () => {
 
 // ---- Thẻ "Agent xin phép" ----
 
-test("REGRESSION: body phải là {reply}, KHÔNG phải {response}", () => {
-  // Engine nhận `{reply: "once"|"always"|"reject"}`:
-  // apps/app/tests/opencode-archive-transport.test.ts:73-85 (khoá đúng
-  // JSON.stringify({ reply })), opencode-v2-adapter.ts:140, và
-  // use-session-interactions.ts:388 là nơi desktop gọi.
-  assert.deepEqual(permissionReplyBody("once"), { reply: "once" });
-  assert.deepEqual(permissionReplyBody("always"), { reply: "always" });
-  assert.deepEqual(permissionReplyBody("reject"), { reply: "reject" });
+test("REGRESSION: body phải là {decision}, KHÔNG phải {reply} hay {response}", () => {
+  // Engine v2: `POST /api/session/{sid}/permission/{requestID}/reply` nhận
+  // `{decision: Permission.Reply}` với enum once|always|reject (v2doc.json).
+  // Bản v1 dùng `{reply}`, bản cũ hơn nữa dùng `{response:"allow"|"deny"}`.
+  assert.deepEqual(permissionReplyBody("once"), { decision: "once" });
+  assert.deepEqual(permissionReplyBody("always"), { decision: "always" });
+  assert.deepEqual(permissionReplyBody("reject"), { decision: "reject" });
+  assert.equal("reply" in permissionReplyBody("once"), false, "field v1 engine v2 bỏ qua");
   assert.equal("response" in permissionReplyBody("once"), false, "field cũ làm engine bỏ qua");
   assert.equal("allow" in permissionReplyBody("once"), false, "allow/deny không phải giá trị engine nhận");
 });
 
-test("reply thiếu thì mặc định reject — không để mặc định cho phép", () => {
-  assert.deepEqual(permissionReplyBody(), { reply: "reject" });
-  assert.deepEqual(permissionReplyBody(undefined), { reply: "reject" });
+test("decision thiếu thì mặc định reject — không để mặc định cho phép", () => {
+  assert.deepEqual(permissionReplyBody(), { decision: "reject" });
+  assert.deepEqual(permissionReplyBody(undefined), { decision: "reject" });
 });

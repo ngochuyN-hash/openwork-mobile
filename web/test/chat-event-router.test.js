@@ -5,12 +5,13 @@ import assert from "node:assert/strict";
 import { createChatEventRouter } from "../src/lib/chat-event-router.js";
 
 function makeDeps(over = {}) {
-  const calls = { loadSession: 0, loadTodo: 0, loadPermissions: 0, scheduleStatus: 0, scheduleOther: 0, scheduleFlush: 0 };
+  const calls = { loadSession: 0, loadMessages: 0, loadTodo: 0, loadPermissions: 0, scheduleStatus: 0, scheduleOther: 0, scheduleFlush: 0 };
   const deps = {
     sessionId: "ses_1",
     lastEventAt: { current: 0 },
     setRunning: (v) => (deps.running = v),
     loadSession: () => calls.loadSession++,
+    loadMessages: () => calls.loadMessages++,
     loadTodo: () => calls.loadTodo++,
     scheduleStatus: () => calls.scheduleStatus++,
     loadPermissions: () => calls.loadPermissions++,
@@ -27,14 +28,24 @@ function makeDeps(over = {}) {
   return { deps, calls };
 }
 
-test("session.idle: chốt running=false + nạp lại session/todo + nhịp status", () => {
+test("session.idle: chốt running=false + nạp lại session/todo/transcript + nhịp status", () => {
   const { deps, calls } = makeDeps();
   const handle = createChatEventRouter(deps);
   handle("session.idle", { properties: { sessionID: "ses_1" } });
   assert.equal(deps.running, false);
   assert.equal(calls.loadSession, 1);
   assert.equal(calls.loadTodo, 1);
+  // v2 chỉ ghi message hoàn chỉnh sau khi run xong — phải refetch transcript.
+  assert.equal(calls.loadMessages, 1);
   assert.equal(calls.scheduleStatus, 1);
+});
+
+test("session.status: KHÔNG refetch transcript (status bắn liên tục, sẽ nuốt phần đang stream)", () => {
+  const { deps, calls } = makeDeps();
+  const handle = createChatEventRouter(deps);
+  handle("session.status", { properties: { ses_1: { type: "busy" } } });
+  assert.equal(calls.loadMessages, 0);
+  assert.equal(calls.loadSession, 1);
 });
 
 test("session.status: map không nhắc phiên = RẢNH (engine chỉ liệt kê đang chạy); shape lạ thì giữ", () => {
@@ -83,7 +94,7 @@ test("event của phiên khác + server.* + rác: bỏ qua, không commit không
   handle("message.updated", null);
   assert.equal(deps.committed, undefined);
   assert.equal(deps.running, undefined);
-  assert.equal(calls.loadSession + calls.loadTodo + calls.loadPermissions + calls.scheduleStatus + calls.scheduleOther, 0);
+  assert.equal(calls.loadSession + calls.loadMessages + calls.loadTodo + calls.loadPermissions + calls.scheduleStatus + calls.scheduleOther, 0);
 });
 
 test("event lạ (không phải 3 loại message.*): rẽ nhánh scheduleOther", () => {
