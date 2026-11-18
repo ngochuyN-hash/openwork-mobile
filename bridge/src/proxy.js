@@ -8,7 +8,7 @@ const ALLOWED = [
   // session-groups đã bị gỡ khỏi whitelist 05/10: web phone không còn dùng
   // tính năng nhóm phiên (commit 97cd3ae) — engine vẫn có endpoint này, bridge
   // chỉ ngừng chuyển tiếp nó cho điện thoại.
-  /^\/workspace\/[^/]+\/(events(\/|$)|files(\/|$)|opencode(\/|$)|engine\/reload|artifacts(\/|$)|inbox(\/|$))/,
+  /^\/workspace\/[^/]+\/(events(\/|$)|files(\/|$)|opencode2?(\/|$)|engine\/reload|artifacts(\/|$)|inbox(\/|$))/,
   /^\/approvals(\/|$)/,
   /^\/files\/sessions\//,
   /^\/experimental\/(ui-control|extensions(\/|$))/,

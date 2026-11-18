@@ -8,16 +8,15 @@
 // Nguồn: source OpenWork desktop (different-ai/openwork, branch dev) —
 // apps/app/src/app/lib/opencode-session.ts:152-184 `compactSession()`. App bên
 // đó feature-detect `session.summarize` trước, không có thì rơi về
-// `session.command({ command: "compact" })` (:176-184). Ta làm y hệt: đường
-// summarize là chính, command là dự phòng — hai body khác nhau, xem
-// buildSummarizeBody / buildCompactCommandBody.
+// `session.command({ command: "compact" })`.
 //
-// Ba điều dễ sai, đã đối chiếu từng dòng:
-//  1. `summarize` KHÔNG nhận `model` dạng chuỗi "provider/model" như lệnh
-//     slash — nó nhận TỪNG field: body { providerID, modelID }.
-//  2. `directory` KHÔNG nằm trong body: nó đi qua query ?directory= hoặc header
-//     x-opencode-directory. Web chưa từng gửi directory (workspace đã bị scope
-//     trong /workspace/:id) nên mặc định bỏ trống.
+// Từ bản port sang engine v2, phần DỰNG BODY/PATH đã chuyển vào api.js
+// (`owSummarize` → `POST /api/session/:id/compact`), nên file này chỉ còn luật
+// thuần: có nên nén không, và định dạng phần tóm tắt để hiện.
+//
+// Hai điều dễ sai, đã đối chiếu từng dòng:
+//  1. Ngưỡng token tính từ lượt assistant gần nhất, không phải từ Session.
+//  2. `directory` không nằm trong body — workspace đã bị scope trong /workspace/:id.
 //  3. Ở engine v1, `Session` KHÔNG có field cost/tokens (chỉ message mới có
 //     info.tokens) — nên ngưỡng token ở đây tính từ lượt assistant gần nhất,
 //     không phải từ session. Ngưỡng là ước lượng của web, không phải số engine
@@ -160,47 +159,6 @@ export function compactBlockReason({ running = false, turns = 0, busy = false } 
   if (running) return "Agent is running — stop it before compacting, otherwise the streaming turn will get out of sync.";
   if (turns < 2) return "Only a few messages so far — not worth compacting yet.";
   return "";
-}
-
-// ---- Body cho hai đường nén (khác nhau — đừng gộp) ----
-
-// Tách "provider/model" dùng chung với lib/model-behavior.js: cắt ở dấu "/"
-// ĐẦU TIÊN, phần sau nguyên vẹn là modelID. Tự viết split("/") lấy hai đoạn
-// đầu đã từng làm mất modelID chứa dấu "/" ở giữa (openrouter/anthropic/claude).
-import { parseModelValue as parseModelId } from "./model-behavior.js";
-
-/**
- * Body của `POST /session/:id/summarize` — TỪNG field providerID/modelID, KHÔNG
- * phải chuỗi "provider/model", và không kèm directory. Trả null nếu chưa chọn
- * model — engine cần model tường minh, không có thì message treo.
- */
-export function buildSummarizeBody(model) {
-  const parsed = parseModelId(model);
-  return parsed ? { ...parsed } : null;
-}
-
-/**
- * Body của đường dự phòng `POST /session/:id/command` với command "compact" —
- * ở đây model LẠI là chuỗi "provider/model" và có kèm arguments (rỗng).
- */
-export function buildCompactCommandBody(model) {
-  const raw = String(model ?? "").trim();
-  const parsed = parseModelId(raw);
-  if (!parsed) return null;
-  return { command: "compact", arguments: "", model: `${parsed.providerID}/${parsed.modelID}` };
-}
-
-/**
- * Path engine tới đường summarize (đã encode, đúng dạng `oc()` của api.js).
- * `directory` đi qua QUERY chứ không nằm trong body; web hiện chưa gửi directory
- * ở đâu cả (workspace đã bị scope trong /workspace/:id) nên mặc định bỏ trống
- * thì không dính dấu "?" thừa.
- */
-export function summarizePath(wsId, sid, { directory = "" } = {}) {
-  const base =
-    `/workspace/${encodeURIComponent(wsId)}/opencode/session/${encodeURIComponent(sid)}/summarize`;
-  const dir = String(directory ?? "").trim();
-  return dir ? `${base}?directory=${encodeURIComponent(dir)}` : base;
 }
 
 // ---- Định dạng phần tóm tắt để hiện ra ----

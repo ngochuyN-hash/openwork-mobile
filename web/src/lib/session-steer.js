@@ -173,25 +173,21 @@ export function queueRestore(queue, sessionId, unsent) {
 // ---- Trả lời "Agent xin phép" ----
 
 /**
- * Body đúng cho `POST /permission/:id/reply`.
+ * Body đúng cho `POST /api/session/:id/permission/:requestID/reply` (engine v2).
  *
- * Engine nhận `{ reply: "once" | "always" | "reject" }` — KHÔNG phải
- * `{ response: "allow" | "deny" }`. Đối chiếu:
- *  - apps/app/tests/opencode-archive-transport.test.ts:73-85 khoá đúng body
- *    `JSON.stringify({ reply })` cho cả ba giá trị;
- *  - apps/app/src/app/lib/opencode-v2-adapter.ts:140 `type PermissionReply =
- *    "once" | "always" | "reject"`;
- *  - apps/app/src/react-app/domains/session/sync/use-session-interactions.ts:388
- *    là nơi desktop gọi, cũng truyền `reply`.
+ * Engine nhận `{ decision: "once" | "always" | "reject" }` — KHÔNG phải
+ * `{ response: "allow" | "deny" }` của bản v1, và cũng không phải `{ reply }`.
+ * Đối chiếu: v2doc.json `Permission.Reply` = `once|always|reject`, và
+ * `POST /api/session/{sessionID}/permission/{requestID}/reply` body =
+ * `{decision: Permission.Reply}`.
  *
- * Web trước đây gửi field `response` với giá trị `allow`/`deny` — engine bỏ
- * qua, coi như chưa trả lời, và agent treo ở bước xin phép mãi mãi: bấm
- * "Cho phép" xong thẻ vẫn còn, nút không có phản ứng gì.
+ * Ba giá trị này khớp đúng ba nút trong UI (Cho phép một lần / Luôn cho phép /
+ * Từ chối) nên không cần map thêm.
  *
- * @param {"once"|"always"|"reject"} reply
+ * @param {"once"|"always"|"reject"} decision
  */
-export function permissionReplyBody(reply) {
-  return { reply: String(reply ?? "reject") };
+export function permissionReplyBody(decision) {
+  return { decision: String(decision ?? "reject") };
 }
 
 // ---- Trạng thái chạy của phiên ----

@@ -63,7 +63,7 @@ test("isText/isImage/isPdf và kindOf khớp nhau trên shape thật", () => {
 
 test("fileNameOf lấy tên cuối, chấp nhận cả \\ và /", () => {
   assert.equal(fileNameOf("a/b/c.txt"), "c.txt");
-  assert.equal(fileNameOf("C:\\Users\\An\\tệp văn.docx"), "tệp văn.docx");
+  assert.equal(fileNameOf("C:\\Users\\tester\\tệp văn.docx"), "tệp văn.docx");
   assert.equal(fileNameOf(""), "");
   assert.equal(fileNameOf("/"), "");
   assert.equal(fileNameOf("no-slash.txt"), "no-slash.txt");

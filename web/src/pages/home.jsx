@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { ow, owDeleteSession } from "../api.js";
-import { timeAgo, unwrap, wsColor } from "../lib/format.js";
+import { ow, owDeleteSession, owSessionList, owStatus } from "../api.js";
+import { timeAgo, wsColor } from "../lib/format.js";
 import { errorSentence } from "../lib/net.js";
 import { createLoadGuard } from "../lib/load-guard.js";
 import { navigate } from "../app.jsx";
@@ -43,20 +43,20 @@ export function HomePage() {
     try {
       const payload = await ow("/workspaces", { signal: token.signal });
       if (stale()) return;
-      const wss = unwrap(payload)?.workspaces ?? payload?.workspaces ?? [];
+      const wss = payload?.workspaces ?? [];
       const slice = wss.slice(0, 8);
       const [sessRes, statRes] = await Promise.allSettled([
         Promise.all(
           slice.map((ws) =>
-            ow(`/workspace/${encodeURIComponent(ws.id)}/opencode/session`, { signal: token.signal })
-              .then((p) => (unwrap(p) ?? []).map((s) => ({ ws, session: s })))
+            owSessionList(ws.id, { signal: token.signal })
+              .then((rows) => rows.map((s) => ({ ws, session: s })))
               .catch(() => [])
           )
         ),
         Promise.all(
           slice.map((ws) =>
-            ow(`/workspace/${encodeURIComponent(ws.id)}/opencode/session/status`, { signal: token.signal })
-              .then((p) => ({ wsId: ws.id, map: unwrap(p) ?? p ?? {} }))
+            owStatus(ws.id, { signal: token.signal })
+              .then((map) => ({ wsId: ws.id, map: map ?? {} }))
               .catch(() => null)
           )
         ),

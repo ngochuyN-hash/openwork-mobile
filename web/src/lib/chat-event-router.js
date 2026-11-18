@@ -18,7 +18,7 @@ import { sessionBusyFromMap } from "./session-steer.js";
  *   sessionId        phiên đang mở (event của phiên khác bị bỏ)
  *   lastEventAt      ref {current} — mốc event cuối cho watchdog 30s
  *   setRunning       chốt trạng thái đang chạy
- *   loadSession/loadTodo/loadPermissions  loader nạp lại
+ *   loadSession/loadMessages/loadTodo/loadPermissions  loader nạp lại
  *   scheduleStatus   nhịp hỏi lại nhẹ (900ms)
  *   scheduleOther    nhịp hỏi lại phụ (500ms: permission + question)
  *   messagesRef      ref {current} transcript mới nhất
@@ -32,6 +32,7 @@ export function createChatEventRouter(deps) {
     lastEventAt,
     setRunning,
     loadSession,
+    loadMessages,
     loadTodo,
     scheduleStatus,
     loadPermissions,
@@ -59,6 +60,12 @@ export function createChatEventRouter(deps) {
       // revert dọn), và todo vừa được chốt — nạp lại cho đúng.
       loadSession();
       loadTodo();
+      // Refetch transcript một lần khi run XONG: engine v2 chỉ ghi message
+      // hoàn chỉnh vào `/message` sau khi run kết thúc, nên đây là lần duy
+      // nhất lấy được bản chuẩn (các delta SSE chỉ dựng bản tạm trong RAM).
+      // Không refetch lúc `session.status` — status bắn liên tục, và refetch
+      // giữa run sẽ nuốt phần đang stream.
+      if (name !== "session.status") loadMessages();
       scheduleStatus();
       return;
     }

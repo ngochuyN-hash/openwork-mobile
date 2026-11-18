@@ -1,5 +1,8 @@
 # OpenWork Mobile
 
+> **English overview: [README.en.md](./README.en.md)** — shorter, English-language entry point.
+> Everything below is the original Vietnamese documentation.
+
 Manage **sessions, workspaces and files** of [OpenWork](https://github.com/different-ai/openwork) desktop **from your phone, from anywhere** — a web app (PWA) that reconnects by itself every time you open the page, no APK required, works on both iOS and Android, at a cost of **zero**.
 
 The app covers **Sessions · Workspaces · Chat · Files · Settings** — nothing else. History of removed feature sets lives in git log and [CODE_SUMMARY.md](./CODE_SUMMARY.md).
