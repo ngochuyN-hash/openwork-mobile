@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { ow, owDownload, owUploadFile, owWriteFile } from "../api.js";
-import { formatBytes, unwrap } from "../lib/format.js";
+import { ow, owDownload, owUploadFile, owWriteFile, owFsList } from "../api.js";
+import { formatBytes } from "../lib/format.js";
 import { blobUrlFor } from "../lib/blob-preview.js";
 import { createDownloadTask } from "../lib/download-task.js";
 import { errorSentence, isUnpaired } from "../lib/net.js";
@@ -46,11 +46,8 @@ export function FilesPage({ route }) {
     async (dir) => {
       const token = guardRef.current.begin();
       try {
-        const payload = await ow(`/workspace/${wsEnc}/opencode/file?path=${encodeURIComponent(dir)}`, {
-          signal: token.signal,
-        });
+        const nodes = await owFsList(wsId, dir, { signal: token.signal });
         if (guardRef.current.stale(token)) return null; // đã có lượt load mới hơn — bỏ kết quả stale
-        const nodes = unwrap(payload) ?? [];
         const dirs = nodes.filter((n) => n.type === "directory").sort((a, b) => a.name.localeCompare(b.name));
         const files = nodes.filter((n) => n.type !== "directory").sort((a, b) => a.name.localeCompare(b.name));
         setEntries([...dirs, ...files]);
@@ -65,7 +62,7 @@ export function FilesPage({ route }) {
         return msg; // để caller ghép lỗi của mình vào, không đè mất lỗi nạp
       }
     },
-    [wsEnc]
+    [wsId]
   );
 
   // Rời trang thì hủy fetch đang treo (nếu có).

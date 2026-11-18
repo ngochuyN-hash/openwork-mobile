@@ -3,12 +3,26 @@
 // lib/format.js — file này còn đúng một nghề: transport (fetch, timeout, auth
 // headers, blob preview) và các wrapper gọi API.
 import { normalizeSessionTitle } from "./lib/session-rename.js";
-import { buildSummarizeBody, summarizePath } from "./lib/session-compact.js";
-import { buildPromptModelFields } from "./lib/model-behavior.js";
+import { buildPromptModelFields, pickVariantId } from "./lib/model-behavior.js";
 import { errorSentence, unpairedError, withTimeoutSignal } from "./lib/net.js";
 import { getTenant, getTenantName, getToken } from "./lib/identity-store.js";
 import { addKey } from "./lib/keyring.js";
-import { bytesToBase64, filenameFromDisposition, formatBytes, unwrap } from "./lib/format.js";
+import { bytesToBase64, filenameFromDisposition, formatBytes } from "./lib/format.js";
+import { permissionReplyBody } from "./lib/session-steer.js";
+import {
+  dataItems,
+  formAnswerOf,
+  nextCursorOf,
+  toV1Agents,
+  toV1Forms,
+  toV1Messages,
+  toV1Permissions,
+  toV1Providers,
+  toV1Session,
+  toV1Sessions,
+  toV1Status,
+  v2Path,
+} from "./lib/v2-api.js";
 import {
   BRIDGE_ROUTES,
   HEADER_TENANT,
@@ -224,80 +238,228 @@ async function errorTextOf(res) {
   }
 }
 
-/** Xoá hẳn 1 hội thoại (session) trên máy tính — nút vuốt-trái ở màn Sessions/Home. */
-export async function owDeleteSession(wsId, sid) {
-  await ow(`/workspace/${encodeURIComponent(wsId)}/opencode/session/${encodeURIComponent(sid)}`, {
-    method: "DELETE",
-  });
+// ---- Engine v2 (OpenCode 2.x) ----
+// Mọi route đi qua whitelist mở rộng `opencode2` (bridge/src/proxy.js). Shape
+// API + event của v2 KHÁC v1; bộ dịch nằm ở lib/v2-api.js, các wrapper dưới
+// đây giữ nguyên tên/return shape cũ để trang không phải viết lại.
+
+/** Path proxy tới 1 route engine v2 của workspace. */
+function oc(wsId, path) {
+  return v2Path(wsId, `/api${path}`);
 }
 
-// ---- Thao tác trên MỘT session (kiểm chứng live với engine /doc 03/10) ----
-// Tất cả đều đi qua whitelist proxy sẵn có (`/workspace/:id/opencode/...`) nên
-// KHÔNG cần mở thêm backend. `messageID` bắt buộc bỏ trừ khi ghi chú.
+/** Bóc `{data}` đơn (không phải list) — v2 luôn bọc mọi response trong `data`. */
+function singleData(payload) {
+  const data = payload?.data;
+  if (Array.isArray(data)) return data[0] ?? null;
+  return data ?? null;
+}
 
-function oc(wsId, path) {
-  return `/workspace/${encodeURIComponent(wsId)}/opencode${path}`;
+/**
+ * Đi hết các trang của một list v2.
+ *
+ * `order` CHỈ được gửi ở trang đầu: gửi kèm `cursor` thì engine trả 400
+ * `InvalidCursorError` ("Cursor cannot be combined with order"). Cursor mã hoá
+ * thứ tự + vị trí nên các trang sau chỉ cần `limit` + `cursor`. Dedupe theo id
+ * vì trang biên có thể lặp (và list phiên trả thiếu so với `limit`).
+ */
+async function readPaged(wsId, path, { query = {}, limit = 100, cap = 2000, signal } = {}) {
+  const rows = [];
+  const seen = new Set();
+  let cursor = "";
+  for (let page = 0; page < 200; page++) {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    if (page === 0) {
+      for (const [key, value] of Object.entries(query)) {
+        if (value === undefined || value === null || value === "") continue;
+        params.set(key, String(value));
+      }
+    } else {
+      params.set("cursor", cursor);
+    }
+    const payload = await ow(`${oc(wsId, path)}?${params.toString()}`, { signal });
+    const items = dataItems(payload);
+    for (const item of items) {
+      const id = String(item?.id ?? "");
+      if (id) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
+      rows.push(item);
+      if (rows.length >= cap) return rows;
+    }
+    cursor = nextCursorOf(payload);
+    if (!cursor || !items.length) break;
+  }
+  return rows;
+}
+
+/** Danh sách phiên (đi hết trang; mới nhất trước). */
+export async function owSessionList(wsId, { search = "", archived, limit = 100, cap = 2000, signal } = {}) {
+  const query = { order: "desc" };
+  if (search) query.search = search;
+  if (archived !== undefined) query.archived = archived ? "true" : "false";
+  const rows = await readPaged(wsId, "/session", { query, limit, cap, signal });
+  return toV1Sessions(rows);
+}
+
+/** Một phiên theo id, shape v1 (`session.revert.messageID` vẫn đọc được). */
+export async function owSession(wsId, sid, { signal } = {}) {
+  const payload = await ow(oc(wsId, `/session/${encodeURIComponent(sid)}`), { signal });
+  return toV1Session(singleData(payload));
+}
+
+/** Tạo phiên mới; trả shape v1. */
+export async function owCreateSession(wsId, body = {}) {
+  const payload = await ow(oc(wsId, "/session"), { method: "POST", body });
+  return toV1Session(singleData(payload));
+}
+
+/** Xoá hẳn 1 hội thoại (session) trên máy tính — nút vuốt-trái ở màn Sessions/Home. */
+export async function owDeleteSession(wsId, sid) {
+  await ow(oc(wsId, `/session/${encodeURIComponent(sid)}`), { method: "DELETE" });
+}
+
+/**
+ * Toàn bộ transcript của phiên, đã dịch sang shape v1 (`{info, parts}[]`).
+ *
+ * v2 phân trang mặc định; lấy theo `desc` (trang đầu = tin mới nhất) rồi đảo
+ * lại thành thứ tự thời gian. `cap` cắt phía CŨ — màn chat cần tin mới, và
+ * transcript 2000 tin đã vượt xa mọi phiên thật trên điện thoại.
+ */
+export async function owMessages(wsId, sid, { limit = 100, cap = 2000, signal } = {}) {
+  const rows = await readPaged(wsId, `/session/${encodeURIComponent(sid)}/message`, {
+    query: { order: "desc" },
+    limit,
+    cap,
+    signal,
+  });
+  rows.reverse();
+  return toV1Messages(rows);
+}
+
+/** Map `{sid:{type}}` các phiên ĐANG chạy (vắng mặt = rảnh). */
+export async function owStatus(wsId, { signal } = {}) {
+  const payload = await ow(oc(wsId, "/session/active"), { signal });
+  return toV1Status(payload);
+}
+
+/** Thẻ "Agent xin phép" đang chờ của phiên. */
+export async function owPermissions(wsId, sid, { signal } = {}) {
+  const payload = await ow(oc(wsId, `/session/${encodeURIComponent(sid)}/permission`), { signal });
+  return toV1Permissions(payload);
+}
+
+/** Trả lời thẻ xin phép: decision = "once" | "always" | "reject". */
+export async function owPermissionReply(wsId, sid, requestId, decision) {
+  return ow(
+    oc(wsId, `/session/${encodeURIComponent(sid)}/permission/${encodeURIComponent(requestId)}/reply`),
+    { method: "POST", body: permissionReplyBody(decision) }
+  );
+}
+
+/** Hủy lượt chạy đang dở (v2: interrupt, không phải abort). */
+export async function owInterrupt(wsId, sid) {
+  return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/interrupt`), { method: "POST" });
+}
+
+/** Catalog provider/model gộp từ `/api/provider` + `/api/model`, shape v1. */
+export async function owProviders(wsId, { signal } = {}) {
+  const [providers, models] = await Promise.all([
+    ow(oc(wsId, "/provider"), { signal }),
+    ow(oc(wsId, "/model"), { signal }),
+  ]);
+  return toV1Providers(providers, models);
+}
+
+/** Path SSE (đã kèm OW_PROXY_PREFIX) cho `connectEvents` của lib/sse.js. */
+export function owEventsPath(wsId) {
+  return `${OW_PROXY_PREFIX}${oc(wsId, "/event")}`;
+}
+
+/** Duyệt thư mục workspace. v2 trả `{path,type}` — UI cần thêm `name`. */
+export async function owFsList(wsId, dir, { signal } = {}) {
+  const params = new URLSearchParams({ path: String(dir ?? "") });
+  const payload = await ow(`${oc(wsId, "/fs/list")}?${params.toString()}`, { signal });
+  return dataItems(payload).map((entry) => ({ ...entry, name: guessName(entry.path) }));
 }
 
 /** Danh sách agent của workspace (chọn agent khi gửi prompt). */
 export async function owAgents(wsId) {
-  return unwrap(await ow(oc(wsId, "/agent"))) ?? [];
+  return toV1Agents(await ow(oc(wsId, "/agent")));
 }
 
 /** Slash command + skill của workspace (gõ "/" trong ô gõ). */
 export async function owCommands(wsId) {
-  return unwrap(await ow(oc(wsId, "/command"))) ?? [];
+  return dataItems(await ow(oc(wsId, "/command")));
 }
 
-/** Câu hỏi agent đang chờ trả lời (danh sách chung, lọc theo session ở UI). */
+/** Form (câu hỏi agent) đang chờ trả lời — danh sách chung, UI lọc theo phiên. */
 export async function owQuestions(wsId) {
-  return unwrap(await ow(oc(wsId, "/question"))) ?? [];
+  return toV1Forms(await ow(oc(wsId, "/form")));
 }
 
-/** Trả lời: answers = mỗi câu một mảng nhãn đã chọn, đúng thứ tự câu hỏi. */
-export async function owReplyQuestion(wsId, requestId, answers) {
-  await ow(oc(wsId, `/question/${encodeURIComponent(requestId)}/reply`), {
+/**
+ * Trả lời form: `selections` = mỗi field một mảng nhãn đã chọn, đúng thứ tự
+ * field. Bộ dịch ép nhãn -> value và kiểu theo `type` của field
+ * (lib/v2-api formAnswerOf), rồi POST `{answer:{key:value}}`.
+ */
+export async function owReplyQuestion(wsId, request, selections) {
+  const form = request?.form;
+  const sid = String(request?.sessionID ?? form?.sessionID ?? "");
+  const fid = String(request?.id ?? form?.id ?? "");
+  if (!sid || !fid) throw new Error("This question is no longer available.");
+  await ow(oc(wsId, `/session/${encodeURIComponent(sid)}/form/${encodeURIComponent(fid)}/reply`), {
     method: "POST",
-    body: { answers },
+    body: formAnswerOf(form, selections),
   });
 }
 
-/** Từ chối trả lời — agent nhận kết quả "không có câu trả lời" và tự đi tiếp. */
-export async function owRejectQuestion(wsId, requestId) {
-  await ow(oc(wsId, `/question/${encodeURIComponent(requestId)}/reject`), { method: "POST" });
-}
-
-/**
- * Hoàn tác tới messageID: engine đặt con trỏ session.revert, transcript API vẫn
- * trả đủ — UI tự cắt (lib/session-ops applyRevertCursor).
- */
-export async function owRevert(wsId, sid, messageId) {
-  return unwrap(await ow(oc(wsId, `/session/${encodeURIComponent(sid)}/revert`), {
-    method: "POST",
-    body: { messageID: messageId },
-  }));
-}
-
-/** Bỏ con trỏ revert, hiện lại các tin đã ẩn. */
-export async function owUnrevert(wsId, sid) {
-  return unwrap(await ow(oc(wsId, `/session/${encodeURIComponent(sid)}/unrevert`), { method: "POST" }));
-}
-
-/**
- * Tạo nhánh session mới. Engine chép tin CHẶT TRƯỚC `messageID` — muốn nhánh
- * từ tin M (bao gồm M) thì truyền id tin kế tiếp (resolveForkBoundaryId), hoặc
- * bỏ trống để fork toàn bộ. Trả session mới.
- */
-export async function owFork(wsId, sid, messageId = "") {
-  const body = messageId ? { messageID: messageId } : {};
-  return unwrap(await ow(oc(wsId, `/session/${encodeURIComponent(sid)}/fork`), { method: "POST", body }));
-}
-
-/** Xoá một tin nhắn trong session. */
-export async function owDeleteMessage(wsId, sid, messageId) {
-  return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/message/${encodeURIComponent(messageId)}`), {
+/** Từ chối trả lời — xoá form, agent nhận "không có câu trả lời" và đi tiếp. */
+export async function owRejectQuestion(wsId, request) {
+  const form = request?.form;
+  const sid = String(request?.sessionID ?? form?.sessionID ?? "");
+  const fid = String(request?.id ?? form?.id ?? "");
+  if (!sid || !fid) return;
+  await ow(oc(wsId, `/session/${encodeURIComponent(sid)}/form/${encodeURIComponent(fid)}`), {
     method: "DELETE",
   });
+}
+
+/**
+ * Hoàn tác tới messageID: v2 STAGE con trỏ revert (rows vẫn nằm trong list —
+ * UI tự cắt bằng lib/session-ops applyRevertCursor). Lượt prompt kế tiếp tự
+ * commit và xoá con trỏ.
+ */
+export async function owRevert(wsId, sid, messageId) {
+  return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/revert/stage`), {
+    method: "POST",
+    body: { messageID: messageId, files: false },
+  });
+}
+
+/** Bỏ con trỏ revert, hiện lại các tin đã ẩn (DELETE /revert). */
+export async function owUnrevert(wsId, sid) {
+  return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/revert`), { method: "DELETE" });
+}
+
+/**
+ * Tạo nhánh session mới. v2 chép lịch sử CHẶT TRƯỚC `messageID` (`before`) —
+ * muốn nhánh từ tin M (bao gồm M) thì truyền id tin kế tiếp
+ * (resolveForkBoundaryId), hoặc bỏ trống để fork toàn bộ. Trả session mới.
+ */
+export async function owFork(wsId, sid, messageId = "") {
+  const payload = await ow(oc(wsId, `/session/${encodeURIComponent(sid)}/fork`), {
+    method: "POST",
+    body: { before: messageId || null },
+  });
+  return toV1Session(singleData(payload));
+}
+
+/** Xoá một tin nhắn trong session — engine v2 không có route này. */
+export async function owDeleteMessage() {
+  throw new Error("Deleting a single message is not supported on this engine — use Revert instead.");
 }
 
 /**
@@ -308,71 +470,90 @@ export async function owDeleteMessage(wsId, sid, messageId) {
 export async function owRenameSession(wsId, sid, title) {
   const clean = normalizeSessionTitle(title);
   if (!clean.ok) throw new Error(clean.error);
-  return unwrap(await ow(oc(wsId, `/session/${encodeURIComponent(sid)}`), {
+  const payload = await ow(oc(wsId, `/session/${encodeURIComponent(sid)}`), {
     method: "PATCH",
     body: { title: clean.title },
-  }));
+  });
+  return toV1Session(singleData(payload));
 }
 
 /**
- * Gửi prompt cho session (POST /session/:id/prompt_async).
+ * Gửi prompt cho session.
  *
- * Cùng một đường cho cả hai việc: lượt chạy MỚI (session rảnh) và tin XEN
- * GIỮA lúc agent đang chạy — ở engine v1 không có endpoint steer riêng,
- * engine tự chèn tin vào lượt đang dở ở step kế tiếp. Payload model/effort
- * do lib/model-behavior dựng (variant HOẶC reasoning_effort, không bao giờ
- * cả hai), nên chỗ gọi không phải tự cắt chuỗi "provider/model" nữa.
+ * v2 tách model/agent khỏi prompt: `/model` và `/agent` đặt trạng thái phiên
+ * TRƯỚC, rồi `/prompt` chỉ có text. Cùng một đường cho cả lượt chạy MỚI và
+ * tin XEN GIỮA lúc agent đang chạy (engine tự chèn ở step kế tiếp). Payload
+ * model/effort do lib/model-behavior dựng; `reasoning_effort` của Codex được
+ * quy về `variant` mà engine v2 khai cho model đó.
  */
 export async function owPrompt(wsId, sid, { text, model = "", agent = "", effort, variants } = {}) {
   const fields = buildPromptModelFields({ modelValue: model, effort, variants });
+  const ref = fields.model
+    ? {
+        id: String(fields.model.modelID ?? ""),
+        providerID: String(fields.model.providerID ?? ""),
+        ...(() => {
+          const variant = fields.variant ?? pickVariantId(variants, fields.reasoning_effort);
+          return variant ? { variant } : {};
+        })(),
+      }
+    : null;
+  if (ref?.id && ref?.providerID) {
+    await ow(oc(wsId, `/session/${encodeURIComponent(sid)}/model`), {
+      method: "POST",
+      body: { model: ref },
+    });
+  }
   const name = String(agent ?? "").trim();
-  return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/prompt_async`), {
+  if (name) {
+    await ow(oc(wsId, `/session/${encodeURIComponent(sid)}/agent`), {
+      method: "POST",
+      body: { agent: name },
+    });
+  }
+  return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/prompt`), {
     method: "POST",
-    body: {
-      parts: [{ type: "text", text: String(text ?? "") }],
-      ...fields,
-      ...(name ? { agent: name } : {}),
-    },
+    body: { text: String(text ?? "") },
   });
 }
 
 /**
- * Nén hội thoại (POST /session/:id/summarize, body { providerID, modelID }).
- * `model` là giá trị "provider/model" của ModelPicker; chưa chọn model thì
- * engine không có gì để tóm tắt bằng — chặn ngay, nói rõ cần chọn model.
+ * Nén hội thoại (POST /session/:id/compact). `model` là giá trị
+ * "provider/model" của ModelPicker — chưa chọn model thì nói rõ cần chọn;
+ * v2 nén bằng model ĐANG đặt trên phiên (owPrompt đặt trước mỗi lượt).
+ * `timeoutMs: 0` vì nén gọi LLM hàng chục giây tới vài phút; bỏ giữa lúc nén
+ * là abort nửa chừng, phiên còn lửng lơ.
  */
 export async function owSummarize(wsId, sid, model) {
-  const body = buildSummarizeBody(model);
-  if (!body) throw new Error("Select a model before compacting the conversation.");
-  // `timeoutMs: 0` = không đặt timeout. `/summarize` và `/command` đều gọi LLM,
-  // chạy hàng chục giây tới vài phút; engine cũng miễn timeout cho đúng hai
-  // endpoint này (apps/app/src/app/lib/opencode.ts, SESSION_LONG_RUNNING_URL_RE
-  // → 0). Bỏ giữa lúc nén là abort nửa chừng, phiên còn lửng lơ.
-  return ow(summarizePath(wsId, sid), { method: "POST", body, timeoutMs: 0 });
+  if (!String(model ?? "").trim()) throw new Error("Select a model before compacting the conversation.");
+  return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/compact`), {
+    method: "POST",
+    body: {},
+    timeoutMs: 0,
+  });
 }
 
-/** Bật link chia sẻ (POST /session/:id/share, body rỗng). Link ở Session.share.url. */
-export async function owShareSession(wsId, sid) {
-  return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/share`), { method: "POST" });
+/** Link chia sẻ — engine v2 không có route share. */
+export async function owShareSession() {
+  throw new Error("Share links are not supported on this engine.");
 }
 
-/** Tắt link chia sẻ (DELETE /session/:id/share, body rỗng). */
-export async function owUnshareSession(wsId, sid) {
-  return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/share`), { method: "DELETE" });
+export async function owUnshareSession() {
+  throw new Error("Share links are not supported on this engine.");
 }
 
-/** Chạy slash command trong session (POST /session/:id/command). */
-export async function owRunCommand(wsId, sid, { command, args = "", model } = {}) {
+/** Chạy slash command trong session (POST /session/:id/command {name,text}). */
+export async function owRunCommand(wsId, sid, { command, args = "" } = {}) {
   return ow(oc(wsId, `/session/${encodeURIComponent(sid)}/command`), {
     method: "POST",
-    body: { command, arguments: args, ...(model ? { model } : {}) },
+    body: { name: String(command ?? ""), text: String(args ?? "") },
     timeoutMs: 0, // xem owSummarize: lệnh cũng gọi LLM, miễn timeout
   });
 }
 
-/** Danh sách việc agent đang theo (GET /session/:id/todo). */
-export async function owTodo(wsId, sid) {
-  return unwrap(await ow(oc(wsId, `/session/${encodeURIComponent(sid)}/todo`))) ?? [];
+/** Danh sách việc agent đang theo — engine v2 không có route todo. */
+export async function owTodo() {
+  return [];
 }
 
 /** Nạp lại engine từng workspace (POST /workspace/:id/engine/reload — whitelist

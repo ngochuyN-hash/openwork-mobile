@@ -1,23 +1,24 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "preact/hooks";
 import {
-  ow, owUploadFile,
+  owUploadFile,
   owAgents, owCommands, owQuestions, owReplyQuestion, owRejectQuestion,
   owRevert, owUnrevert, owFork, owDeleteMessage, owRunCommand, owTodo,
-  owRenameSession, owPrompt, owSummarize, owShareSession, owUnshareSession,
+  owRenameSession, owPrompt, owSummarize,
+  owSession, owMessages, owStatus, owPermissions, owPermissionReply, owInterrupt,
+  owProviders, owEventsPath,
 } from "../api.js";
-import { formatBytes, unwrap } from "../lib/format.js";
+import { formatBytes } from "../lib/format.js";
 import { errorSentence } from "../lib/net.js";
 import { connectEvents } from "../lib/sse.js";
-import { OW_PROXY_PREFIX } from "../../../shared/contract.js";
+import { resetEventCache, translateV2Events } from "../lib/v2-api.js";
 import { flattenProviderModels } from "../lib/chat-models.js";
 import { createChatEventRouter } from "../lib/chat-event-router.js";
 import { composeOutgoing, optimisticMessage } from "../lib/chat-outbox.js";
 import { createChatStream, mergeRefetchKeepInflight } from "../lib/chat-stream.js";
-import { sameSession } from "../lib/chat-events.js";
 import {
   applyRevertCursor, hiddenCountByRevert, resolveForkBoundaryId, messageIdOf,
   messageTextOf, todoProgress, questionsForSession,
-  buildQuestionAnswers, filterCommands, shouldClearRevertCursor,
+  filterCommands, shouldClearRevertCursor,
 } from "../lib/session-ops.js";
 // Tiền phiên: đọc từ TỪNG tin assistant (lib/session-cost) chứ không đọc
 // session.cost — ở engine v1 field đó không có, nên màn chat im lặng vĩnh viện.
@@ -38,11 +39,8 @@ import {
 import {
   createQueue, isRetryableSendError, pendingStatus,
   planSteerBatches, queueAdd, queueFor, queueRestore, queueSet, sendDecision,
-  sessionBusyFromMap, shouldRestoreComposer, statusLineIsBusy, permissionReplyBody,
+  sessionBusyFromMap, shouldRestoreComposer, statusLineIsBusy,
 } from "../lib/session-steer.js";
-import {
-  isShared, parseShareResponse, shareButtonLabel, shareError, shareLink, shareResult,
-} from "../lib/session-share.js";
 import { Banner, Empty, Loading } from "../components/ui.jsx";
 import {
   EffortPicker, ModelPicker, loadEffort, pushRecentModel,
@@ -120,14 +118,12 @@ export function ChatPage({ route }) {
   const [renaming, setRenaming] = useState(false); // mở sheet đổi tên
   const [renameDraft, setRenameDraft] = useState("");
   const [renameErr, setRenameErr] = useState("");
-  const [shareBusy, setShareBusy] = useState(false);
   const [compacting, setCompacting] = useState(false);
   const renameInputRef = useRef(null);
   // Khoá chạm kép — invariant dùng chung nằm ở lib/tap-guard.js (state chỉ đổi
   // ở render kế, guard là chốt thật). Mỗi nhóm hành động một khoá riêng để hai
   // hành động KHÁC nhóm vẫn chạy song song được như trước.
   const renameGuard = useRef(createTapGuard()).current;
-  const shareGuard = useRef(createTapGuard()).current;
   const attachRef = useRef(null);
   const queueRef = useRef(createQueue("", []));
   // Ô gõ + file đính kèm cất theo phiên, để bấm nhầm Back rồi quay lại không
@@ -216,15 +212,12 @@ export function ChatPage({ route }) {
   const [permissionBusy, setPermissionBusy] = useState("");
   const permissionGuard = useRef(createTapGuard()).current;
 
-  const base = `/workspace/${encodeURIComponent(wsId)}/opencode`;
-
   const loadSession = useCallback(async () => {
     // Chốt phiên như loadMessages: response về trễ không được ghi đè phiên mới.
     const mine = sessionId;
     try {
-      const payload = await ow(`${base}/session/${encodeURIComponent(sessionId)}`);
+      const info = await owSession(wsId, sessionId);
       if (sessionIdRef.current !== mine) return;
-      const info = unwrap(payload);
       setSession(info);
       // Con trỏ hoàn tác nằm trên session, không nằm ở message nào.
       setRevertId(info?.revert?.messageID ?? "");
@@ -243,9 +236,9 @@ export function ChatPage({ route }) {
     // bằng một lần cuộn smooth từ trên xuống.
     const mine = sessionId;
     try {
-      const payload = await ow(`${base}/session/${encodeURIComponent(sessionId)}/message`);
+      // owMessages đi hết các trang của engine v2 và dịch về shape v1.
+      const fetched = await owMessages(wsId, sessionId);
       if (sessionIdRef.current !== mine) return;
-      const fetched = unwrap(payload) ?? [];
       // Đánh dấu "đây là transcript thật của phiên" TRƯỚC khi commit — xem
       // `transcriptRef`.
       transcriptRef.current = true;
@@ -265,29 +258,35 @@ export function ChatPage({ route }) {
   const loadStatus = useCallback(async () => {
     const mine = sessionId;
     try {
-      const payload = await ow(`${base}/session/status`);
+      const map = await owStatus(wsId);
       if (sessionIdRef.current !== mine) return;
       // undefined = map không nói gì về phiên này → giữ trạng thái hiện tại,
       // đừng dập tắt busy một cách mù (xem sessionBusyFromMap).
-      const busy = sessionBusyFromMap(unwrap(payload) ?? payload, mine);
-      if (busy !== undefined) setRunning(busy);
+      const busy = sessionBusyFromMap(map, mine);
+      if (busy !== undefined) {
+        const was = runningRef.current;
+        setRunning(busy);
+        // Run vừa XONG theo poll: nạp lại transcript ngay. Đường SSE có thể
+        // không bao giờ tới nơi (cloudflared đệm cả body stream — xem
+        // `lastEventAt`/watchdog bên dưới), mà engine v2 chỉ ghi message hoàn
+        // chỉnh vào `/message` sau khi run kết thúc. Không có nhịp này thì câu
+        // trả lời không bao giờ hiện.
+        if (was && !busy) loadMessages();
+      }
     } catch {
       /* bonus — không có status thì để trạng thái do SSE chốt */
     }
-  }, [wsId, sessionId]);
+  }, [wsId, sessionId, loadMessages]);
 
   const loadPermissions = useCallback(async () => {
     // Chốt phiên như mọi loader khác: nếu không, thẻ "Agent xin phép" của phiên
     // ĐÃ RỜI có thể hiện dưới tiêu đề phiên mới, và bấm Cho phép/Từ chối lúc đó
-    // là trả lời nhầm cho phiên cũ.
+    // là trả lời nhầm cho phiên cũ. `owPermissions` hỏi thẳng route của phiên.
     const mine = sessionId;
     try {
-      const payload = await ow(`${base}/permission`);
+      const list = await owPermissions(wsId, sessionId);
       if (sessionIdRef.current !== mine) return;
-      const list = unwrap(payload) ?? [];
-      setPermissions(
-        list.filter((p) => sameSession(p.sessionID ?? p.sessionId ?? p.properties?.sessionID, mine))
-      );
+      setPermissions(list);
     } catch {
       if (sessionIdRef.current !== mine) return;
       setPermissions([]);
@@ -490,7 +489,7 @@ export function ChatPage({ route }) {
 
     // Model picker: engine yêu cầu model tường minh khi gửi prompt, không có
     // thì message treo vĩnh viễn. Dẹt hoá catalog nằm ở lib/chat-models (test).
-    ow(`${base}/config/providers`)
+    owProviders(wsId)
       .then((payload) => {
         const flat = flattenProviderModels(payload);
         setModels(flat);
@@ -510,6 +509,11 @@ export function ChatPage({ route }) {
       .finally(() => setModelsLoading(false));
 
     // ---- Streaming theo PART: reducer thuần ở lib/chat-stream.js ----
+    // v2 phát tool theo callID + snapshot trạng thái, nên lib/v2-api nhớ map
+    // callID -> thông tin tool (module-level). Đổi phiên/đổi effect thì map đó
+    // vô nghĩa — xoá để không phình RAM và không ghép nhầm tool của phiên cũ.
+    resetEventCache();
+
     // Không còn "đoán snapshot hay delta" trên một chuỗi text chung — chìa là
     // part.id; delta gom vào buffer rồi flush theo frame.
     const scheduleFlush = () => {
@@ -554,6 +558,7 @@ export function ChatPage({ route }) {
       lastEventAt,
       setRunning,
       loadSession,
+      loadMessages,
       loadTodo,
       scheduleStatus,
       loadPermissions,
@@ -565,7 +570,14 @@ export function ChatPage({ route }) {
     });
     // Stream qua fetch (lib/sse.js): token đi bằng header Authorization, không
     // phải `?_t=` trên URL, và đứt là tự nối lại với backoff.
-    const stopEvents = connectEvents(`${OW_PROXY_PREFIX}${base}/event`, handleEvent, {
+    //
+    // Engine v2 phát event theo shape riêng và KHÔNG có `message.*`,
+    // `session.idle`/`session.status` — lib/v2-api dịch một envelope thành 0..n
+    // event v1-shaped (kèm `session.idle` tự dựng từ `session.execution.*`) để
+    // router bên dưới không phải biết gì về v2.
+    const stopEvents = connectEvents(owEventsPath(wsId), (_name, envelope) => {
+      for (const event of translateV2Events(envelope)) handleEvent(event.name, event.data);
+    }, {
       onOpen: () => {
         lastEventAt.current = Date.now();
         flushQueue();
@@ -612,21 +624,23 @@ export function ChatPage({ route }) {
     };
   }, [wsId, sessionId, commitMessages]);
 
-  // Poll dự phòng khi agent chạy: chỉ loadStatus (2.5s) — nội dung chữ đến
-  // qua stream, không refetch transcript mỗi nhịp nữa. Watchdog 30s không
-  // thấy event nào mà vẫn running thì refetch full một lần (kênh chết ngầm).
+  // Poll dự phòng khi agent chạy: loadStatus (2.5s) giữ đúng cờ busy; chữ đến
+  // qua stream. Watchdog bắt kênh chết ngầm: quá 8s không có event nào mà vẫn
+  // running thì refetch full một lần. 8s (không phải 30s) vì có đường truyền
+  // đệm nguyên body SSE tới lúc response đóng (cloudflared quick tunnel):
+  // stream im re suốt run, nên watchdog chính là đường lấy nội dung duy nhất.
   useEffect(() => {
     if (!running) return;
     const poll = setInterval(() => {
       loadStatus();
     }, 2500);
     const watch = setInterval(() => {
-      if (runningRef.current && Date.now() - lastEventAt.current > 30_000) {
+      if (runningRef.current && Date.now() - lastEventAt.current > 8_000) {
         lastEventAt.current = Date.now();
         loadMessages();
         loadStatus();
       }
-    }, 10_000);
+    }, 4_000);
     return () => {
       clearInterval(poll);
       clearInterval(watch);
@@ -767,7 +781,7 @@ export function ChatPage({ route }) {
     return run("revert", async () => {
       // Còn run đang chạy thì engine tự chặn; dừng trước cho chắc (desktop làm
       // abort → revert → gửi lại).
-      if (running) await ow(`${base}/session/${encodeURIComponent(sessionId)}/abort`, { method: "POST" }).catch(() => {});
+      if (running) await owInterrupt(wsId, sessionId).catch(() => {});
       setRevertId(messageId);
       await owRevert(wsId, sessionId, messageId);
     });
@@ -794,10 +808,8 @@ export function ChatPage({ route }) {
 
   function deleteMessage(messageId) {
     return run("delete", async () => {
-      // Phải qua commitMessages, không setMessages: messagesRef là bản mirror
-      // mà mergeRefetchKeepInflight đọc, nếu không cập nhật nó thì lần refetch
-      // kế sẽ lôi tin đã xoá trở lại danh sách.
-      commitMessages((messagesRef.current ?? []).filter((m) => messageIdOf(m) !== messageId));
+      // Engine v2 không có route xoá-một-tin: owDeleteMessage ném lỗi và
+      // transcript giữ nguyên (dùng Revert nếu muốn bỏ phần sau một tin).
       await owDeleteMessage(wsId, sessionId, messageId);
     });
   }
@@ -825,7 +837,8 @@ export function ChatPage({ route }) {
 
   async function answerQuestion(request, selections) {
     await run("answer", async () => {
-      await owReplyQuestion(wsId, request.id, buildQuestionAnswers(selections));
+      // Bộ dịch ép nhãn -> value + kiểu theo từng field của form rồi POST.
+      await owReplyQuestion(wsId, request, selections);
       setQuestions((prev) => prev.filter((q) => q.id !== request.id));
     });
   }
@@ -871,46 +884,9 @@ export function ChatPage({ route }) {
     }
   }
 
-  // ---- Chia sẻ: bật/tắt link trên máy, rồi đưa link ra điện thoại ----
-
-  async function toggleShare() {
-    // Khoá bằng guard (lib/tap-guard.js): hai PATCH /share cùng lúc là hai
-    // link chia sẻ được bật/tắt lệch nhau.
-    if (!shareGuard.begin()) return;
-    setShareBusy(true);
-    const wasShared = isShared(session);
-    try {
-      const payload = wasShared
-        ? await owUnshareSession(wsId, sessionId)
-        : await owShareSession(wsId, sessionId);
-      const result = parseShareResponse(payload, { unshare: wasShared });
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      const next = { ...(session ?? {}), share: wasShared ? undefined : { url: result.url } };
-      setSession(next);
-      setError("");
-      if (wasShared) {
-        setNotice("Share link for this session is now off.");
-        return;
-      }
-      // Có navigator.share thì mở sheet của máy, không có thì chép link —
-      // người dùng chỉ muốn LẤY link để dán, không cần mở tab nào.
-      const outcome = await shareLink({
-        nav: typeof navigator !== "undefined" ? navigator : null,
-        clipboard: typeof navigator !== "undefined" ? navigator.clipboard : null,
-        session: next,
-        url: result.url,
-      });
-      setNotice(shareResult(outcome));
-    } catch (e) {
-      setError(shareError(e));
-    } finally {
-      shareGuard.end();
-      setShareBusy(false);
-    }
-  }
+  // ---- Chia sẻ: engine v2 KHÔNG có route share ----
+  // Nút chia sẻ đã bị gỡ khỏi màn (xem page-head); owShareSession/owUnshareSession
+  // vẫn ném lỗi rõ ràng nếu có chỗ nào còn gọi tới.
 
   // ---- Về tin mới nhất: đường về đáy khi đang đọc lịch sử ----
 
@@ -973,7 +949,7 @@ export function ChatPage({ route }) {
       if (editing) {
         const target = editing.messageId;
         setEditing(null);
-        if (running) await ow(`${base}/session/${encodeURIComponent(mine)}/abort`, { method: "POST" }).catch(() => {});
+        if (running) await owInterrupt(wsId, mine).catch(() => {});
         try {
           await owRevert(wsId, mine, target);
           if (sessionIdRef.current !== mine) return;
@@ -1096,7 +1072,7 @@ export function ChatPage({ route }) {
     const mine = sessionId;
     setAborting(true);
     try {
-      await ow(`${base}/session/${encodeURIComponent(mine)}/abort`, { method: "POST" });
+      await owInterrupt(wsId, mine);
       if (sessionIdRef.current !== mine) return;
       // Tắt busy NGAY. Chờ `session.idle` qua SSE là đợi mạng — mà chính lúc
       // đó luồng thường đang yếu nhất. Không tắt thì nút Dừng cứ quay vô
@@ -1127,10 +1103,9 @@ export function ChatPage({ route }) {
     if (!permissionGuard.begin(pid)) return;
     setPermissionBusy(pid);
     try {
-      await ow(`${base}/permission/${encodeURIComponent(pid)}/reply`, {
-        method: "POST",
-        body: permissionReplyBody(reply),
-      });
+      // v2 hỏi permission ở route của PHIÊN; body là `{decision}` (một trong
+      // once|always|reject — đúng ba giá trị của ba nút bên dưới).
+      await owPermissionReply(wsId, permission.sessionID ?? sessionId, pid, reply);
       setPermissions((prev) => prev.filter((p) => p !== permission));
       loadMessages();
       loadStatus();
@@ -1180,9 +1155,6 @@ export function ChatPage({ route }) {
           <button type="button" class="btn small ghost" onClick={openRename} disabled={Boolean(busyAction)}>
             Rename
           </button>
-          <button type="button" class="btn small ghost" onClick={toggleShare} disabled={shareBusy}>
-            {shareBusy ? "Working…" : shareButtonLabel(session)}
-          </button>
         </div>
       </div>
 
@@ -1204,7 +1176,7 @@ export function ChatPage({ route }) {
           onAnswer={answerQuestion}
           onReject={() =>
             run("answer", async () => {
-              await owRejectQuestion(wsId, q.id);
+              await owRejectQuestion(wsId, q);
               setQuestions((prev) => prev.filter((x) => x.id !== q.id));
             })
           }

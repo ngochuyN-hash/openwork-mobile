@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { ow } from "../api.js";
-import { timeAgo, unwrap, wsColor } from "../lib/format.js";
+import { ow, owSessionList, owMessages } from "../api.js";
+import { timeAgo, wsColor } from "../lib/format.js";
 import { errorSentence } from "../lib/net.js";
 import { createLoadGuard } from "../lib/load-guard.js";
 import { navigate } from "../app.jsx";
@@ -55,7 +55,7 @@ export function SearchPage({ route }) {
       if (!wsId) {
         const payload = await ow("/workspaces", { signal: token.signal });
         if (guardRef.current.stale(token)) return;
-        const list = unwrap(payload)?.workspaces ?? payload?.workspaces ?? [];
+        const list = payload?.workspaces ?? [];
         scopes = list.slice(0, WS_LIMIT).map((ws) => ({
           id: ws.id,
           name: ws.name || ws.displayName || ws.id,
@@ -63,8 +63,8 @@ export function SearchPage({ route }) {
       }
       const groups = await Promise.all(
         scopes.map((sc) =>
-          ow(`/workspace/${encodeURIComponent(sc.id)}/opencode/session`, { signal: token.signal })
-            .then((p) => (unwrap(p) ?? []).map((s) => ({ ...s, wsId: sc.id, wsName: sc.name })))
+          owSessionList(sc.id, { signal: token.signal })
+            .then((rows) => rows.map((s) => ({ ...s, wsId: sc.id, wsName: sc.name })))
             // Workspace hỏng/riêng tư: bỏ riêng nó, còn workspace khác vẫn tìm được
             .catch(() => [])
         )
@@ -143,10 +143,8 @@ export function SearchPage({ route }) {
     mapLimit(plan, SCAN_CONCURRENCY, async (sid) => {
       const item = itemOf.get(sid);
       try {
-        const payload = await ow(
-          `/workspace/${encodeURIComponent(item?.wsId ?? "")}/opencode/session/${encodeURIComponent(sid)}/message`
-        );
-        return { sid, text: sessionContentText(unwrap(payload) ?? []) };
+        const messages = await owMessages(item?.wsId ?? "", sid);
+        return { sid, text: sessionContentText(messages ?? []) };
       } catch {
         // Phiên vừa bị xoá lúc đang quét: coi như rỗng, đừng làm hỏng cả trang.
         return { sid, text: "" };

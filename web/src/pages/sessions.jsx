@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { ow, owDeleteSession } from "../api.js";
-import { timeAgo, unwrap } from "../lib/format.js";
+import {
+  owDeleteSession, owSessionList, owStatus, owCreateSession, owEventsPath,
+} from "../api.js";
+import { timeAgo } from "../lib/format.js";
 import { errorSentence } from "../lib/net.js";
 import { connectEvents } from "../lib/sse.js";
-import { OW_PROXY_PREFIX } from "../../../shared/contract.js";
 import { createLoadGuard } from "../lib/load-guard.js";
 import {
   // Xoá phiên + trạng thái đang chạy: luật thuần ở lib/session-ops.js để test
@@ -52,11 +53,8 @@ export function SessionsPage({ route }) {
   async function load() {
     const token = guardRef.current.begin("sessions");
     try {
-      const payload = await ow(`/workspace/${encodeURIComponent(wsId)}/opencode/session`, {
-        signal: token.signal,
-      });
+      const rows = await owSessionList(wsId, { signal: token.signal });
       if (guardRef.current.stale(token)) return;
-      const rows = unwrap(payload) ?? [];
       rows.sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0));
       setSessions(rows);
       setError("");
@@ -69,11 +67,9 @@ export function SessionsPage({ route }) {
   async function loadStatuses() {
     const token = guardRef.current.begin("statuses");
     try {
-      const payload = await ow(`/workspace/${encodeURIComponent(wsId)}/opencode/session/status`, {
-        signal: token.signal,
-      });
+      const map = await owStatus(wsId, { signal: token.signal });
       if (guardRef.current.stale(token)) return;
-      setStatuses(unwrap(payload) ?? payload ?? {});
+      setStatuses(map ?? {});
     } catch {
       /* status là bonus - bỏ qua lỗi */
     }
@@ -93,10 +89,9 @@ export function SessionsPage({ route }) {
         loadStatuses();
       }, 700);
     };
-    const stopEvents = connectEvents(
-      `${OW_PROXY_PREFIX}/workspace/${encodeURIComponent(wsId)}/opencode/event`,
-      () => schedule(),
-    );
+    // Stream event engine v2 (lib/sse.js — fetch, token bằng header). Envelope
+    // ở đây chỉ dùng làm NHỊP: có gì đổi thì refresh gộp sau 700ms, khỏi poll.
+    const stopEvents = connectEvents(owEventsPath(wsId), () => schedule());
     return () => {
       clearTimeout(timer);
       guardRef.current.invalidate(); // vô hiệu mọi request đang bay (không vẽ sau khi rời màn)
@@ -108,12 +103,8 @@ export function SessionsPage({ route }) {
     if (creatingRef.current) return; // bấm nút (+) hai lần -> chỉ tạo một phiên
     creatingRef.current = true;
     try {
-      const payload = await ow(`/workspace/${encodeURIComponent(wsId)}/opencode/session`, {
-        method: "POST",
-        // Không gửi title — để server tự sinh tên theo nội dung như desktop.
-        body: {},
-      });
-      const created = unwrap(payload);
+      // Không gửi title — để server tự sinh tên theo nội dung như desktop.
+      const created = await owCreateSession(wsId, {});
       if (created?.id) navigate(`#/ws/${encodeURIComponent(wsId)}/chat/${encodeURIComponent(created.id)}`);
       else load();
     } catch (e) {
