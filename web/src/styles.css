@@ -97,10 +97,17 @@ h3 {
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
+  /* Chặn tràn ngang ở cấp trang: một hàng con quá rộng (textarea mặc định
+     ~20ch, bảng nowrap…) từng đẩy cả tài liệu rộng hơn viewport, sinh thanh
+     cuộn ngang và cắt cụt nút Gửi. `clip` KHÔNG tạo scroll container như
+     `hidden`/`auto`, nên composer `position: sticky` bên trong vẫn bám đúng
+     đáy viewport — đừng đổi thành `overflow-x: hidden`. */
+  overflow-x: clip;
 }
 
 .view {
   flex: 1;
+  min-width: 0; /* flex item: không cho min-content của nội dung nới rộng cột */
   /* 88px = thanh dưới 42px + cách đáy 6px + 40px chừa thở (thanh cũ 62px ->
      108px, thu gọn 20px thì đáy theo đúng 20px). Đổi kích thước `.bottomnav`
      mà quên số này là nội dung bị thanh dưới đè. */
@@ -885,10 +892,12 @@ label.field {
 .view.chat-view {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   padding-bottom: 0;
 }
 .view.chat-view .chat-list {
   flex: 1; /* hút phần trống, đẩy composer xuống đáy */
+  min-width: 0;
 }
 .chat-list {
   display: flex;
@@ -1129,12 +1138,29 @@ label.field {
   align-items: center;
   gap: 6px;
   min-height: 28px;
+  min-width: 0;
+  max-width: 100%;
   padding: 3px 6px;
   margin: 0 -6px; /* vùng bấm tràn hết bề ngang bubble, chữ vẫn thẳng hàng */
   border-radius: 8px;
   cursor: pointer;
   user-select: none;
   color: var(--text-faint);
+}
+
+/* `.file-row` trong khung chat KHÔNG phải hàng danh sách của màn Files, nhưng
+   rule `.file-row` toàn cục (mục Files, CSS cuối file) vẫn khớp nó: biến nó
+   thành flex card 52px + viền dưới, và biến `.file-row-hit` thành flex item
+   rộng bằng max-content. Tên file 60 ký tự (hash .json) vì thế đẩy CẢ TÀI
+   LIỆU rộng 537px trên màn 330px — thanh cuộn ngang xuất hiện và thanh gõ
+   trông trôi lệch khỏi lịch sử chat. Ép lại đúng thiết kế: một dòng chữ mảnh.
+   Đây là bản sửa tại nguồn; `overflow-x: clip` ở `#app` chỉ là lưới an toàn. */
+.msg .file-row {
+  display: block;
+  padding: 0;
+  min-height: 0;
+  border-bottom: none;
+  gap: 0;
 }
 .file-row-hit:active {
   background: var(--bg-hover);
@@ -1213,10 +1239,29 @@ label.field {
 .composer {
   position: sticky;
   bottom: 0;
+  z-index: 2; /* nổi trên bong bóng tin nhắn đang cuộn qua */
   display: flex;
   gap: var(--sp-2);
-  padding: var(--sp-3) 0 calc(var(--sp-3) + var(--sab));
-  background: linear-gradient(transparent, var(--bg) 30%);
+  min-width: 0;
+  /* Trước đây nền là gradient trong suốt ở đỉnh + đệm đáy 12px nên thanh gõ
+     trông như một khối lơ lửng: chữ trong lịch sử hiện xuyên qua nó và còn
+     một khe trống dưới nút Gửi. Giờ thân thanh ĐẶC, chỉ 16px phía trên mờ dần
+     (::before bên dưới) để nội dung trượt vào có mép mềm, và đệm đáy siết
+     còn 8px + safe-area. */
+  padding: var(--sp-2) 0 calc(var(--sp-2) + var(--sab));
+  background: var(--bg);
+}
+/* Mép mờ nối liền lịch sử chat với thanh gõ — nằm NGOÀI composer nên không
+   ăn vào chiều cao thật của nó, cũng không chặn chạm. */
+.composer::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: var(--sp-4);
+  background: linear-gradient(transparent, var(--bg));
+  pointer-events: none;
 }
 /* Nút "về tin mới nhất": absolute so với chính `.composer` (sticky ⇒ đã là
    containing block), neo NGAY TRÊN mép trên của nó nên không phải đoán chiều
@@ -1276,6 +1321,12 @@ label.field {
 }
 .composer textarea {
   flex: 1;
+  /* `min-width: 0` là mấu chốt: <textarea> là flex item, mặc định
+     `min-width: auto` ⇒ không nhỏ hơn bề rộng nội tại (~20ch ≈ 200px). Hàng
+     gõ = textarea 200px + 2–3 nút 46px + gap ⇒ rộng hơn phần nội dung của
+     view trên điện thoại hẹp (330px), đẩy nút Gửi ra ngoài mép và làm cả
+     trang tràn ngang. Cho phép co về 0 thì nút gửi luôn nằm trong màn. */
+  min-width: 0;
   min-height: 46px;
   max-height: 140px;
   border-radius: 12px;
