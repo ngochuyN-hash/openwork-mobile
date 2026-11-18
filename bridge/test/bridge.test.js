@@ -36,6 +36,10 @@ test("proxy whitelist allows management paths, blocks everything else", () => {
     "/workspaces/local",
     "/workspace/ws_1/opencode/session",
     "/workspace/ws_1/opencode/session/ses_1/message",
+    // Engine v2 mount (web đã port sang v2 — whitelist `opencode2?`).
+    "/workspace/ws_1/opencode2/api/session",
+    "/workspace/ws_1/opencode2/api/session/ses_1/message",
+    "/workspace/ws_1/opencode2/api/event",
     "/workspace/ws_1/files/content",
     "/approvals",
     "/approvals/appr_1",
