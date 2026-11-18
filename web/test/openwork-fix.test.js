@@ -45,8 +45,8 @@ test("mergeCandidates gộp nhiều nguồn thành một danh sách", () => {
   // từ lỗi API — cả settings.jsx lẫn app.jsx đều đẩy nguyên `e.candidates`
   // (trong `if (e?.candidates?.length)` của `wake()`) không trim.
   assert.deepEqual(
-    mergeCandidates(["C:\\ow\\OpenWork.exe"], ["C:\\Users\\hue\\.openwork\\OpenWork.exe"]),
-    ["C:\\ow\\OpenWork.exe", "C:\\Users\\hue\\.openwork\\OpenWork.exe"]
+    mergeCandidates(["C:\\ow\\OpenWork.exe"], ["C:\\Users\\tester\\.openwork\\OpenWork.exe"]),
+    ["C:\\ow\\OpenWork.exe", "C:\\Users\\tester\\.openwork\\OpenWork.exe"]
   );
   // Nguồn không phải mảng bị bỏ qua, không ném lỗi: `candidates` đến từ JSON
   // qua mạng, payload lạ không được làm sập màn hình Cài đặt.
@@ -105,10 +105,10 @@ test("mergeCandidates với đúng hai nguồn settings.jsx và app.jsx truyền
   // sửa hàm thành single-arg vẫn xanh, còn danh sách chỉ ngắn đi lặng lẽ.
   const bridgeCandidates = [
     "C:\\Program Files\\OpenWork\\OpenWork.exe",
-    "C:\\Users\\hue\\AppData\\Local\\OpenWork\\OpenWork.exe",
+    "C:\\Users\\tester\\AppData\\Local\\OpenWork\\OpenWork.exe",
   ];
   const wakeCandidates = [
-    "  C:\\Users\\hue\\AppData\\Local\\OpenWork\\OpenWork.exe  ", // trùng, có trim
+    "  C:\\Users\\tester\\AppData\\Local\\OpenWork\\OpenWork.exe  ", // trùng, có trim
     "C:\\tools\\OpenWork.exe", // mới, phải nối vào CUỐI
     "",
     "   ", // rỗng — settings.jsx vẽ mỗi phần tử thành MỘT hàng có nút
@@ -118,7 +118,7 @@ test("mergeCandidates với đúng hai nguồn settings.jsx và app.jsx truyền
   // Đường dẫn bridge đoán trước vẫn ở trên, wake nối vào sau theo thứ tự gặp.
   assert.deepEqual(mergeCandidates(bridgeCandidates, wakeCandidates), [
     "C:\\Program Files\\OpenWork\\OpenWork.exe",
-    "C:\\Users\\hue\\AppData\\Local\\OpenWork\\OpenWork.exe",
+    "C:\\Users\\tester\\AppData\\Local\\OpenWork\\OpenWork.exe",
     "C:\\tools\\OpenWork.exe",
   ]);
 
@@ -131,7 +131,7 @@ test("mergeCandidates với đúng hai nguồn settings.jsx và app.jsx truyền
   // Nguồn 1 chưa có (bridge cũ không gửi candidates) → chỉ còn wakeCandidates,
   // vẫn phải sạch. Không được ném lỗi vì `.candidates` là optional chaining.
   assert.deepEqual(mergeCandidates(undefined, wakeCandidates), [
-    "C:\\Users\\hue\\AppData\\Local\\OpenWork\\OpenWork.exe",
+    "C:\\Users\\tester\\AppData\\Local\\OpenWork\\OpenWork.exe",
     "C:\\tools\\OpenWork.exe",
   ]);
   assert.deepEqual(mergeCandidates(null, undefined), []);
